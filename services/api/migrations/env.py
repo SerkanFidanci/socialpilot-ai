@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.modules.businesses import models as business_models
 from app.modules.identity.models import Base
 from app.modules.media import models as media_models
+from app.modules.operations import models as operations_models
 
 config = context.config
 
@@ -22,7 +23,7 @@ if config.config_file_name is not None:
 
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 target_metadata = Base.metadata
-model_modules = (business_models, media_models)
+model_modules = (business_models, media_models, operations_models)
 
 
 def run_migrations_offline() -> None:

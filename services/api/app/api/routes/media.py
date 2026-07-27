@@ -6,12 +6,13 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
 from app.core.config import Settings
+from app.core.correlation import get_correlation_id
 from app.infrastructure.database.session import get_session
 from app.modules.identity.models import User
 from app.modules.media.models import IngestStatus, MediaAssetStatus, UploadSessionStatus
@@ -153,6 +154,7 @@ async def complete(
     upload_session_id: UUID,
     payload: CompleteRequest,
     request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AssetResponse:
@@ -162,6 +164,8 @@ async def complete(
         session_id=upload_session_id,
         checksum=payload.sha256_checksum,
         parts=tuple(CompletedPart(part.part_number, part.etag) for part in payload.parts),
+        idempotency_key=idempotency_key,
+        correlation_id=get_correlation_id() or "unknown",
     )
     return AssetResponse.model_validate(asset)
 

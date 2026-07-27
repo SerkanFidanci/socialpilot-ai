@@ -91,7 +91,7 @@ Acceptance criteria:
 - Completion creates one tenant-scoped `media_asset` in `uploaded` state with `ingest_status=pending`. Durable job and outbox records are deferred to Slice 0D.
 - Actual MIME/content inspection, malware scan, ffprobe, proxies, and analysis are explicitly deferred to later slices; no bytes pass through FastAPI or n8n.
 
-0C verification records direct multipart control-plane coordination with a byte-free fake storage adapter, tenant-scoped asset/session lookups, completion-state locking, and PostgreSQL integration coverage. A durable ingest job, outbox event, and request-key idempotency store remain Slice 0D work.
+0C verification records direct multipart control-plane coordination with a byte-free fake storage adapter, tenant-scoped asset/session lookups, completion-state locking, and PostgreSQL integration coverage. Slice 0D now creates the durable ingest job, outbox event, audit record, and optional request-key idempotency record atomically with successful completion.
 
 ### Slice 0D — Events and operational foundation
 
@@ -104,6 +104,8 @@ Acceptance criteria:
 - Repeating a completed mutation with the same tenant, actor, operation, and idempotency key returns the stored response; a payload mismatch returns `409`.
 - Security-relevant mutations produce immutable audit records without credentials, signed URLs, or raw media metadata.
 - Every API failure uses the documented problem shape and includes a correlation ID and stable machine code.
+
+0D verification recorded: migration `0004_operational_reliability` creates tenant-scoped `jobs`, `job_attempts`, `outbox_events`, `idempotency_keys`, and immutable `audit_logs`. Media completion writes its uploaded asset state, queued `media.ingest` job, pending outbox event, audit record, and optional idempotency result in one transaction. The dispatcher claims events with `FOR UPDATE SKIP LOCKED`, retains attempts and safe error codes, uses bounded exponential backoff for transient publisher-port failures, and marks exhausted events `dead`. PostgreSQL integration tests cover commit/rollback atomicity, same-key replay and payload conflict, concurrent same-key execution, dispatcher locking, publish/retry/dead handling, job transitions, and tenant/actor audit scope. The Celery task is a transport trigger only; a future worker composition supplies a real publisher adapter.
 
 ## 6. Files to create or change
 
@@ -205,7 +207,7 @@ Phase 0 is complete only when slices 0A–0D meet their acceptance criteria, eve
 - [x] 0B: Add authorization and cross-tenant isolation tests.
 - [x] 0C: Implement storage port plus local fake adapter, media asset/session lifecycle, multipart instructions, completion, cancellation, and pending-ingest state; defer production storage integration and durable jobs/outbox to 0D.
 - [x] 0C: Add checksum/metadata/tenant/concurrency tests without proxying media bytes; defer request-key idempotency storage to 0D.
-- [ ] 0D: Implement job, outbox, idempotency, audit, and structured-error vertical slice.
-- [ ] 0D: Add atomicity, retry/dead-letter, duplicate-delivery, and redaction tests.
+- [x] 0D: Implement job, outbox, idempotency, audit, and structured-error vertical slice.
+- [x] 0D: Add atomicity, retry/dead-letter, duplicate-delivery, and redaction tests.
 - [ ] Verify migrations, OpenAPI, local Compose smoke checks, and CI commands.
 - [ ] Move this plan to `docs/plans/completed/` only after all completion criteria pass.

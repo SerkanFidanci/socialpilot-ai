@@ -27,6 +27,12 @@ from app.modules.media.storage import (
     StorageUnavailableError,
     UploadPartInstruction,
 )
+from app.modules.operations.repository import OperationsRepository
+from app.modules.operations.service import (
+    IdempotencyService,
+    OperationsService,
+    request_fingerprint,
+)
 
 _CHECKSUM = re.compile(r"^[0-9a-f]{64}$")
 _EXTENSIONS = {
@@ -118,11 +124,46 @@ class MediaService:
         session_id: UUID,
         checksum: str,
         parts: tuple[CompletedPart, ...],
+        idempotency_key: str | None = None,
+        correlation_id: str = "unknown",
     ) -> MediaAsset:
         if not _CHECKSUM.fullmatch(checksum.lower()):
             raise self._invalid()
         async with self._session.begin():
             await self._authorize(user_id, business_id, Permission.MEDIA_UPLOAD)
+            idempotency = None
+            if idempotency_key is not None:
+                idempotency = await IdempotencyService(OperationsRepository(self._session)).acquire(
+                    business_id=business_id,
+                    actor_user_id=user_id,
+                    operation="media.upload.complete",
+                    key=idempotency_key,
+                    fingerprint=request_fingerprint(
+                        {
+                            "session_id": str(session_id),
+                            "sha256_checksum": checksum.lower(),
+                            "parts": [
+                                {"part_number": part.part_number, "etag": part.etag}
+                                for part in sorted(parts, key=lambda value: value.part_number)
+                            ],
+                        }
+                    ),
+                    correlation_id=correlation_id,
+                )
+                if idempotency.is_replay:
+                    response_body = idempotency.record.response_body or {}
+                    asset_id = response_body.get("asset_id")
+                    if not isinstance(asset_id, str):
+                        raise ProblemException(
+                            status=409,
+                            code="IDEMPOTENCY_IN_PROGRESS",
+                            title="Request in progress",
+                            detail="An equivalent request is currently being processed.",
+                        )
+                    asset = await self._repo.get_asset(business_id, UUID(asset_id), lock=True)
+                    if asset is None:
+                        raise self._not_found("MEDIA_ASSET_NOT_FOUND", "Media asset not found")
+                    return asset
             upload = await self._active_session(business_id, session_id)
             self._valid_numbers(
                 tuple(part.part_number for part in parts), upload.expected_part_count, exact=True
@@ -149,6 +190,22 @@ class MediaService:
             now = datetime.now(UTC)
             upload.status, upload.completed_at = UploadSessionStatus.COMPLETED, now
             asset.status, asset.uploaded_at = MediaAssetStatus.UPLOADED, now
+            await OperationsService(self._session, self._settings).record_media_ingest(
+                business_id=business_id,
+                actor_user_id=user_id,
+                asset_id=asset.id,
+                correlation_id=correlation_id,
+            )
+            if idempotency is not None:
+                await OperationsService(self._session, self._settings).complete_idempotency(
+                    idempotency.record,
+                    response_status=200,
+                    response_body={
+                        "asset_id": str(asset.id),
+                        "status": MediaAssetStatus.UPLOADED.value,
+                        "ingest_status": asset.ingest_status.value,
+                    },
+                )
             return asset
 
     async def cancel(self, *, user_id: UUID, business_id: UUID, session_id: UUID) -> None:

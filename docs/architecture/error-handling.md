@@ -27,12 +27,16 @@ Public API errors use `application/problem+json`, based on RFC 9457, with a stab
 | 403 | `AUTHORIZATION_DENIED` | Actor has tenant access but lacks this action. |
 | 404 | `TENANT_RESOURCE_NOT_FOUND` | Resource does not exist in the authorized tenant, including non-disclosing cross-tenant access. |
 | 409 | `IDEMPOTENCY_CONFLICT` | Key was reused with a different request fingerprint. |
+| 409 | `IDEMPOTENCY_IN_PROGRESS` | An equivalent request is still being processed. |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | The supplied idempotency key is empty or exceeds the public limit. |
 | 409 | `RESOURCE_STATE_CONFLICT` | Command is illegal in the current resource state. |
+| 409 | `JOB_STATE_CONFLICT` | A requested durable job state transition is not allowed. |
 | 409 | `UPLOAD_CHECKSUM_MISMATCH` | Completed object does not match the declared checksum. |
 | 413 | `REQUEST_TOO_LARGE` | API payload exceeds a control-plane limit. |
 | 422 | `UPLOAD_METADATA_INVALID` | Declared or verified upload metadata violates policy. |
 | 429 | `RATE_LIMITED` | Client must retry after the supplied interval. |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Required readiness dependency is unavailable. |
+| 503 | `STORAGE_UNAVAILABLE` | The upload-storage control-plane adapter is temporarily unavailable. |
 
 ## Mapping and logging
 
