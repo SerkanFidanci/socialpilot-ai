@@ -1,25 +1,21 @@
+.git/
+.github/
+docs/
+
 .env
 .env.*
-!.env.example
 
-**pycache**/
-*.py[cod]
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
 .venv/
 venv/
-
 node_modules/
 .dart_tool/
 build/
-
 .idea/
 .vscode/
-.DS_Store
-Thumbs.db
-
-*.log
-*.egg-info/
-.codebase-memory/

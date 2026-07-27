@@ -1,0 +1,70 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: socialpilot
+          POSTGRES_USER: socialpilot
+          POSTGRES_PASSWORD: socialpilot_local_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U socialpilot -d socialpilot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://socialpilot:socialpilot_local_only@localhost:5432/socialpilot
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      CELERY_RESULT_BACKEND: redis://localhost:6379/2
+      DATABASE_CONNECT_TIMEOUT_SECONDS: 5
+      REDIS_CONNECT_TIMEOUT_SECONDS: 5
+      REQUEST_TIMEOUT_SECONDS: 10
+      CELERY_TASK_TIMEOUT_SECONDS: 300
+      RUN_INTEGRATION_TESTS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: services/api
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Lint
+        run: make lint
+      - name: Format check
+        run: make format-check
+      - name: Test backend
+        run: make test-backend
+      - name: Type check
+        working-directory: services/api
+        run: python -m mypy .
+      - name: Validate migrations
+        working-directory: services/api
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+      - name: Validate Compose definition
+        run: docker compose config

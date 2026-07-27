@@ -26,6 +26,10 @@
 
 - [Phase 0 — Foundation Plan](plans/active/phase-0-foundation.md)
 
+## Runbooks
+
+- [Local Development](runbooks/local-development.md)
+
 ## Completed Plans
 
 - [Initial Documentation Setup](plans/completed/initial-documentation-setup.md)

@@ -1,0 +1,103 @@
+name: socialpilot-ai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: socialpilot
+      POSTGRES_USER: socialpilot
+      POSTGRES_PASSWORD: socialpilot_local_only
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U socialpilot -d socialpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend, host-access]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-56379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend, host-access]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      args:
+        INSTALL_DEV: "true"
+    environment: &application_environment
+      APP_ENV: development
+      SERVICE_NAME: socialpilot-api
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://socialpilot:socialpilot_local_only@postgres:5432/socialpilot
+      POSTGRES_PORT: 5432
+      DATABASE_POOL_SIZE: 5
+      DATABASE_MAX_OVERFLOW: 10
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PORT: 6379
+      DATABASE_CONNECT_TIMEOUT_SECONDS: 5
+      REDIS_CONNECT_TIMEOUT_SECONDS: 5
+      REQUEST_TIMEOUT_SECONDS: 10
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CELERY_TASK_TIMEOUT_SECONDS: 300
+      PYTEST_ADDOPTS: -p no:cacheprovider
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2).read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - ./services/api:/app/services/api:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [edge, backend]
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment: *application_environment
+    command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    profiles: ["worker"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+    restart: unless-stopped
+
+networks:
+  edge:
+  host-access:
+  backend:
+    internal: true
+
+volumes:
+  postgres_data:

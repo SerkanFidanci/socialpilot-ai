@@ -1,6 +1,6 @@
 # Phase 0 — Foundation Plan
 
-**Status:** Active planning — implementation has not started.
+**Status:** Active — Slice 0A implemented; Slice 0B has not started.
 **Scope owner:** Backend platform foundation
 **Source requirements:** `docs/product/product-requirements.md`
 
@@ -55,8 +55,11 @@ Acceptance criteria:
 - A configuration validation test rejects a missing required non-secret setting and never prints secret values.
 - `/health/live` returns `200` without dependency checks; `/health/ready` returns `200` only when PostgreSQL and Redis checks succeed, otherwise `503` with the documented error format.
 - A JSON log for a request includes timestamp, level, event, correlation ID, environment, and redacts authorization and signed-URL values.
-- A worker task records correlation ID, attempt, timeout, status, and dead-letter destination in its job contract.
+- The Celery skeleton configures JSON serialization and bounded task time limits without registering a task; correlation, attempt, status, and dead-letter job contracts begin in Slice 0D.
 - `make lint`, `make test-backend`, and `make verify` have deterministic documented responsibilities; CI invokes the same verification entry points.
+- [x] Docker Compose publishes the API on the configured host port, and host `/health/live` plus `/health/ready` checks succeed.
+
+0A verification recorded: local Python 3.12 tests passed (16 passed, 1 opt-in integration test skipped); Ruff, Ruff format, mypy, Celery configuration, and Compose configuration validation passed. In the Compose API container, the full suite passed with `RUN_INTEGRATION_TESTS=1` (17 passed). Docker Compose started the API, PostgreSQL, and Redis; PostgreSQL and Redis reached healthy status; host and container `/health/live` and `/health/ready` checks passed; and live Alembic `upgrade head`, `downgrade base`, `upgrade head`, `current`, and `heads` completed against PostgreSQL. The API joins an edge network for host publishing and the internal backend network for PostgreSQL and Redis.
 
 ### Slice 0B — Identity and tenant foundation
 
@@ -191,8 +194,8 @@ Phase 0 is complete only when slices 0A–0D meet their acceptance criteria, eve
 
 ## 14. Task checklist
 
-- [ ] 0A: Create workspace, FastAPI, settings, async PostgreSQL, Redis/Celery, logging, health endpoints, Compose, and test foundation; exclude admin web and identity-provider work.
-- [ ] 0A: Add deterministic lint/test/verification commands and CI baseline.
+- [x] 0A: Create workspace, FastAPI, settings, async PostgreSQL, Redis/Celery, logging, health endpoints, Compose, and test foundation; exclude admin web and identity-provider work.
+- [x] 0A: Add deterministic lint/test/verification commands and CI baseline.
 - [ ] 0B: Implement identity-provider port and test adapter with the principal-verification contract; defer Firebase/OIDC/production provider integration.
 - [ ] 0B: Implement user, identity, business, membership, role, policy, and tenant-scoped repository vertical slice.
 - [ ] 0B: Add authorization and cross-tenant isolation tests.
