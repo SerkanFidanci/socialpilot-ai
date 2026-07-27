@@ -14,6 +14,7 @@ from starlette.responses import Response
 from app.api.routes.businesses import router as businesses_router
 from app.api.routes.health import router as health_router
 from app.api.routes.identity import router as identity_router
+from app.api.routes.media import router as media_router
 from app.core.config import Settings, get_settings
 from app.core.correlation import CorrelationIdMiddleware
 from app.core.errors import ProblemException, problem_response, safe_validation_error_meta
@@ -22,11 +23,14 @@ from app.core.protocols import DatabaseClient, RedisClient
 from app.infrastructure.database import create_database
 from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.infrastructure.redis import create_redis_client
+from app.infrastructure.storage.fake import FakeMultipartStorage
+from app.modules.media.storage import MultipartStoragePort
 
 logger = structlog.get_logger(__name__)
 
 DatabaseFactory = Callable[[Settings], DatabaseClient]
 RedisFactory = Callable[[Settings], RedisClient]
+StorageFactory = Callable[[], MultipartStoragePort]
 DEFAULT_REDIS_FACTORY: RedisFactory = cast(RedisFactory, create_redis_client)
 
 
@@ -35,6 +39,7 @@ def create_app(
     *,
     database_factory: DatabaseFactory = create_database,
     redis_factory: RedisFactory = DEFAULT_REDIS_FACTORY,
+    storage_factory: StorageFactory = FakeMultipartStorage,
     include_test_routes: bool = False,
 ) -> FastAPI:
     """Build an app with injectable infrastructure for deterministic tests."""
@@ -48,6 +53,8 @@ def create_app(
         redis_client = redis_factory(resolved_settings)
         application.state.database = database
         application.state.redis = redis_client
+        application.state.settings = resolved_settings
+        application.state.storage = storage_factory()
         application.state.identity_verifier = LocalIdentityVerifier(resolved_settings)
         logger.info("application_started", environment=resolved_settings.app_env)
         try:
@@ -69,6 +76,7 @@ def create_app(
     application.include_router(health_router)
     application.include_router(identity_router)
     application.include_router(businesses_router)
+    application.include_router(media_router)
 
     if include_test_routes:
 

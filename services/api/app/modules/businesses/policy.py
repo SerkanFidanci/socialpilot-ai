@@ -14,6 +14,8 @@ class Permission(StrEnum):
     MEMBERS_READ = "members.read"
     MEMBERS_CREATE = "members.create"
     MEMBERS_UPDATE = "members.update"
+    MEDIA_READ = "media.read"
+    MEDIA_UPLOAD = "media.upload"
 
 
 ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
@@ -25,10 +27,14 @@ ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
             Permission.MEMBERS_READ,
             Permission.MEMBERS_CREATE,
             Permission.MEMBERS_UPDATE,
+            Permission.MEDIA_READ,
+            Permission.MEDIA_UPLOAD,
         }
     ),
-    BusinessRole.EDITOR: frozenset({Permission.BUSINESS_READ}),
-    BusinessRole.VIEWER: frozenset({Permission.BUSINESS_READ}),
+    BusinessRole.EDITOR: frozenset(
+        {Permission.BUSINESS_READ, Permission.MEDIA_READ, Permission.MEDIA_UPLOAD}
+    ),
+    BusinessRole.VIEWER: frozenset({Permission.BUSINESS_READ, Permission.MEDIA_READ}),
 }
 
 

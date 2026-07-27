@@ -1,6 +1,6 @@
 # Phase 0 — Foundation Plan
 
-**Status:** Active — Slices 0A and 0B implemented; Slice 0C has not started.
+**Status:** Active — Slices 0A, 0B, and 0C implemented; Slice 0D has not started.
 **Scope owner:** Backend platform foundation
 **Source requirements:** `docs/product/product-requirements.md`
 
@@ -88,8 +88,10 @@ Acceptance criteria:
 - `POST /api/v1/businesses/{business_id}/media/uploads` returns an upload-session ID, opaque object key, part instructions, expiry, and checksum requirements; it does not return a long-lived provider credential.
 - A caller without upload permission or outside the tenant receives `403`/`404` before an adapter call is made.
 - Completion accepts only the expected session state and declared parts, verifies checksum and object metadata through the storage port, and is idempotent for the same request key.
-- Completion creates one `media_asset`, one ingest job, and one `media.upload_completed` outbox event atomically.
+- Completion creates one tenant-scoped `media_asset` in `uploaded` state with `ingest_status=pending`. Durable job and outbox records are deferred to Slice 0D.
 - Actual MIME/content inspection, malware scan, ffprobe, proxies, and analysis are explicitly deferred to later slices; no bytes pass through FastAPI or n8n.
+
+0C verification records direct multipart control-plane coordination with a byte-free fake storage adapter, tenant-scoped asset/session lookups, completion-state locking, and PostgreSQL integration coverage. A durable ingest job, outbox event, and request-key idempotency store remain Slice 0D work.
 
 ### Slice 0D — Events and operational foundation
 
@@ -201,8 +203,8 @@ Phase 0 is complete only when slices 0A–0D meet their acceptance criteria, eve
 - [x] 0B: Implement identity-provider port and test adapter with the principal-verification contract; defer Firebase/OIDC/production provider integration.
 - [x] 0B: Implement user, identity, business, membership, role, policy, and tenant-scoped repository vertical slice.
 - [x] 0B: Add authorization and cross-tenant isolation tests.
-- [ ] 0C: Implement storage port plus local fake or MinIO-compatible adapter, media asset/session lifecycle, multipart instructions, completion, and ingest-job creation; defer production storage integration.
-- [ ] 0C: Add checksum/metadata/idempotency/tenant tests without proxying media bytes.
+- [x] 0C: Implement storage port plus local fake adapter, media asset/session lifecycle, multipart instructions, completion, cancellation, and pending-ingest state; defer production storage integration and durable jobs/outbox to 0D.
+- [x] 0C: Add checksum/metadata/tenant/concurrency tests without proxying media bytes; defer request-key idempotency storage to 0D.
 - [ ] 0D: Implement job, outbox, idempotency, audit, and structured-error vertical slice.
 - [ ] 0D: Add atomicity, retry/dead-letter, duplicate-delivery, and redaction tests.
 - [ ] Verify migrations, OpenAPI, local Compose smoke checks, and CI commands.

@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     celery_broker_url: str = Field(min_length=1)
     celery_result_backend: str = Field(min_length=1)
     celery_task_timeout_seconds: int = Field(default=300, gt=0, le=3600)
+    media_max_bytes: int = Field(default=104_857_600, gt=0, le=2_147_483_647)
+    media_max_parts: int = Field(default=100, ge=1, le=1_000)
+    media_upload_session_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
+    media_allowed_mime_types: tuple[str, ...] = (
+        "image/jpeg",
+        "image/png",
+        "video/mp4",
+        "audio/mpeg",
+    )
     identity_adapter: Literal["local"] = "local"
     local_identity_signing_key: SecretStr = Field(
         default=SecretStr("development-local-identity-key-not-for-production"),
@@ -53,6 +62,13 @@ class Settings(BaseSettings):
         if not value.startswith(("redis://", "rediss://")):
             raise ValueError("Redis URLs must use redis:// or rediss://")
         return value
+
+    @field_validator("media_allowed_mime_types")
+    @classmethod
+    def validate_media_types(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value or any("/" not in mime for mime in value):
+            raise ValueError("MEDIA_ALLOWED_MIME_TYPES must contain MIME types")
+        return tuple(mime.lower() for mime in value)
 
     @model_validator(mode="after")
     def reject_local_only_production_urls(self) -> Settings:
