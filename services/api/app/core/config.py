@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     media_upload_session_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
     media_ingest_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     media_ingest_max_attempts: int = Field(default=3, ge=1, le=10)
+    media_max_duration_seconds: int = Field(default=3_600, ge=1, le=86_400)
     media_allowed_mime_types: tuple[str, ...] = (
         "image/jpeg",
         "image/png",

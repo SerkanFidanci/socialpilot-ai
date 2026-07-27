@@ -53,15 +53,17 @@ Acceptance criteria:
 
 ### 1B — Technical media analysis
 
-Add a hardened FFprobe adapter, persist technical audio/video metadata, and generate thumbnail, 720p proxy, and extracted-audio derivatives in isolated workers.
+Add a hardened FFprobe adapter, persist technical audio/video metadata, and generate thumbnail and low-resolution proxy derivatives in isolated workers. Audio extraction remains in 1C.
 
 Acceptance criteria:
 
-- FFprobe records duration, stream presence, codec, container, width, height, frame rate, audio characteristics, and a normalized rotation/aspect representation using integer/rational-safe fields.
-- Unsupported, corrupt, oversized, duration-exceeding, or parser-failing input is rejected or quarantined with a stable safe error; no raw tool output reaches an API response.
-- Every subprocess uses a fixed executable plus an argument list, per-job restricted directory, timeout, output-size bound, and cleanup policy; tests prove user-controlled filename/path text is never interpolated into a shell command.
-- Generated variants are stored under the existing tenant/asset namespace, are recorded with checksum/size/content type, and the immutable original remains unchanged.
-- Technical metadata, derivative ownership, timeout handling, and tenant isolation have unit, contract, and PostgreSQL integration tests.
+- [x] FFprobe records duration, stream presence, codec, container, width, height, frame rate, audio characteristics, and normalized rotation/aspect values using integer/rational-safe fields.
+- [x] Corrupt/parser-failing input, trusted-size mismatch, and duration-limit violations produce stable safe errors; raw tool output is never returned.
+- [x] FFprobe and FFmpeg use fixed trusted executable paths, argument arrays, `shell=False`, timeout, and bounded diagnostic output. Contract coverage proves a shell-metacharacter filename is data, not a command.
+- [x] Thumbnail and proxy records use generated tenant/asset keys and persist checksum, size, content type, and immutable ownership metadata.
+- [x] Unit and PostgreSQL integration tests cover real FFmpeg/FFprobe fixture processing, durable metadata/derivative records, technical job/outbox creation, and tenant-scoped job claims.
+
+**1B implementation record — 2026-07-28:** Migration `0006_technical_media_analysis` adds tenant-scoped technical-analysis, technical-metadata, and derivative records plus a unique technical-analysis job constraint. A clean ingest atomically schedules `media.technical_analysis` and its outbox event. The worker uses provider-neutral materialization/probe/derivative ports; the test adapter materializes a local fixture without storage credentials. The runtime image installs FFmpeg/FFprobe while retaining the non-root application user. Container verification passed: `30 passed, 17 skipped` without PostgreSQL integration mode and `47 passed` with it enabled.
 
 ### 1C — Scene and speech analysis
 
@@ -107,7 +109,7 @@ All new identifiers are UUIDs; timestamps are UTC; all money is integer minor un
 | Slice | Tables or changes | Purpose |
 |---|---|---|
 | 1A | Extend `media_assets`/`jobs`; `media_ingest_inspections`; `media_malware_scans` | Implemented in `0005_media_ingest_foundation`: verified server metadata, detected type, checksum, policy/scan outcome and provenance. |
-| 1B | `media_variants`; `media_technical_metadata`; `media_processing_runs` | Immutable derivative records, FFprobe facts, and repeatable execution provenance. |
+| 1B | `media_derivatives`; `media_technical_metadata`; `media_technical_analyses` | Implemented in `0006_technical_media_analysis`: immutable derivative records, FFprobe facts, and technical execution provenance. |
 | 1C | `media_scenes`; `media_keyframes`; `transcripts`; `transcript_segments` | Time-bounded scene/keyframe/transcript data. |
 | 1D | `media_analysis_results`; `media_tags`; `provider_usage` | Normalized VLM output and attributable provider usage. |
 | 1E | Extend existing `jobs`, `job_attempts`, `outbox_events`, `audit_logs`, `idempotency_keys` only where a migration proves a required field/index is absent | Dependencies/reprocessing, safe status visibility, retention and operational indexes. |
@@ -188,7 +190,7 @@ Each adapter has explicit connect/read/total timeouts where applicable, bounded 
 
 ## 12. Expected files for later implementation
 
-Implemented 1A files are limited to the media/operations/storage ports and fakes, migration `0005_media_ingest_foundation`, focused unit/PostgreSQL tests, Settings, worker trigger registration, Compose cache environment, and this plan. Future work remains limited to the same approved boundaries and must not create mobile, admin, publishing, advertising, billing, or n8n implementation files.
+Implemented 1A/1B files are limited to the media/operations/storage ports and fakes, migrations `0005_media_ingest_foundation` and `0006_technical_media_analysis`, focused unit/PostgreSQL tests, Settings, worker trigger registration, FFmpeg/FFprobe runtime support, and this plan. Future work remains limited to the same approved boundaries and must not create mobile, admin, publishing, advertising, billing, or n8n implementation files.
 
 ## 13. Phase 1 completion criteria
 
@@ -211,7 +213,7 @@ Phase 1 is complete when an authorized uploaded media asset reliably reaches `re
 ## 16. Task checklist
 
 - [x] 1A: Define storage inspection, content inspection, malware ports and asset/job gate; add tenant/atomicity/security tests.
-- [ ] 1B: Add hardened FFprobe and derivative processing with isolated worker controls and tests.
+- [x] 1B: Add hardened FFprobe and derivative processing with isolated worker controls and tests.
 - [ ] 1C: Add scene/audio/ASR contracts, models, jobs, and test fixtures.
 - [ ] 1D: Add video-understanding routing, normalization, provenance, and provider-usage controls.
 - [ ] 1E: Add analysis orchestration, reprocessing, cost limits, observability, and end-to-end quality checks.

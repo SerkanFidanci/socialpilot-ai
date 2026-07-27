@@ -23,3 +23,11 @@ def media_ingest() -> dict[str, str]:
 
     logger.info("media_ingest_triggered")
     return {"status": "triggered"}
+
+
+@celery_app.task(name="socialpilot.media.technical_analysis")  # type: ignore[misc]
+def media_technical_analysis() -> dict[str, str]:
+    """Durable delivery trigger; worker composition injects media adapters."""
+
+    logger.info("media_technical_analysis_triggered")
+    return {"status": "triggered"}

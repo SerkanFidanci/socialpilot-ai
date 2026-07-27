@@ -28,6 +28,7 @@ from app.modules.media.storage import (
 )
 from app.modules.operations.models import BackgroundJob, JobAttempt, JobAttemptStatus, JobStatus
 from app.modules.operations.repository import OperationsRepository
+from app.modules.operations.service import OperationsService
 
 
 @dataclass(frozen=True)
@@ -252,6 +253,9 @@ class MediaIngestService:
                     )
                 )
             asset.ingest_status = IngestStatus.READY_FOR_ANALYSIS
+            await OperationsService(self._session, self._settings).record_technical_analysis(
+                business_id=business_id, asset_id=asset.id, correlation_id=job.correlation_id
+            )
             self._finish(job, JobStatus.SUCCEEDED)
             return job
 

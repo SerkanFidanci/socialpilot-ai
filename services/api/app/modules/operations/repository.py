@@ -94,11 +94,17 @@ class OperationsRepository:
         return cast(BackgroundJob | None, await self._session.scalar(statement))
 
     async def claim_next_ingest_job(self) -> BackgroundJob | None:
+        return await self._claim_next_media_job("media.ingest")
+
+    async def claim_next_technical_analysis_job(self) -> BackgroundJob | None:
+        return await self._claim_next_media_job("media.technical_analysis")
+
+    async def _claim_next_media_job(self, job_type: str) -> BackgroundJob | None:
         now = datetime.now(UTC)
         statement = (
             select(BackgroundJob)
             .where(
-                BackgroundJob.job_type == "media.ingest",
+                BackgroundJob.job_type == job_type,
                 BackgroundJob.status.in_((JobStatus.QUEUED, JobStatus.FAILED)),
                 (BackgroundJob.status == JobStatus.QUEUED)
                 | (

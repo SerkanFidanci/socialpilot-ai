@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.modules.media.ingest import (
     ContentInspectionResult,
     ContentInspectionUnavailableError,
@@ -9,6 +11,7 @@ from app.modules.media.ingest import (
     MalwareScanUnavailableError,
 )
 from app.modules.media.models import MalwareScanStatus
+from app.modules.media.technical import TechnicalPermanentError
 
 
 class FakeContentInspector:
@@ -45,3 +48,20 @@ class FakeMalwareScanner(MalwareScanPort):
 
     def fail_for_testing(self, object_key: str) -> None:
         self._unavailable.add(object_key)
+
+
+class FakeMediaMaterializer:
+    """Fixture-backed worker input adapter; it never exposes storage credentials."""
+
+    def __init__(self) -> None:
+        self._fixtures: dict[str, Path] = {}
+
+    def register_for_testing(self, *, object_key: str, fixture_path: Path) -> None:
+        self._fixtures[object_key] = fixture_path
+
+    async def materialize(self, *, object_key: str, workdir: Path) -> Path:
+        del workdir
+        try:
+            return self._fixtures[object_key]
+        except KeyError as error:
+            raise TechnicalPermanentError("MATERIALIZATION_NOT_FOUND") from error

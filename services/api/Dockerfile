@@ -6,7 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN addgroup --system app && adduser --system --ingroup app app
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system app && adduser --system --ingroup app app
 
 WORKDIR /app/services/api
 

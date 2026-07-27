@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
+import subprocess
 from collections.abc import Generator
+from pathlib import Path
 from typing import cast
 from uuid import UUID
 
@@ -17,12 +20,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import Settings
 from app.infrastructure.identity.local import LocalIdentityVerifier
-from app.infrastructure.media.fake_ingest import FakeMalwareScanner
+from app.infrastructure.media.fake_ingest import FakeMalwareScanner, FakeMediaMaterializer
 from app.infrastructure.storage.fake import FakeMultipartStorage
 from app.main import create_app
 from app.modules.media.ingest import MediaIngestService
-from app.modules.media.models import IngestStatus, MalwareScanStatus, MediaAsset, MediaAssetStatus
+from app.modules.media.models import (
+    IngestStatus,
+    MalwareScanStatus,
+    MediaAsset,
+    MediaAssetStatus,
+    MediaDerivative,
+    MediaTechnicalMetadata,
+)
 from app.modules.media.storage import StoredObjectMetadata
+from app.modules.media.technical import (
+    FFmpegDerivativeAdapter,
+    FFprobeAdapter,
+    TechnicalAnalysisService,
+)
 from app.modules.operations.models import BackgroundJob, JobStatus
 
 pytestmark = pytest.mark.integration
@@ -71,12 +86,12 @@ def clean() -> Generator[None, None, None]:
         asyncio.run(clear())
 
 
-def upload_payload() -> dict[str, object]:
+def upload_payload(*, byte_size: int = 128, checksum: str = CHECKSUM) -> dict[str, object]:
     return {
         "filename": "clip.mp4",
         "content_type": "video/mp4",
-        "byte_size": 128,
-        "sha256_checksum": CHECKSUM,
+        "byte_size": byte_size,
+        "sha256_checksum": checksum,
         "part_count": 2,
     }
 
@@ -101,10 +116,17 @@ async def upload_details(session_id: str) -> tuple[str, str]:
 
 
 def complete_upload(
-    client: TestClient, business_id: str, headers: dict[str, str]
+    client: TestClient,
+    business_id: str,
+    headers: dict[str, str],
+    *,
+    byte_size: int = 128,
+    checksum: str = CHECKSUM,
 ) -> dict[str, object]:
     created = client.post(
-        f"/v1/businesses/{business_id}/media/uploads", headers=headers, json=upload_payload()
+        f"/v1/businesses/{business_id}/media/uploads",
+        headers=headers,
+        json=upload_payload(byte_size=byte_size, checksum=checksum),
     )
     assert created.status_code == 201
     upload = cast(dict[str, object], created.json())
@@ -113,13 +135,13 @@ def complete_upload(
     fake.mark_uploaded_for_testing(
         storage_upload_id=storage_upload_id,
         parts={1: "one", 2: "two"},
-        metadata=StoredObjectMetadata(128, "video/mp4", CHECKSUM, "etag-1"),
+        metadata=StoredObjectMetadata(byte_size, "video/mp4", checksum, "etag-1"),
     )
     completed = client.post(
         f"/v1/businesses/{business_id}/media/uploads/{upload['id']}/complete",
         headers={**headers, "Idempotency-Key": f"complete-{upload['id']}"},
         json={
-            "sha256_checksum": CHECKSUM,
+            "sha256_checksum": checksum,
             "parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}],
         },
     )
@@ -144,6 +166,25 @@ async def process_next(application: FastAPI) -> BackgroundJob | None:
         await engine.dispose()
 
 
+async def process_technical_next(
+    *, materializer: FakeMediaMaterializer, workdir: Path
+) -> BackgroundJob | None:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as session:
+            service = TechnicalAnalysisService(
+                session,
+                config(),
+                materializer,
+                FFprobeAdapter(),
+                FFmpegDerivativeAdapter(),
+            )
+            return await service.process_next(workdir=workdir)
+    finally:
+        await engine.dispose()
+
+
 async def stored_asset(asset_id: str) -> tuple[MediaAsset, BackgroundJob]:
     engine = create_async_engine(os.environ["DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -151,10 +192,36 @@ async def stored_asset(asset_id: str) -> tuple[MediaAsset, BackgroundJob]:
         async with factory() as session:
             asset = await session.scalar(select(MediaAsset).where(MediaAsset.id == asset_id))
             job = await session.scalar(
-                select(BackgroundJob).where(BackgroundJob.resource_id == asset_id)
+                select(BackgroundJob).where(
+                    BackgroundJob.resource_id == asset_id,
+                    BackgroundJob.job_type == "media.ingest",
+                )
             )
             assert asset is not None and job is not None
             return asset, job
+    finally:
+        await engine.dispose()
+
+
+async def technical_records(asset_id: str) -> tuple[int, int]:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    try:
+        async with engine.connect() as connection:
+            job_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM jobs WHERE resource_id = :asset_id "
+                    "AND job_type = 'media.technical_analysis'"
+                ),
+                {"asset_id": asset_id},
+            )
+            event_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM outbox_events WHERE aggregate_id = :asset_id "
+                    "AND event_type = 'media.technical_analysis.requested'"
+                ),
+                {"asset_id": asset_id},
+            )
+            return int(job_count or 0), int(event_count or 0)
     finally:
         await engine.dispose()
 
@@ -173,6 +240,82 @@ def test_ingest_records_verified_metadata_and_clean_scan() -> None:
         assert persisted_asset.ingest_status == IngestStatus.READY_FOR_ANALYSIS
         assert persisted_asset.status == MediaAssetStatus.UPLOADED
         assert persisted_job.status == JobStatus.SUCCEEDED
+        technical_job_count, technical_event_count = asyncio.run(
+            technical_records(str(asset["id"]))
+        )
+        assert technical_job_count == 1 and technical_event_count == 1
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) -> None:
+    source = tmp_path / "verified.mp4"
+    subprocess.run(
+        [
+            "/usr/bin/ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x48:r=12",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    owner = auth("technical-owner", "technical-owner@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Technical", "timezone": "UTC"}
+        ).json()["id"]
+        asset = complete_upload(
+            client,
+            business_id,
+            owner,
+            byte_size=source.stat().st_size,
+            checksum=checksum,
+        )
+        assert asyncio.run(process_next(cast(FastAPI, client.app))) is not None
+        persisted_asset, _ = asyncio.run(stored_asset(str(asset["id"])))
+        materializer = FakeMediaMaterializer()
+        materializer.register_for_testing(
+            object_key=persisted_asset.storage_object_key, fixture_path=source
+        )
+        job = asyncio.run(process_technical_next(materializer=materializer, workdir=tmp_path))
+        assert job is not None and job.status == JobStatus.SUCCEEDED
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        try:
+
+            async def stored_results() -> (
+                tuple[MediaTechnicalMetadata | None, list[MediaDerivative]]
+            ):
+                async with AsyncSession(engine) as session:
+                    metadata = await session.scalar(
+                        select(MediaTechnicalMetadata).where(
+                            MediaTechnicalMetadata.asset_id == asset["id"]
+                        )
+                    )
+                    derivatives = list(
+                        (
+                            await session.scalars(
+                                select(MediaDerivative).where(
+                                    MediaDerivative.asset_id == asset["id"]
+                                )
+                            )
+                        ).all()
+                    )
+                    return metadata, derivatives
+
+            metadata, derivatives = asyncio.run(stored_results())
+        finally:
+            asyncio.run(engine.dispose())
+        assert metadata is not None and metadata.width == 64 and metadata.height == 48
+        assert {item.kind for item in derivatives} == {"thumbnail", "proxy"}
+        assert all(item.sha256_checksum and item.byte_size for item in derivatives)
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")

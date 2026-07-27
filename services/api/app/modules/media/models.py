@@ -37,6 +37,20 @@ class MalwareScanStatus(StrEnum):
     INDETERMINATE = "indeterminate"
 
 
+class TechnicalAnalysisStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DEAD = "dead"
+
+
+class MediaDerivativeStatus(StrEnum):
+    PENDING = "pending"
+    READY = "ready"
+    FAILED = "failed"
+
+
 class UploadSessionStatus(StrEnum):
     CREATED = "created"
     COMPLETED = "completed"
@@ -174,3 +188,107 @@ class MediaMalwareScan(Base):
     scanned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class MediaTechnicalMetadata(Base):
+    __tablename__ = "media_technical_metadata"
+    __table_args__ = (
+        UniqueConstraint("business_id", "asset_id", name="uq_media_technical_metadata_asset"),
+        Index("ix_media_technical_metadata_business_asset", "business_id", "asset_id"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_assets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    container_format: Mapped[str] = mapped_column(String(64), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    video_codec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    display_aspect_ratio: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    frame_rate_numerator: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frame_rate_denominator: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bit_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rotation_degrees: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    has_audio: Mapped[bool] = mapped_column(nullable=False)
+    audio_codec: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    audio_sample_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_channel_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stream_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    analyzed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MediaTechnicalAnalysis(Base):
+    __tablename__ = "media_technical_analyses"
+    __table_args__ = (
+        UniqueConstraint("business_id", "asset_id", name="uq_media_technical_analysis_asset"),
+        Index("ix_media_technical_analyses_business_status", "business_id", "status"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_assets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[TechnicalAnalysisStatus] = mapped_column(
+        Enum(
+            TechnicalAnalysisStatus,
+            name="technical_analysis_status",
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+    )
+    safe_error_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MediaDerivative(Base):
+    __tablename__ = "media_derivatives"
+    __table_args__ = (
+        UniqueConstraint("business_id", "asset_id", "kind", name="uq_media_derivative_kind"),
+        Index("ix_media_derivatives_business_asset", "business_id", "asset_id"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_assets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    storage_object_key: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(127), nullable=False)
+    byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[MediaDerivativeStatus] = mapped_column(
+        Enum(
+            MediaDerivativeStatus,
+            name="media_derivative_status",
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+    )
+    safe_error_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
