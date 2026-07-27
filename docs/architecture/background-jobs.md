@@ -13,7 +13,7 @@ Every job records:
 - Attempt count, retry classification, last safe error code, and dead-letter state/reason.
 - Idempotency or deduplication key where the command can repeat.
 
-Suggested baseline states: `pending`, `queued`, `running`, `succeeded`, `retry_scheduled`, `failed`, `dead_lettered`, and `cancelled`. State transitions are transactional and audited where they affect externally visible work.
+Phase 0 implements `queued`, `running`, `succeeded`, `failed`, `cancelled`, and `dead`. A retryable failure remains `failed` with a due `next_attempt_at`; exhaustion becomes `dead`. State transitions are transactional and audited where they affect externally visible work.
 
 ## Transactional outbox
 

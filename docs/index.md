@@ -22,14 +22,15 @@
 - [ADR-004: Provider Adapter Pattern](adr/ADR-004-provider-adapter-pattern.md)
 - [ADR-005: Transactional Outbox](adr/ADR-005-transactional-outbox.md)
 
-## Active Plans
-
-- [Phase 0 — Foundation Plan](plans/active/phase-0-foundation.md)
-
 ## Runbooks
 
 - [Local Development](runbooks/local-development.md)
 
+## Generated Contracts
+
+- [OpenAPI Schema](generated/openapi.json)
+
 ## Completed Plans
 
 - [Initial Documentation Setup](plans/completed/initial-documentation-setup.md)
+- [Phase 0 — Foundation Plan](plans/completed/phase-0-foundation.md)

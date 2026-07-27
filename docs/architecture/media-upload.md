@@ -36,7 +36,7 @@ sequenceDiagram
 - Object keys are generated server-side: `tenant/{business_id}/media/{asset_id}/original/{opaque-name}`. Original objects are immutable after completion.
 - Complete requests include upload/session IDs, part eTags or equivalent, checksum, and metadata assertions. The adapter verifies provider-side completion and metadata; the server does not trust client declarations.
 - Completion is authorized, stateful, and idempotent. A duplicate with the same key returns the original result; conflicting payloads fail.
-- The transaction creates the media asset, durable ingest job, audit entry where required, and `media.upload_completed` outbox event together.
+- The transaction creates the media asset, durable ingest job, audit entry where required, and `media.ingest.requested` outbox event together.
 
 ## Security boundaries
 

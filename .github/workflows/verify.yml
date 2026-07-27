@@ -1,3 +1,4 @@
+---
 name: Verify
 
 on:
@@ -66,5 +67,7 @@ jobs:
           alembic upgrade head
           alembic downgrade base
           alembic upgrade head
+      - name: Verify OpenAPI contract
+        run: make check-openapi
       - name: Validate Compose definition
         run: docker compose config

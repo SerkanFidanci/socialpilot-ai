@@ -16,7 +16,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [backend, host-access]
+    networks: [backend, edge]
     restart: unless-stopped
 
   redis:
@@ -29,7 +29,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [backend, host-access]
+    networks: [backend, edge]
     restart: unless-stopped
 
   api:
@@ -96,7 +96,6 @@ services:
 
 networks:
   edge:
-  host-access:
   backend:
     internal: true
 

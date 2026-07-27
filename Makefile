@@ -2,7 +2,7 @@ PYTHON ?= python
 API_DIR := services/api
 COMPOSE ?= docker compose
 
-.PHONY: lint format-check typecheck test-backend verify migrate migrate-down compose-config compose-up compose-ps
+.PHONY: lint format-check typecheck test-backend verify migrate migrate-down compose-config compose-up compose-ps generate-docs check-openapi
 
 lint:
 	cd $(API_DIR) && $(PYTHON) -m ruff check app tests migrations
@@ -16,7 +16,13 @@ test-backend:
 typecheck:
 	cd $(API_DIR) && $(PYTHON) -m mypy .
 
-verify: lint format-check typecheck test-backend
+verify: lint format-check typecheck test-backend check-openapi
+
+generate-docs:
+	$(PYTHON) services/api/scripts/generate_openapi.py
+
+check-openapi: generate-docs
+	git diff --exit-code -- docs/generated/openapi.json
 
 migrate:
 	cd $(API_DIR) && $(PYTHON) -m alembic upgrade head

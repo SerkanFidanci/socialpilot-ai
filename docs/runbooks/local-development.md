@@ -9,7 +9,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-By default, the API is published on `http://localhost:8000`; set `API_HOST_PORT` to use a different host port. PostgreSQL and Redis use the internal `backend` network for service communication and are published to the Windows host only on `127.0.0.1:55432` and `127.0.0.1:56379`; override those ports with `POSTGRES_HOST_PORT` and `REDIS_HOST_PORT`.
+By default, the API is published on `http://localhost:8000`; set `API_HOST_PORT` to use a different host port. PostgreSQL and Redis share the internal `backend` network with the API and also join `edge` solely so Docker Desktop can publish their loopback-only development ports on `127.0.0.1:55432` and `127.0.0.1:56379`; override those ports with `POSTGRES_HOST_PORT` and `REDIS_HOST_PORT`.
 
 Continue once `docker compose ps` reports each service as `healthy`; immediately after a forced recreate, Docker Desktop can still be attaching the internal network aliases.
 
@@ -49,6 +49,16 @@ docker compose exec -T api alembic current
 docker compose exec -T api alembic heads
 ```
 
+## Generate and verify OpenAPI
+
+Generate the deterministic public contract from a Python environment with the backend dependencies installed:
+
+```powershell
+python services/api/scripts/generate_openapi.py
+```
+
+On Linux/macOS or in CI, `make generate-docs` regenerates `docs/generated/openapi.json`; `make check-openapi` regenerates it and fails when the committed contract is stale.
+
 ## Windows Docker Desktop port troubleshooting
 
 Confirm the resolved mapping and the actual published API port:
@@ -59,7 +69,7 @@ docker compose port api 8000
 docker compose ps
 ```
 
-The API must join both the `edge` network (host publishing) and the internal `backend` network (PostgreSQL and Redis). PostgreSQL and Redis use `host-access` only for their loopback host-port mappings. If no API port is shown after a configuration change, recreate the services:
+The API must join both the `edge` network (host publishing) and the internal `backend` network (PostgreSQL and Redis). PostgreSQL and Redis also join `edge` solely for loopback host-port publication; application traffic between services always uses `backend`. If no API port is shown after a configuration change, recreate the services:
 
 ```powershell
 docker compose up -d --build --force-recreate

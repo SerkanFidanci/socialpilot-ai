@@ -9,6 +9,7 @@ from typing import cast
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from starlette.responses import Response
 
 from app.api.routes.businesses import router as businesses_router
@@ -17,7 +18,12 @@ from app.api.routes.identity import router as identity_router
 from app.api.routes.media import router as media_router
 from app.core.config import Settings, get_settings
 from app.core.correlation import CorrelationIdMiddleware
-from app.core.errors import ProblemException, problem_response, safe_validation_error_meta
+from app.core.errors import (
+    ProblemDetails,
+    ProblemException,
+    problem_response,
+    safe_validation_error_meta,
+)
 from app.core.logging import configure_logging
 from app.core.protocols import DatabaseClient, RedisClient
 from app.infrastructure.database import create_database
@@ -32,6 +38,43 @@ DatabaseFactory = Callable[[Settings], DatabaseClient]
 RedisFactory = Callable[[Settings], RedisClient]
 StorageFactory = Callable[[], MultipartStoragePort]
 DEFAULT_REDIS_FACTORY: RedisFactory = cast(RedisFactory, create_redis_client)
+
+
+def configure_openapi(application: FastAPI) -> None:
+    """Document the shared RFC 9457 error contract for every public operation."""
+
+    def custom_openapi() -> dict[str, object]:
+        if application.openapi_schema is not None:
+            return cast(dict[str, object], application.openapi_schema)
+        schema = get_openapi(
+            title=application.title,
+            version=application.version,
+            routes=application.routes,
+        )
+        components = schema.setdefault("components", {})
+        schemas = components.setdefault("schemas", {})
+        schemas["ProblemDetails"] = ProblemDetails.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        )
+        problem_response = {
+            "description": "RFC 9457 Problem Details response.",
+            "content": {
+                "application/problem+json": {
+                    "schema": {"$ref": "#/components/schemas/ProblemDetails"}
+                }
+            },
+        }
+        for path_item in schema["paths"].values():
+            for operation in path_item.values():
+                if not isinstance(operation, dict):
+                    continue
+                responses = operation.setdefault("responses", {})
+                for status in ("400", "401", "403", "404", "409", "422", "500"):
+                    responses.setdefault(status, problem_response)
+        application.openapi_schema = schema
+        return cast(dict[str, object], schema)
+
+    application.openapi = custom_openapi  # type: ignore[method-assign]
 
 
 def create_app(
@@ -73,6 +116,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.add_middleware(CorrelationIdMiddleware)
+    configure_openapi(application)
     application.include_router(health_router)
     application.include_router(identity_router)
     application.include_router(businesses_router)

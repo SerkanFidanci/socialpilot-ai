@@ -1,6 +1,8 @@
 # Phase 0 — Foundation Plan
 
-**Status:** Active — Slices 0A, 0B, and 0C implemented; Slice 0D has not started.
+**Status:** Completed
+**Completed:** 2026-07-28
+**Final migration head:** `0004_operational_reliability`
 **Scope owner:** Backend platform foundation
 **Source requirements:** `docs/product/product-requirements.md`
 
@@ -70,7 +72,7 @@ Order: identity boundary → users/identities → businesses/memberships/roles �
 Acceptance criteria:
 
 - A verified principal can create a business and becomes its `owner` in one database transaction.
-- `GET /api/v1/businesses` returns only businesses in which the principal has an active membership.
+- `GET /v1/businesses` returns only businesses in which the principal has an active membership.
 - A member from business A receives `404` for a business-B resource, without existence disclosure.
 - Role-policy tests prove that `viewer` cannot mutate, `editor` cannot manage memberships, and only `owner` can archive a business. Deletion and billing-scoped settings have no 0B endpoint.
 - Every business-owned repository query requires `business_id`; tests fail when an unscoped query path is attempted.
@@ -85,7 +87,7 @@ Order: media states → storage port/fake → upload session → multipart instr
 
 Acceptance criteria:
 
-- `POST /api/v1/businesses/{business_id}/media/uploads` returns an upload-session ID, opaque object key, part instructions, expiry, and checksum requirements; it does not return a long-lived provider credential.
+- `POST /v1/businesses/{business_id}/media/uploads` returns an upload-session ID, opaque object key, part instructions, expiry, and checksum requirements; it does not return a long-lived provider credential.
 - A caller without upload permission or outside the tenant receives `403`/`404` before an adapter call is made.
 - Completion accepts only the expected session state and declared parts, verifies checksum and object metadata through the storage port, and is idempotent for the same request key.
 - Completion creates one tenant-scoped `media_asset` in `uploaded` state with `ingest_status=pending`. Durable job and outbox records are deferred to Slice 0D.
@@ -138,7 +140,7 @@ Acceptance criteria:
 | Area | Initial tables | Notes |
 |---|---|---|
 | Identity | `users`, `external_identities` | User is global; external provider subject is unique per provider. |
-| Tenant/RBAC | `businesses`, `business_members`, `roles`, `member_roles` | `businesses.id` is the tenant key. Membership is the authorization anchor. |
+| Tenant/RBAC | `businesses`, `business_members` | `businesses.id` is the tenant key. Phase 0 stores the member role as a constrained enum; separate role tables are deferred. |
 | Media intake | `media_assets`, `media_upload_sessions` | Asset and session both carry `business_id`; object key is opaque. |
 | Operations | `jobs`, `job_attempts`, `outbox_events`, `idempotency_keys`, `audit_logs` | Durable statuses, correlation IDs, attempts, and error references. |
 
@@ -150,13 +152,13 @@ All identifiers are UUIDs; timestamps are UTC; business-owned records include `b
 |---|---|---|---|
 | GET | `/health/live` | 0A | Process liveness, no dependency check. |
 | GET | `/health/ready` | 0A | PostgreSQL and Redis readiness. |
-| GET | `/api/v1/me` | 0B | Current principal only. |
-| GET, POST | `/api/v1/businesses` | 0B | List authorized businesses; create business and owner membership. |
-| GET, PATCH | `/api/v1/businesses/{business_id}` | 0B | Tenant-authorized business resource; only an owner may archive it. |
-| GET, POST | `/api/v1/businesses/{business_id}/members` | 0B | Role-gated membership management. |
-| POST | `/api/v1/businesses/{business_id}/media/uploads` | 0C | Create multipart upload session. |
-| POST | `/api/v1/businesses/{business_id}/media/uploads/{session_id}/complete` | 0C | Validate completion and create ingest work. |
-| GET | `/api/v1/jobs/{job_id}` | 0D | Authorized tenant job status. |
+| GET | `/v1/me` | 0B | Current principal only. |
+| GET, POST | `/v1/businesses` | 0B | List authorized businesses; create business and owner membership. |
+| GET, PATCH | `/v1/businesses/{business_id}` | 0B | Tenant-authorized business resource; only an owner may archive it. |
+| GET, POST | `/v1/businesses/{business_id}/members` | 0B | Role-gated membership management. |
+| POST | `/v1/businesses/{business_id}/media/uploads` | 0C | Create multipart upload session. |
+| POST | `/v1/businesses/{business_id}/media/uploads/{session_id}/complete` | 0C | Validate completion and create ingest work. |
+| GET | `/v1/jobs/{job_id}` | Deferred | Authorized tenant job status; not implemented in Phase 0 closure state. |
 
 ## 9. Security risks
 
@@ -209,5 +211,28 @@ Phase 0 is complete only when slices 0A–0D meet their acceptance criteria, eve
 - [x] 0C: Add checksum/metadata/tenant/concurrency tests without proxying media bytes; defer request-key idempotency storage to 0D.
 - [x] 0D: Implement job, outbox, idempotency, audit, and structured-error vertical slice.
 - [x] 0D: Add atomicity, retry/dead-letter, duplicate-delivery, and redaction tests.
-- [ ] Verify migrations, OpenAPI, local Compose smoke checks, and CI commands.
-- [ ] Move this plan to `docs/plans/completed/` only after all completion criteria pass.
+- [x] Verify local migrations, OpenAPI, Compose smoke checks, and CI workflow definition; hosted CI remains pending branch push.
+- [x] Move this plan to `docs/plans/completed/` after the recorded Phase 0 closure verification.
+
+## Phase 0 closure audit — 2026-07-28
+
+Fresh local Docker volume validation rebuilt the API without cache, applied `0001_bootstrap` through `0004_operational_reliability`, downgraded to base, and upgraded to head again. The Compose API, PostgreSQL, and Redis health checks passed; PostgreSQL and Redis are attached to both the internal `backend` network for service traffic and `edge` only for loopback development port publication. The deterministic OpenAPI artifact is `docs/generated/openapi.json`; it documents 12 paths, 15 operations, the bearer scheme, and the RFC 9457 `ProblemDetails` model without storage or secret fields. The CI workflow runs Python 3.12, lint/format/type/unit-plus-integration tests, migrations, Compose validation, and OpenAPI freshness validation.
+
+### Final verification results
+
+- Container local suite: `25 passed, 12 skipped`.
+- PostgreSQL integration suite: `37 passed`.
+- Ruff, Ruff format, and mypy: passed in the API container.
+- Clean Docker build and startup: passed.
+- Alembic upgrade/downgrade cycle: passed at `0004_operational_reliability`.
+- OpenAPI: 12 paths and 15 operations; deterministic artifact check passed.
+- CI YAML lint: passed; hosted GitHub Actions remains pending branch push.
+
+## Deferred work
+
+- Business and membership mutations do not yet persist/replay idempotency records; only media completion uses the Phase 0 idempotency store.
+- Tenant-scoped job and audit read endpoints are not implemented, so the documented job-status route and cross-tenant job/audit HTTP matrix remain incomplete.
+- The registered Celery task is a transport trigger; a worker composition that injects and runs the outbox publisher port remains required before real dispatch work is enabled.
+- Cursor pagination for business and membership lists and PostgreSQL RLS as defense in depth remain deferred.
+- Production identity-provider integration and a production object-storage adapter remain outside Phase 0.
+- The workflow YAML parses and its local equivalent commands pass, but hosted GitHub Actions remains pending branch push and is the merge condition.
