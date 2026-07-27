@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     media_ingest_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     media_ingest_max_attempts: int = Field(default=3, ge=1, le=10)
     media_max_duration_seconds: int = Field(default=3_600, ge=1, le=86_400)
+    media_max_width: int = Field(default=3_840, ge=1, le=16_384)
+    media_max_height: int = Field(default=2_160, ge=1, le=16_384)
+    media_max_total_pixels: int = Field(default=8_294_400, ge=1, le=268_435_456)
+    media_max_derivative_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
+    ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
+    ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
     media_allowed_mime_types: tuple[str, ...] = (
         "image/jpeg",
         "image/png",
@@ -72,6 +78,13 @@ class Settings(BaseSettings):
         if not value or any("/" not in mime for mime in value):
             raise ValueError("MEDIA_ALLOWED_MIME_TYPES must contain MIME types")
         return tuple(mime.lower() for mime in value)
+
+    @field_validator("ffmpeg_binary", "ffprobe_binary")
+    @classmethod
+    def validate_media_binary(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value:
+            raise ValueError("media binary paths must be absolute paths")
+        return value
 
     @model_validator(mode="after")
     def reject_local_only_production_urls(self) -> Settings:

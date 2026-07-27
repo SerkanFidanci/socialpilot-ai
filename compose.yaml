@@ -91,9 +91,17 @@ services:
     command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "worker", "--loglevel=INFO"]
     profiles: ["worker"]
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks: [backend]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
     restart: unless-stopped
 
 networks:

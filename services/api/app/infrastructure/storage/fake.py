@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from app.modules.media.storage import (
     CompletedPart,
+    StoragePermanentError,
     StorageUnavailableError,
     StoredObjectMetadata,
     UploadPartInstruction,
@@ -28,7 +32,9 @@ class FakeMultipartStorage:
     def __init__(self) -> None:
         self._uploads: dict[str, _Upload] = {}
         self._objects: dict[str, StoredObjectMetadata] = {}
+        self._object_files: dict[str, Path] = {}
         self._unavailable_objects: set[str] = set()
+        self._storage_directory = TemporaryDirectory(prefix="socialpilot-fake-storage-")
 
     async def create_upload(
         self,
@@ -85,6 +91,44 @@ class FakeMultipartStorage:
         except KeyError as error:
             raise StorageUnavailableError("storage object unavailable") from error
 
+    async def persist_file(
+        self, *, object_key: str, source_path: Path, content_type: str
+    ) -> StoredObjectMetadata:
+        """Persist a local worker file in chunks without loading it into memory."""
+
+        if object_key in self._unavailable_objects:
+            raise StorageUnavailableError("storage object unavailable")
+        existing = self._objects.get(object_key)
+        if existing is not None:
+            return existing
+        destination = (
+            Path(self._storage_directory.name)
+            / hashlib.sha256(object_key.encode("utf-8")).hexdigest()
+        )
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with source_path.open("rb") as source, destination.open("wb") as destination_file:
+                while chunk := source.read(1_048_576):
+                    digest.update(chunk)
+                    size += len(chunk)
+                    destination_file.write(chunk)
+        except OSError as error:
+            destination.unlink(missing_ok=True)
+            raise StorageUnavailableError("storage persistence unavailable") from error
+        if size == 0:
+            destination.unlink(missing_ok=True)
+            raise StoragePermanentError("storage persistence rejected empty file")
+        metadata = StoredObjectMetadata(
+            byte_size=size,
+            content_type=content_type,
+            sha256_checksum=digest.hexdigest(),
+            etag=f"fake-{digest.hexdigest()[:16]}",
+        )
+        self._objects[object_key] = metadata
+        self._object_files[object_key] = destination
+        return metadata
+
     async def cancel_upload(self, *, storage_upload_id: str) -> None:
         self._get(storage_upload_id).cancelled = True
 
@@ -104,6 +148,12 @@ class FakeMultipartStorage:
 
     def fail_object_for_testing(self, object_key: str) -> None:
         self._unavailable_objects.add(object_key)
+
+    def persisted_file_for_testing(self, object_key: str) -> Path:
+        try:
+            return self._object_files[object_key]
+        except KeyError as error:
+            raise AssertionError("storage object was not persisted") from error
 
     def _get(self, storage_upload_id: str) -> _Upload:
         try:

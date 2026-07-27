@@ -253,9 +253,10 @@ class MediaIngestService:
                     )
                 )
             asset.ingest_status = IngestStatus.READY_FOR_ANALYSIS
-            await OperationsService(self._session, self._settings).record_technical_analysis(
-                business_id=business_id, asset_id=asset.id, correlation_id=job.correlation_id
-            )
+            if asset.content_type == "video/mp4":
+                await OperationsService(self._session, self._settings).record_technical_analysis(
+                    business_id=business_id, asset_id=asset.id, correlation_id=job.correlation_id
+                )
             self._finish(job, JobStatus.SUCCEEDED)
             return job
 
@@ -286,16 +287,13 @@ class MediaIngestService:
             job, asset = await self._running_job_and_asset(business_id, job_id)
             asset.ingest_status = IngestStatus.REJECTED
             asset.status = MediaAssetStatus.QUARANTINED if quarantine else MediaAssetStatus.REJECTED
-            verdict = scan_status or (
-                MalwareScanStatus.INFECTED if quarantine else MalwareScanStatus.INDETERMINATE
-            )
             scan = await self._media.get_malware_scan(business_id, asset.id, lock=True)
-            if scan is None:
+            if scan is None and scan_status is not None:
                 self._media.add(
                     MediaMalwareScan(
                         business_id=business_id,
                         asset_id=asset.id,
-                        status=verdict,
+                        status=scan_status,
                         scanner_name="fake-malware-scanner",
                         safe_error_code=code,
                     )

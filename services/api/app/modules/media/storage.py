@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 
@@ -51,4 +52,7 @@ class MultipartStoragePort(Protocol):
         self, *, storage_upload_id: str, parts: tuple[CompletedPart, ...]
     ) -> StoredObjectMetadata: ...
     async def get_object_metadata(self, *, object_key: str) -> StoredObjectMetadata: ...
+    async def persist_file(
+        self, *, object_key: str, source_path: Path, content_type: str
+    ) -> StoredObjectMetadata: ...
     async def cancel_upload(self, *, storage_upload_id: str) -> None: ...

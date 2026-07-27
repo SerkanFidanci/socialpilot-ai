@@ -11,9 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Protocol
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -27,6 +26,12 @@ from app.modules.media.models import (
     TechnicalAnalysisStatus,
 )
 from app.modules.media.repository import MediaRepository
+from app.modules.media.storage import (
+    MultipartStoragePort,
+    StoragePermanentError,
+    StorageUnavailableError,
+    StoredObjectMetadata,
+)
 from app.modules.operations.models import (
     BackgroundJob,
     JobAttempt,
@@ -36,9 +41,6 @@ from app.modules.operations.models import (
     OutboxStatus,
 )
 from app.modules.operations.repository import OperationsRepository
-
-FFPROBE_EXECUTABLE = "/usr/bin/ffprobe"
-FFMPEG_EXECUTABLE = "/usr/bin/ffmpeg"
 
 
 @dataclass(frozen=True)
@@ -94,12 +96,32 @@ class TechnicalPermanentError(RuntimeError):
     pass
 
 
+def validate_technical_metadata(
+    *, settings: Settings, asset_byte_size: int, metadata: NormalizedTechnicalMetadata
+) -> None:
+    if metadata.file_size != asset_byte_size:
+        raise TechnicalPermanentError("TECHNICAL_FILE_SIZE_MISMATCH")
+    if metadata.duration_ms > settings.media_max_duration_seconds * 1_000:
+        raise TechnicalPermanentError("TECHNICAL_DURATION_EXCEEDED")
+    if metadata.width is None or metadata.height is None:
+        raise TechnicalPermanentError("TECHNICAL_VIDEO_STREAM_REQUIRED")
+    if (
+        metadata.width > settings.media_max_width
+        or metadata.height > settings.media_max_height
+        or metadata.width * metadata.height > settings.media_max_total_pixels
+    ):
+        raise TechnicalPermanentError("TECHNICAL_DIMENSIONS_EXCEEDED")
+
+
 class FFprobeAdapter(MediaProbePort):
     """Run a fixed ffprobe binary with bounded JSON and no shell interpolation."""
 
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
     async def probe(self, *, input_path: Path, timeout_seconds: int) -> NormalizedTechnicalMetadata:
         command = [
-            FFPROBE_EXECUTABLE,
+            self._settings.ffprobe_binary,
             "-v",
             "error",
             "-print_format",
@@ -193,19 +215,32 @@ class FFprobeAdapter(MediaProbePort):
 
 
 class FFmpegDerivativeAdapter(MediaDerivativePort):
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
     async def generate(
         self, *, input_path: Path, output_dir: Path, timeout_seconds: int
     ) -> tuple[GeneratedDerivative, GeneratedDerivative]:
         thumbnail, proxy = output_dir / "thumbnail.jpg", output_dir / "proxy.mp4"
         commands = (
-            [FFMPEG_EXECUTABLE, "-y", "-i", str(input_path), "-frames:v", "1", str(thumbnail)],
             [
-                FFMPEG_EXECUTABLE,
+                self._settings.ffmpeg_binary,
                 "-y",
                 "-i",
                 str(input_path),
                 "-vf",
-                "scale=-2:360",
+                self._scale_filter(),
+                "-frames:v",
+                "1",
+                str(thumbnail),
+            ],
+            [
+                self._settings.ffmpeg_binary,
+                "-y",
+                "-i",
+                str(input_path),
+                "-vf",
+                self._scale_filter(),
                 "-c:v",
                 "libx264",
                 "-an",
@@ -233,20 +268,34 @@ class FFmpegDerivativeAdapter(MediaDerivativePort):
             self._generated("proxy", proxy, "video/mp4"),
         )
 
-    @staticmethod
-    def _generated(kind: str, path: Path, content_type: str) -> GeneratedDerivative:
+    def _scale_filter(self) -> str:
+        return (
+            f"scale={self._settings.media_max_width}:{self._settings.media_max_height}:"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2"
+        )
+
+    def _generated(self, kind: str, path: Path, content_type: str) -> GeneratedDerivative:
         try:
-            contents = path.read_bytes()
+            byte_size = path.stat().st_size
         except OSError as error:
             raise TechnicalPermanentError("FFMPEG_DERIVATIVE_FAILED") from error
-        if not contents:
+        if byte_size <= 0:
             raise TechnicalPermanentError("FFMPEG_DERIVATIVE_FAILED")
+        if byte_size > self._settings.media_max_derivative_bytes:
+            raise TechnicalPermanentError("DERIVATIVE_SIZE_EXCEEDED")
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as derivative_file:
+                while chunk := derivative_file.read(1_048_576):
+                    digest.update(chunk)
+        except OSError as error:
+            raise TechnicalPermanentError("FFMPEG_DERIVATIVE_FAILED") from error
         return GeneratedDerivative(
             kind=kind,
             path=path,
             content_type=content_type,
-            byte_size=len(contents),
-            sha256_checksum=hashlib.sha256(contents).hexdigest(),
+            byte_size=byte_size,
+            sha256_checksum=digest.hexdigest(),
         )
 
 
@@ -258,9 +307,15 @@ class TechnicalAnalysisService:
         materializer: MediaMaterializerPort,
         probe: MediaProbePort,
         derivatives: MediaDerivativePort,
+        storage: MultipartStoragePort,
     ) -> None:
         self._session, self._settings = session, settings
-        self._materializer, self._probe, self._derivatives = materializer, probe, derivatives
+        self._materializer, self._probe, self._derivatives, self._storage = (
+            materializer,
+            probe,
+            derivatives,
+            storage,
+        )
         self._media, self._operations = MediaRepository(session), OperationsRepository(session)
 
     async def claim_next(self) -> BackgroundJob | None:
@@ -322,19 +377,7 @@ class TechnicalAnalysisService:
                     title="Invalid media state",
                     detail="The media is not ready for technical analysis.",
                 )
-            job.status, job.attempt_count, job.started_at = (
-                JobStatus.RUNNING,
-                job.attempt_count + 1,
-                datetime.now(UTC),
-            )
-            analysis = await self._session.scalar(
-                select(MediaTechnicalAnalysis)
-                .where(
-                    MediaTechnicalAnalysis.business_id == business_id,
-                    MediaTechnicalAnalysis.asset_id == asset.id,
-                )
-                .with_for_update()
-            )
+            analysis = await self._media.get_technical_analysis(business_id, asset.id, lock=True)
             if analysis is None:
                 self._session.add(
                     MediaTechnicalAnalysis(
@@ -348,16 +391,34 @@ class TechnicalAnalysisService:
                 analysis.safe_error_code = None
             object_key = asset.storage_object_key
             asset_byte_size = asset.byte_size
+            timeout_seconds = job.timeout_seconds
         try:
             input_path = await self._materializer.materialize(
                 object_key=object_key, workdir=workdir
             )
             metadata = await self._probe.probe(
-                input_path=input_path, timeout_seconds=job.timeout_seconds
+                input_path=input_path, timeout_seconds=timeout_seconds
             )
-            self._validate_metadata(asset_byte_size=asset_byte_size, metadata=metadata)
+            validate_technical_metadata(
+                settings=self._settings,
+                asset_byte_size=asset_byte_size,
+                metadata=metadata,
+            )
             derivatives = await self._derivatives.generate(
-                input_path=input_path, output_dir=workdir, timeout_seconds=job.timeout_seconds
+                input_path=input_path, output_dir=workdir, timeout_seconds=timeout_seconds
+            )
+            persisted_derivatives = await self._persist_derivatives(
+                business_id=business_id,
+                asset_id=job.resource_id,
+                derivatives=derivatives,
+            )
+        except StorageUnavailableError:
+            return await self._fail(
+                business_id, job_id, "DERIVATIVE_STORAGE_UNAVAILABLE", transient=True
+            )
+        except StoragePermanentError:
+            return await self._fail(
+                business_id, job_id, "DERIVATIVE_STORAGE_METADATA_INVALID", transient=False
             )
         except TechnicalTransientError as error:
             return await self._fail(business_id, job_id, str(error), transient=True)
@@ -372,10 +433,8 @@ class TechnicalAnalysisService:
             )
             if job is None or asset is None:
                 raise RuntimeError("technical analysis resource disappeared")
-            completed_analysis = await self._session.scalar(
-                select(MediaTechnicalAnalysis)
-                .where(MediaTechnicalAnalysis.asset_id == asset.id)
-                .with_for_update()
+            completed_analysis = await self._media.get_technical_analysis(
+                business_id, asset.id, lock=True
             )
             if completed_analysis is None:
                 raise RuntimeError("technical analysis state disappeared")
@@ -388,19 +447,16 @@ class TechnicalAnalysisService:
                     business_id=business_id, asset_id=asset.id, **metadata.__dict__
                 )
             )
-            for derivative in derivatives:
+            for derivative, storage_metadata, storage_object_key in persisted_derivatives:
                 self._session.add(
                     MediaDerivative(
                         business_id=business_id,
                         asset_id=asset.id,
                         kind=derivative.kind,
-                        storage_object_key=(
-                            f"tenant/{business_id}/media/{asset.id}/"
-                            f"{derivative.kind}/{uuid4().hex}"
-                        ),
-                        content_type=derivative.content_type,
-                        byte_size=derivative.byte_size,
-                        sha256_checksum=derivative.sha256_checksum,
+                        storage_object_key=storage_object_key,
+                        content_type=storage_metadata.content_type,
+                        byte_size=storage_metadata.byte_size,
+                        sha256_checksum=storage_metadata.sha256_checksum,
                         status=MediaDerivativeStatus.READY,
                         ready_at=datetime.now(UTC),
                     )
@@ -425,13 +481,29 @@ class TechnicalAnalysisService:
             )
             return job
 
-    def _validate_metadata(
-        self, *, asset_byte_size: int, metadata: NormalizedTechnicalMetadata
-    ) -> None:
-        if metadata.file_size != asset_byte_size:
-            raise TechnicalPermanentError("TECHNICAL_FILE_SIZE_MISMATCH")
-        if metadata.duration_ms > self._settings.media_max_duration_seconds * 1_000:
-            raise TechnicalPermanentError("TECHNICAL_DURATION_EXCEEDED")
+    async def _persist_derivatives(
+        self,
+        *,
+        business_id: UUID,
+        asset_id: UUID,
+        derivatives: tuple[GeneratedDerivative, GeneratedDerivative],
+    ) -> list[tuple[GeneratedDerivative, StoredObjectMetadata, str]]:
+        persisted: list[tuple[GeneratedDerivative, StoredObjectMetadata, str]] = []
+        for derivative in derivatives:
+            object_key = f"tenant/{business_id}/media/{asset_id}/derivatives/{derivative.kind}"
+            metadata = await self._storage.persist_file(
+                object_key=object_key,
+                source_path=derivative.path,
+                content_type=derivative.content_type,
+            )
+            if (
+                metadata.byte_size != derivative.byte_size
+                or metadata.content_type.lower() != derivative.content_type
+                or metadata.sha256_checksum.lower() != derivative.sha256_checksum
+            ):
+                raise StoragePermanentError("derivative metadata mismatch")
+            persisted.append((derivative, metadata, object_key))
+        return persisted
 
     async def _fail(
         self, business_id: UUID, job_id: UUID, code: str, *, transient: bool
@@ -440,10 +512,8 @@ class TechnicalAnalysisService:
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("technical job disappeared")
-            analysis = await self._session.scalar(
-                select(MediaTechnicalAnalysis)
-                .where(MediaTechnicalAnalysis.asset_id == job.resource_id)
-                .with_for_update()
+            analysis = await self._media.get_technical_analysis(
+                business_id, job.resource_id, lock=True
             )
             if analysis is not None:
                 analysis.status, analysis.safe_error_code = (TechnicalAnalysisStatus.FAILED, code)

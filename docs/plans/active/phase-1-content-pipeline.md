@@ -53,7 +53,7 @@ Acceptance criteria:
 
 ### 1B — Technical media analysis
 
-Add a hardened FFprobe adapter, persist technical audio/video metadata, and generate thumbnail and low-resolution proxy derivatives in isolated workers. Audio extraction remains in 1C.
+Add a hardened FFprobe adapter, persist technical video metadata, and generate thumbnail and low-resolution proxy derivatives in isolated workers. This slice schedules technical analysis only for `video/mp4`; JPEG, PNG, and MPEG audio remain supported by the upload/ingest security gate but do not create a technical-analysis job. Audio extraction remains in 1C.
 
 Acceptance criteria:
 
@@ -63,7 +63,7 @@ Acceptance criteria:
 - [x] Thumbnail and proxy records use generated tenant/asset keys and persist checksum, size, content type, and immutable ownership metadata.
 - [x] Unit and PostgreSQL integration tests cover real FFmpeg/FFprobe fixture processing, durable metadata/derivative records, technical job/outbox creation, and tenant-scoped job claims.
 
-**1B implementation record — 2026-07-28:** Migration `0006_technical_media_analysis` adds tenant-scoped technical-analysis, technical-metadata, and derivative records plus a unique technical-analysis job constraint. A clean ingest atomically schedules `media.technical_analysis` and its outbox event. The worker uses provider-neutral materialization/probe/derivative ports; the test adapter materializes a local fixture without storage credentials. The runtime image installs FFmpeg/FFprobe while retaining the non-root application user. Container verification passed: `30 passed, 17 skipped` without PostgreSQL integration mode and `47 passed` with it enabled.
+**1B implementation record — 2026-07-28:** Migration `0006_technical_media_analysis` adds tenant-scoped technical-analysis, technical-metadata, and derivative records plus a unique technical-analysis job constraint. A clean `video/mp4` ingest atomically schedules `media.technical_analysis` and its outbox event. The worker uses provider-neutral materialization/probe/derivative ports; generated local files are streamed into the storage port, whose persisted metadata must match before a derivative becomes `ready`. The test adapter stores files on disk without storage credentials. FFmpeg/FFprobe paths and duration, dimensions, pixel, and derivative-size limits are Settings-controlled. The worker profile is non-root, read-only, CPU/memory/PID-limited, and has a bounded writable `/tmp`. JPEG/PNG/audio uploads are intentionally not sent to FFmpeg in 1B. Container verification passed: `30 passed, 17 skipped` without PostgreSQL integration mode and `55 passed` with it enabled.
 
 ### 1C — Scene and speech analysis
 
@@ -199,7 +199,7 @@ Phase 1 is complete when an authorized uploaded media asset reliably reaches `re
 ## 14. Open questions and source alignment
 
 - Product requirements section 44 names brand profiles and products alongside media in "Phase 1 — Brand and media". This task's approved scope is the media-processing pipeline only. Brand/product modelling is therefore deferred here; confirm whether it is a separately sequenced Phase 1 slice or a later phase before implementation begins.
-- The first supported asset matrix is unresolved: Phase 1 must explicitly decide whether image/audio-only assets receive the same ingest gate but a reduced analysis chain, or whether the initial vertical slice accepts video only. MIME/container, size, duration, and per-plan limits are policy inputs still to be approved.
+- Phase 1B resolves the immediate technical-analysis boundary: only `video/mp4` produces FFprobe/FFmpeg work. JPEG, PNG, and MPEG audio still use the ingest gate but await their explicit reduced analysis chains in later slices; no silent FFmpeg failure is permitted.
 - Production malware, storage, ASR, and VLM providers, regional data-processing policy, retention/deletion obligations, and provider benchmark thresholds are intentionally unselected.
 - The route policy must decide which analysis stages are mandatory for each supported media type and quality tier, and whether a VLM/ASR failure leaves an asset non-ready, operator-reviewable, or eligible for a policy-approved degraded result. The default in this plan is fail closed: no `ready` transition without all enabled mandatory stages.
 - Reprocessing quotas, authorization permission name, retention period for prior runs, and the relationship to future entitlement consumption are not yet product decisions.

@@ -10,8 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.media.models import (
     MediaAsset,
+    MediaDerivative,
     MediaIngestInspection,
     MediaMalwareScan,
+    MediaTechnicalAnalysis,
+    MediaTechnicalMetadata,
     MediaUploadSession,
 )
 
@@ -61,6 +64,37 @@ class MediaRepository:
         if lock:
             statement = statement.with_for_update()
         return cast(MediaMalwareScan | None, await self._session.scalar(statement))
+
+    async def get_technical_analysis(
+        self, business_id: UUID, asset_id: UUID, *, lock: bool = False
+    ) -> MediaTechnicalAnalysis | None:
+        statement = select(MediaTechnicalAnalysis).where(
+            MediaTechnicalAnalysis.business_id == business_id,
+            MediaTechnicalAnalysis.asset_id == asset_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(MediaTechnicalAnalysis | None, await self._session.scalar(statement))
+
+    async def get_technical_metadata(
+        self, business_id: UUID, asset_id: UUID
+    ) -> MediaTechnicalMetadata | None:
+        return cast(
+            MediaTechnicalMetadata | None,
+            await self._session.scalar(
+                select(MediaTechnicalMetadata).where(
+                    MediaTechnicalMetadata.business_id == business_id,
+                    MediaTechnicalMetadata.asset_id == asset_id,
+                )
+            ),
+        )
+
+    async def list_derivatives(self, business_id: UUID, asset_id: UUID) -> list[MediaDerivative]:
+        statement = select(MediaDerivative).where(
+            MediaDerivative.business_id == business_id,
+            MediaDerivative.asset_id == asset_id,
+        )
+        return list((await self._session.scalars(statement)).all())
 
     def add(
         self, value: MediaAsset | MediaUploadSession | MediaIngestInspection | MediaMalwareScan

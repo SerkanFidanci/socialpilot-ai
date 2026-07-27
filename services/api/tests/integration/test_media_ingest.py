@@ -30,15 +30,17 @@ from app.modules.media.models import (
     MediaAsset,
     MediaAssetStatus,
     MediaDerivative,
+    MediaMalwareScan,
     MediaTechnicalMetadata,
 )
+from app.modules.media.repository import MediaRepository
 from app.modules.media.storage import StoredObjectMetadata
 from app.modules.media.technical import (
     FFmpegDerivativeAdapter,
     FFprobeAdapter,
     TechnicalAnalysisService,
 )
-from app.modules.operations.models import BackgroundJob, JobStatus
+from app.modules.operations.models import BackgroundJob, JobAttempt, JobAttemptStatus, JobStatus
 
 pytestmark = pytest.mark.integration
 KEY, CHECKSUM = "test-local-identity-signing-key-123", "a" * 64
@@ -86,10 +88,16 @@ def clean() -> Generator[None, None, None]:
         asyncio.run(clear())
 
 
-def upload_payload(*, byte_size: int = 128, checksum: str = CHECKSUM) -> dict[str, object]:
+def upload_payload(
+    *, byte_size: int = 128, checksum: str = CHECKSUM, content_type: str = "video/mp4"
+) -> dict[str, object]:
     return {
-        "filename": "clip.mp4",
-        "content_type": "video/mp4",
+        "filename": {
+            "image/jpeg": "image.jpg",
+            "image/png": "image.png",
+            "audio/mpeg": "audio.mp3",
+        }.get(content_type, "clip.mp4"),
+        "content_type": content_type,
         "byte_size": byte_size,
         "sha256_checksum": checksum,
         "part_count": 2,
@@ -122,11 +130,12 @@ def complete_upload(
     *,
     byte_size: int = 128,
     checksum: str = CHECKSUM,
+    content_type: str = "video/mp4",
 ) -> dict[str, object]:
     created = client.post(
         f"/v1/businesses/{business_id}/media/uploads",
         headers=headers,
-        json=upload_payload(byte_size=byte_size, checksum=checksum),
+        json=upload_payload(byte_size=byte_size, checksum=checksum, content_type=content_type),
     )
     assert created.status_code == 201
     upload = cast(dict[str, object], created.json())
@@ -135,7 +144,7 @@ def complete_upload(
     fake.mark_uploaded_for_testing(
         storage_upload_id=storage_upload_id,
         parts={1: "one", 2: "two"},
-        metadata=StoredObjectMetadata(byte_size, "video/mp4", checksum, "etag-1"),
+        metadata=StoredObjectMetadata(byte_size, content_type, checksum, "etag-1"),
     )
     completed = client.post(
         f"/v1/businesses/{business_id}/media/uploads/{upload['id']}/complete",
@@ -167,7 +176,7 @@ async def process_next(application: FastAPI) -> BackgroundJob | None:
 
 
 async def process_technical_next(
-    *, materializer: FakeMediaMaterializer, workdir: Path
+    *, materializer: FakeMediaMaterializer, storage: FakeMultipartStorage, workdir: Path
 ) -> BackgroundJob | None:
     engine = create_async_engine(os.environ["DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -177,8 +186,9 @@ async def process_technical_next(
                 session,
                 config(),
                 materializer,
-                FFprobeAdapter(),
-                FFmpegDerivativeAdapter(),
+                FFprobeAdapter(config()),
+                FFmpegDerivativeAdapter(config()),
+                storage,
             )
             return await service.process_next(workdir=workdir)
     finally:
@@ -226,6 +236,22 @@ async def technical_records(asset_id: str) -> tuple[int, int]:
         await engine.dispose()
 
 
+async def malware_scan_count(asset_id: str) -> int:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    try:
+        async with AsyncSession(engine) as session:
+            return int(
+                await session.scalar(
+                    select(text("count(*)"))
+                    .select_from(MediaMalwareScan)
+                    .where(MediaMalwareScan.asset_id == asset_id)
+                )
+                or 0
+            )
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
 def test_ingest_records_verified_metadata_and_clean_scan() -> None:
     owner = auth("ingest-owner", "ingest-owner@example.com")
@@ -251,7 +277,7 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
     source = tmp_path / "verified.mp4"
     subprocess.run(
         [
-            "/usr/bin/ffmpeg",
+            config().ffmpeg_binary,
             "-y",
             "-f",
             "lavfi",
@@ -272,6 +298,9 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
         business_id = client.post(
             "/v1/businesses", headers=owner, json={"name": "Technical", "timezone": "UTC"}
         ).json()["id"]
+        other_business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Other tenant", "timezone": "UTC"}
+        ).json()["id"]
         asset = complete_upload(
             client,
             business_id,
@@ -285,13 +314,24 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
         materializer.register_for_testing(
             object_key=persisted_asset.storage_object_key, fixture_path=source
         )
-        job = asyncio.run(process_technical_next(materializer=materializer, workdir=tmp_path))
+        job = asyncio.run(
+            process_technical_next(
+                materializer=materializer,
+                storage=cast(FakeMultipartStorage, cast(FastAPI, client.app).state.storage),
+                workdir=tmp_path,
+            )
+        )
         assert job is not None and job.status == JobStatus.SUCCEEDED
         engine = create_async_engine(os.environ["DATABASE_URL"])
         try:
 
             async def stored_results() -> (
-                tuple[MediaTechnicalMetadata | None, list[MediaDerivative]]
+                tuple[
+                    MediaTechnicalMetadata | None,
+                    list[MediaDerivative],
+                    BackgroundJob | None,
+                    JobAttempt | None,
+                ]
             ):
                 async with AsyncSession(engine) as session:
                     metadata = await session.scalar(
@@ -308,14 +348,206 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
                             )
                         ).all()
                     )
-                    return metadata, derivatives
+                    technical_job = await session.scalar(
+                        select(BackgroundJob).where(BackgroundJob.id == job.id)
+                    )
+                    attempt = await session.scalar(
+                        select(JobAttempt).where(JobAttempt.job_id == job.id)
+                    )
+                    return metadata, derivatives, technical_job, attempt
 
-            metadata, derivatives = asyncio.run(stored_results())
+            metadata, derivatives, technical_job, attempt = asyncio.run(stored_results())
         finally:
             asyncio.run(engine.dispose())
         assert metadata is not None and metadata.width == 64 and metadata.height == 48
         assert {item.kind for item in derivatives} == {"thumbnail", "proxy"}
         assert all(item.sha256_checksum and item.byte_size for item in derivatives)
+        assert technical_job is not None and technical_job.attempt_count == 1
+        assert attempt is not None and attempt.status == JobAttemptStatus.SUCCEEDED
+        storage = cast(FakeMultipartStorage, cast(FastAPI, client.app).state.storage)
+        for derivative in derivatives:
+            persisted_metadata = asyncio.run(
+                storage.get_object_metadata(object_key=derivative.storage_object_key)
+            )
+            assert persisted_metadata.byte_size == derivative.byte_size
+            assert storage.persisted_file_for_testing(derivative.storage_object_key).is_file()
+
+        async def cross_tenant_records_are_hidden() -> None:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as session:
+                    repository = MediaRepository(session)
+                    asset_id = UUID(str(asset["id"]))
+                    other_business = UUID(str(other_business_id))
+                    assert await repository.get_technical_analysis(other_business, asset_id) is None
+                    assert await repository.get_technical_metadata(other_business, asset_id) is None
+                    assert await repository.list_derivatives(other_business, asset_id) == []
+            finally:
+                await engine.dispose()
+
+        asyncio.run(cross_tenant_records_are_hidden())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_derivative_storage_failure_does_not_create_ready_records(tmp_path: Path) -> None:
+    source = tmp_path / "failure.mp4"
+    subprocess.run(
+        [
+            config().ffmpeg_binary,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x48:r=12",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    owner = auth("derivative-storage", "derivative-storage@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Storage failure", "timezone": "UTC"}
+        ).json()["id"]
+        asset = complete_upload(
+            client, business_id, owner, byte_size=source.stat().st_size, checksum=checksum
+        )
+        assert asyncio.run(process_next(cast(FastAPI, client.app))) is not None
+        persisted_asset, _ = asyncio.run(stored_asset(str(asset["id"])))
+        storage = cast(FakeMultipartStorage, cast(FastAPI, client.app).state.storage)
+        storage.fail_object_for_testing(
+            f"tenant/{business_id}/media/{persisted_asset.id}/derivatives/thumbnail"
+        )
+        materializer = FakeMediaMaterializer()
+        materializer.register_for_testing(
+            object_key=persisted_asset.storage_object_key, fixture_path=source
+        )
+        job = asyncio.run(
+            process_technical_next(materializer=materializer, storage=storage, workdir=tmp_path)
+        )
+        assert job is not None and job.status == JobStatus.FAILED
+
+        async def make_retry_due() -> None:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "UPDATE jobs SET next_attempt_at = timezone('utc', now()) "
+                            "WHERE id = :job_id"
+                        ),
+                        {"job_id": str(job.id)},
+                    )
+            finally:
+                await engine.dispose()
+
+        asyncio.run(make_retry_due())
+        retried_job = asyncio.run(
+            process_technical_next(materializer=materializer, storage=storage, workdir=tmp_path)
+        )
+        assert retried_job is not None and retried_job.status == JobStatus.FAILED
+
+        async def derivative_count_and_attempts() -> tuple[int, int, JobAttemptStatus | None]:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as session:
+                    ready_count = int(
+                        await session.scalar(
+                            select(text("count(*)"))
+                            .select_from(MediaDerivative)
+                            .where(
+                                MediaDerivative.asset_id == asset["id"],
+                                MediaDerivative.status == "ready",
+                            )
+                        )
+                        or 0
+                    )
+                    attempts = list(
+                        (
+                            await session.scalars(
+                                select(JobAttempt)
+                                .where(JobAttempt.job_id == job.id)
+                                .order_by(JobAttempt.attempt_number)
+                            )
+                        ).all()
+                    )
+                    return ready_count, len(attempts), attempts[-1].status if attempts else None
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(derivative_count_and_attempts()) == (
+            0,
+            2,
+            JobAttemptStatus.FAILED,
+        )
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_image_and_audio_ingest_do_not_schedule_video_technical_analysis() -> None:
+    owner = auth("non-video", "non-video@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Non video", "timezone": "UTC"}
+        ).json()["id"]
+        inspector = cast(FastAPI, client.app).state.content_inspector
+        for content_type in ("image/jpeg", "audio/mpeg"):
+            asset = complete_upload(client, business_id, owner, content_type=content_type)
+            _, object_key = asyncio.run(upload_details_for_asset(str(asset["id"])))
+            inspector.set_result_for_testing(object_key=object_key, content_type=content_type)
+            job = asyncio.run(process_next(cast(FastAPI, client.app)))
+            assert job is not None and job.status == JobStatus.SUCCEEDED
+            technical_job_count, technical_event_count = asyncio.run(
+                technical_records(str(asset["id"]))
+            )
+            assert technical_job_count == 0 and technical_event_count == 0
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_concurrent_technical_claim_allows_one_worker() -> None:
+    owner = auth("technical-claim", "technical-claim@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        application = cast(FastAPI, client.app)
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Technical claim", "timezone": "UTC"}
+        ).json()["id"]
+        complete_upload(client, business_id, owner)
+        assert asyncio.run(process_next(application)) is not None
+        storage = cast(FakeMultipartStorage, application.state.storage)
+
+        async def claim_pair() -> int:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+            try:
+                async with factory() as first, factory() as second:
+                    first_service = TechnicalAnalysisService(
+                        first,
+                        config(),
+                        FakeMediaMaterializer(),
+                        FFprobeAdapter(config()),
+                        FFmpegDerivativeAdapter(config()),
+                        storage,
+                    )
+                    second_service = TechnicalAnalysisService(
+                        second,
+                        config(),
+                        FakeMediaMaterializer(),
+                        FFprobeAdapter(config()),
+                        FFmpegDerivativeAdapter(config()),
+                        storage,
+                    )
+                    claims = await asyncio.gather(
+                        first_service.claim_next(), second_service.claim_next()
+                    )
+                    return sum(value is not None for value in claims)
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(claim_pair()) == 1
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
@@ -340,6 +572,7 @@ def test_ingest_rejects_storage_size_checksum_and_type_mismatch() -> None:
             persisted, _ = asyncio.run(stored_asset(str(asset["id"])))
             assert persisted.ingest_status == IngestStatus.REJECTED
             assert persisted.status == MediaAssetStatus.REJECTED
+            assert asyncio.run(malware_scan_count(str(asset["id"]))) == 0
 
 
 async def upload_details_for_asset(asset_id: str) -> tuple[str, str]:
