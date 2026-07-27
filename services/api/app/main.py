@@ -28,8 +28,10 @@ from app.core.logging import configure_logging
 from app.core.protocols import DatabaseClient, RedisClient
 from app.infrastructure.database import create_database
 from app.infrastructure.identity.local import LocalIdentityVerifier
+from app.infrastructure.media.fake_ingest import FakeContentInspector, FakeMalwareScanner
 from app.infrastructure.redis import create_redis_client
 from app.infrastructure.storage.fake import FakeMultipartStorage
+from app.modules.media.ingest import ContentInspectionPort, MalwareScanPort
 from app.modules.media.storage import MultipartStoragePort
 
 logger = structlog.get_logger(__name__)
@@ -37,6 +39,8 @@ logger = structlog.get_logger(__name__)
 DatabaseFactory = Callable[[Settings], DatabaseClient]
 RedisFactory = Callable[[Settings], RedisClient]
 StorageFactory = Callable[[], MultipartStoragePort]
+ContentInspectorFactory = Callable[[], ContentInspectionPort]
+MalwareScannerFactory = Callable[[], MalwareScanPort]
 DEFAULT_REDIS_FACTORY: RedisFactory = cast(RedisFactory, create_redis_client)
 
 
@@ -83,6 +87,8 @@ def create_app(
     database_factory: DatabaseFactory = create_database,
     redis_factory: RedisFactory = DEFAULT_REDIS_FACTORY,
     storage_factory: StorageFactory = FakeMultipartStorage,
+    content_inspector_factory: ContentInspectorFactory = FakeContentInspector,
+    malware_scanner_factory: MalwareScannerFactory = FakeMalwareScanner,
     include_test_routes: bool = False,
 ) -> FastAPI:
     """Build an app with injectable infrastructure for deterministic tests."""
@@ -98,6 +104,8 @@ def create_app(
         application.state.redis = redis_client
         application.state.settings = resolved_settings
         application.state.storage = storage_factory()
+        application.state.content_inspector = content_inspector_factory()
+        application.state.malware_scanner = malware_scanner_factory()
         application.state.identity_verifier = LocalIdentityVerifier(resolved_settings)
         logger.info("application_started", environment=resolved_settings.app_env)
         try:

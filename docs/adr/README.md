@@ -13,6 +13,8 @@ The actual ADR filenames in this directory are the sole source of truth for ADR 
 | [ADR-003](ADR-003-n8n-orchestration-boundary.md) | n8n Orchestration Boundary |
 | [ADR-004](ADR-004-provider-adapter-pattern.md) | Provider Adapter Pattern |
 | [ADR-005](ADR-005-transactional-outbox.md) | Transactional Outbox |
+| [ADR-006](ADR-006-media-ingest-security-gate.md) | Media Ingest Security Gate |
+| [ADR-007](ADR-007-media-analysis-provider-routing.md) | Media Analysis Provider Routing |
 
 ## Creating a new ADR
 

@@ -34,6 +34,11 @@ Public API errors use `application/problem+json`, based on RFC 9457, with a stab
 | 409 | `UPLOAD_CHECKSUM_MISMATCH` | Completed object does not match the declared checksum. |
 | 413 | `REQUEST_TOO_LARGE` | API payload exceeds a control-plane limit. |
 | 422 | `UPLOAD_METADATA_INVALID` | Declared or verified upload metadata violates policy. |
+| 409 | `INGEST_SIZE_MISMATCH` | Storage object size differs from the completed upload contract. |
+| 409 | `INGEST_CONTENT_TYPE_MISMATCH` | Server-observed or inspected content type differs from the accepted contract. |
+| 422 | `INGEST_CONTENT_TYPE_REJECTED` | Inspected content type is not allowed by the media policy. |
+| 409 | `INGEST_STORAGE_METADATA_INVALID` | Immutable object metadata cannot be safely verified. |
+| 409 | `MALWARE_SCAN_NOT_CLEAN` | The asset cannot enter analysis because its scan result is not clean. |
 | 429 | `RATE_LIMITED` | Client must retry after the supplied interval. |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Required readiness dependency is unavailable. |
 | 503 | `STORAGE_UNAVAILABLE` | The upload-storage control-plane adapter is temporarily unavailable. |

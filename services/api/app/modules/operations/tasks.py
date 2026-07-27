@@ -15,3 +15,11 @@ def dispatch_outbox() -> dict[str, str]:
 
     logger.info("outbox_dispatch_triggered")
     return {"status": "triggered"}
+
+
+@celery_app.task(name="socialpilot.media.ingest")  # type: ignore[misc]
+def media_ingest() -> dict[str, str]:
+    """Durable delivery trigger; worker composition injects ingest dependencies."""
+
+    logger.info("media_ingest_triggered")
+    return {"status": "triggered"}

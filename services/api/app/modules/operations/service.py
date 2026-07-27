@@ -118,9 +118,10 @@ class OperationsService:
             resource_type="media_asset",
             resource_id=asset_id,
             status=JobStatus.QUEUED,
-            timeout_seconds=self._settings.celery_task_timeout_seconds,
-            max_attempts=3,
+            timeout_seconds=self._settings.media_ingest_timeout_seconds,
+            max_attempts=self._settings.media_ingest_max_attempts,
             correlation_id=correlation_id,
+            next_attempt_at=datetime.now(UTC),
         )
         self._repository.add(job)
         await self._session.flush()

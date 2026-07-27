@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     media_max_bytes: int = Field(default=104_857_600, gt=0, le=2_147_483_647)
     media_max_parts: int = Field(default=100, ge=1, le=1_000)
     media_upload_session_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
+    media_ingest_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    media_ingest_max_attempts: int = Field(default=3, ge=1, le=10)
     media_allowed_mime_types: tuple[str, ...] = (
         "image/jpeg",
         "image/png",

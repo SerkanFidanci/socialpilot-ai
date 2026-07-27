@@ -24,10 +24,15 @@ class StoredObjectMetadata:
     byte_size: int
     content_type: str
     sha256_checksum: str
+    etag: str = "fake-etag"
 
 
 class StorageUnavailableError(RuntimeError):
     """Adapter failure without provider details."""
+
+
+class StoragePermanentError(RuntimeError):
+    """Adapter rejected an immutable object without provider details."""
 
 
 class MultipartStoragePort(Protocol):
@@ -45,4 +50,5 @@ class MultipartStoragePort(Protocol):
     async def complete_upload(
         self, *, storage_upload_id: str, parts: tuple[CompletedPart, ...]
     ) -> StoredObjectMetadata: ...
+    async def get_object_metadata(self, *, object_key: str) -> StoredObjectMetadata: ...
     async def cancel_upload(self, *, storage_upload_id: str) -> None: ...

@@ -15,6 +15,7 @@ from app.modules.media.storage import (
 
 @dataclass
 class _Upload:
+    object_key: str
     expires_at: datetime
     parts: tuple[int, ...]
     uploaded: dict[int, str] = field(default_factory=dict)
@@ -26,6 +27,8 @@ class _Upload:
 class FakeMultipartStorage:
     def __init__(self) -> None:
         self._uploads: dict[str, _Upload] = {}
+        self._objects: dict[str, StoredObjectMetadata] = {}
+        self._unavailable_objects: set[str] = set()
 
     async def create_upload(
         self,
@@ -35,8 +38,7 @@ class FakeMultipartStorage:
         expires_at: datetime,
         part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]:
-        del object_key
-        self._uploads[storage_upload_id] = _Upload(expires_at, part_numbers)
+        self._uploads[storage_upload_id] = _Upload(object_key, expires_at, part_numbers)
         return await self.create_part_urls(
             storage_upload_id=storage_upload_id, expires_at=expires_at, part_numbers=part_numbers
         )
@@ -72,7 +74,16 @@ class FakeMultipartStorage:
             or upload.metadata is None
         ):
             raise StorageUnavailableError("completion unavailable")
+        self._objects[upload.object_key] = upload.metadata
         return upload.metadata
+
+    async def get_object_metadata(self, *, object_key: str) -> StoredObjectMetadata:
+        if object_key in self._unavailable_objects:
+            raise StorageUnavailableError("storage object unavailable")
+        try:
+            return self._objects[object_key]
+        except KeyError as error:
+            raise StorageUnavailableError("storage object unavailable") from error
 
     async def cancel_upload(self, *, storage_upload_id: str) -> None:
         self._get(storage_upload_id).cancelled = True
@@ -85,6 +96,14 @@ class FakeMultipartStorage:
 
     def fail_for_testing(self, storage_upload_id: str) -> None:
         self._get(storage_upload_id).unavailable = True
+
+    def set_object_metadata_for_testing(
+        self, *, object_key: str, metadata: StoredObjectMetadata
+    ) -> None:
+        self._objects[object_key] = metadata
+
+    def fail_object_for_testing(self, object_key: str) -> None:
+        self._unavailable_objects.add(object_key)
 
     def _get(self, storage_upload_id: str) -> _Upload:
         try:

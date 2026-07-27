@@ -113,6 +113,7 @@ class BackgroundJob(Base):
     correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
     last_error_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
     last_error_summary: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     requested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

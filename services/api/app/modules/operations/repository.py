@@ -15,6 +15,7 @@ from app.modules.operations.models import (
     BackgroundJob,
     IdempotencyKey,
     JobAttempt,
+    JobStatus,
     OutboxEvent,
     OutboxStatus,
 )
@@ -89,6 +90,25 @@ class OperationsRepository:
             select(BackgroundJob)
             .where(BackgroundJob.business_id == business_id, BackgroundJob.id == job_id)
             .with_for_update()
+        )
+        return cast(BackgroundJob | None, await self._session.scalar(statement))
+
+    async def claim_next_ingest_job(self) -> BackgroundJob | None:
+        now = datetime.now(UTC)
+        statement = (
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.job_type == "media.ingest",
+                BackgroundJob.status.in_((JobStatus.QUEUED, JobStatus.FAILED)),
+                (BackgroundJob.status == JobStatus.QUEUED)
+                | (
+                    BackgroundJob.next_attempt_at.is_not(None)
+                    & (BackgroundJob.next_attempt_at <= now)
+                ),
+            )
+            .order_by(BackgroundJob.requested_at, BackgroundJob.id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
         )
         return cast(BackgroundJob | None, await self._session.scalar(statement))
 
