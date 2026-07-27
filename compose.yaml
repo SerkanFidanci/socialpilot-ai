@@ -54,6 +54,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       CELERY_TASK_TIMEOUT_SECONDS: 300
+      LOCAL_IDENTITY_SIGNING_KEY: development-local-identity-key-not-for-production
       PYTEST_ADDOPTS: -p no:cacheprovider
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:

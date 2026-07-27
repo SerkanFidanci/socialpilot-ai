@@ -11,13 +11,16 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.responses import Response
 
+from app.api.routes.businesses import router as businesses_router
 from app.api.routes.health import router as health_router
+from app.api.routes.identity import router as identity_router
 from app.core.config import Settings, get_settings
 from app.core.correlation import CorrelationIdMiddleware
 from app.core.errors import ProblemException, problem_response, safe_validation_error_meta
 from app.core.logging import configure_logging
 from app.core.protocols import DatabaseClient, RedisClient
 from app.infrastructure.database import create_database
+from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.infrastructure.redis import create_redis_client
 
 logger = structlog.get_logger(__name__)
@@ -45,6 +48,7 @@ def create_app(
         redis_client = redis_factory(resolved_settings)
         application.state.database = database
         application.state.redis = redis_client
+        application.state.identity_verifier = LocalIdentityVerifier(resolved_settings)
         logger.info("application_started", environment=resolved_settings.app_env)
         try:
             yield
@@ -63,6 +67,8 @@ def create_app(
     )
     application.add_middleware(CorrelationIdMiddleware)
     application.include_router(health_router)
+    application.include_router(identity_router)
+    application.include_router(businesses_router)
 
     if include_test_routes:
 

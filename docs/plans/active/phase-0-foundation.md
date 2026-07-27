@@ -1,6 +1,6 @@
 # Phase 0 — Foundation Plan
 
-**Status:** Active — Slice 0A implemented; Slice 0B has not started.
+**Status:** Active — Slices 0A and 0B implemented; Slice 0C has not started.
 **Scope owner:** Backend platform foundation
 **Source requirements:** `docs/product/product-requirements.md`
 
@@ -72,8 +72,10 @@ Acceptance criteria:
 - A verified principal can create a business and becomes its `owner` in one database transaction.
 - `GET /api/v1/businesses` returns only businesses in which the principal has an active membership.
 - A member from business A receives `404` for a business-B resource, without existence disclosure.
-- Role-policy tests prove that `viewer` cannot mutate, `editor` cannot manage memberships, and only `owner` can delete a business or change billing-scoped settings.
+- Role-policy tests prove that `viewer` cannot mutate, `editor` cannot manage memberships, and only `owner` can archive a business. Deletion and billing-scoped settings have no 0B endpoint.
 - Every business-owned repository query requires `business_id`; tests fail when an unscoped query path is attempted.
+
+0B verification recorded: local Python tests passed (22 passed, 6 PostgreSQL integration tests skipped); with Compose PostgreSQL, the full suite passed (28 passed). The signed local identity adapter has bounded expiry, HMAC verification, strict provider/subject bounds, and production Settings reject the local adapter. PostgreSQL-backed endpoint tests cover idempotent and concurrent identity resolution, normalized case-insensitive email uniqueness, same-email identity conflict handling, business plus owner-membership atomicity, cross-tenant `404`, cross-tenant membership-patch denial, editor mutation denial, duplicate membership prevention, admin owner-role protection, and concurrent last-owner protection. Suspended and archived businesses remain readable to active members but reject mutations with `BUSINESS_NOT_MUTABLE`; suspended or removed memberships cannot authorize access. Migration `0002_identity_and_businesses` successfully downgraded to `0001_bootstrap`, upgraded back to head, downgraded one revision, and upgraded again. Business and membership lists intentionally have no pagination in 0B; cursor pagination is technical debt before unbounded tenant lists are exposed.
 
 ### Slice 0C — Media upload start
 
@@ -146,7 +148,7 @@ All identifiers are UUIDs; timestamps are UTC; business-owned records include `b
 | GET | `/health/ready` | 0A | PostgreSQL and Redis readiness. |
 | GET | `/api/v1/me` | 0B | Current principal only. |
 | GET, POST | `/api/v1/businesses` | 0B | List authorized businesses; create business and owner membership. |
-| GET, PATCH, DELETE | `/api/v1/businesses/{business_id}` | 0B | Tenant-authorized business resource. |
+| GET, PATCH | `/api/v1/businesses/{business_id}` | 0B | Tenant-authorized business resource; only an owner may archive it. |
 | GET, POST | `/api/v1/businesses/{business_id}/members` | 0B | Role-gated membership management. |
 | POST | `/api/v1/businesses/{business_id}/media/uploads` | 0C | Create multipart upload session. |
 | POST | `/api/v1/businesses/{business_id}/media/uploads/{session_id}/complete` | 0C | Validate completion and create ingest work. |
@@ -196,9 +198,9 @@ Phase 0 is complete only when slices 0A–0D meet their acceptance criteria, eve
 
 - [x] 0A: Create workspace, FastAPI, settings, async PostgreSQL, Redis/Celery, logging, health endpoints, Compose, and test foundation; exclude admin web and identity-provider work.
 - [x] 0A: Add deterministic lint/test/verification commands and CI baseline.
-- [ ] 0B: Implement identity-provider port and test adapter with the principal-verification contract; defer Firebase/OIDC/production provider integration.
-- [ ] 0B: Implement user, identity, business, membership, role, policy, and tenant-scoped repository vertical slice.
-- [ ] 0B: Add authorization and cross-tenant isolation tests.
+- [x] 0B: Implement identity-provider port and test adapter with the principal-verification contract; defer Firebase/OIDC/production provider integration.
+- [x] 0B: Implement user, identity, business, membership, role, policy, and tenant-scoped repository vertical slice.
+- [x] 0B: Add authorization and cross-tenant isolation tests.
 - [ ] 0C: Implement storage port plus local fake or MinIO-compatible adapter, media asset/session lifecycle, multipart instructions, completion, and ingest-job creation; defer production storage integration.
 - [ ] 0C: Add checksum/metadata/idempotency/tenant tests without proxying media bytes.
 - [ ] 0D: Implement job, outbox, idempotency, audit, and structured-error vertical slice.

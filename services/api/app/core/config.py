@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     celery_broker_url: str = Field(min_length=1)
     celery_result_backend: str = Field(min_length=1)
     celery_task_timeout_seconds: int = Field(default=300, gt=0, le=3600)
+    identity_adapter: Literal["local"] = "local"
+    local_identity_signing_key: SecretStr = Field(
+        default=SecretStr("development-local-identity-key-not-for-production"),
+        min_length=32,
+    )
 
     @field_validator("database_url")
     @classmethod
@@ -53,6 +58,12 @@ class Settings(BaseSettings):
     def reject_local_only_production_urls(self) -> Settings:
         if self.app_env == "production" and "local_only" in self.database_url:
             raise ValueError("production DATABASE_URL cannot use a local-only credential")
+        return self
+
+    @model_validator(mode="after")
+    def reject_local_identity_adapter_in_production(self) -> Settings:
+        if self.app_env == "production" and self.identity_adapter == "local":
+            raise ValueError("the local identity adapter is not allowed in production")
         return self
 
 

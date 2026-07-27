@@ -86,4 +86,6 @@ def problem_response(request: Request, error: ProblemException) -> JSONResponse:
     correlation_id = get_correlation_id()
     if correlation_id:
         response.headers["X-Correlation-ID"] = correlation_id
+    if error.status == 401:
+        response.headers["WWW-Authenticate"] = "Bearer"
     return response
