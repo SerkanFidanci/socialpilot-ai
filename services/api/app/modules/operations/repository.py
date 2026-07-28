@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,6 +101,25 @@ class OperationsRepository:
 
     async def claim_next_scene_speech_job(self) -> BackgroundJob | None:
         return await self._claim_next_media_job("media.scene_speech_analysis")
+
+    async def lock_stale_running_jobs(
+        self, *, business_id: UUID, limit: int
+    ) -> list[BackgroundJob]:
+        """Lock only expired tenant jobs; active RUNNING work remains untouched."""
+
+        statement = (
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.business_id == business_id,
+                BackgroundJob.status == JobStatus.RUNNING,
+                BackgroundJob.started_at.is_not(None),
+                text("started_at + (timeout_seconds * interval '1 second') <= now()"),
+            )
+            .order_by(BackgroundJob.started_at, BackgroundJob.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list((await self._session.scalars(statement)).all())
 
     async def _claim_next_media_job(self, job_type: str) -> BackgroundJob | None:
         now = datetime.now(UTC)

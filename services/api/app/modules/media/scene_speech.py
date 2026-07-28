@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import subprocess
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -183,19 +185,51 @@ def normalize_transcript(
     previous_end = 0
     normalized: list[TranscriptCandidate] = []
     for segment in result.segments:
+        normalized_text = _normalize_transcript_text(segment.text)
         if (
             segment.start_ms < 0
             or segment.end_ms <= segment.start_ms
             or segment.end_ms > duration_ms
             or segment.start_ms < previous_end
-            or not segment.text.strip()
-            or len(segment.text) > 4_000
             or not settings.transcript_min_confidence <= segment.confidence <= 1.0
         ):
             raise SceneSpeechPermanentError("TRANSCRIPT_TIMECODE_INVALID")
-        normalized.append(segment)
+        if not normalized_text or len(normalized_text) > settings.transcript_max_segment_chars:
+            raise SceneSpeechPermanentError("TRANSCRIPT_INVALID")
+        normalized.append(
+            TranscriptCandidate(
+                start_ms=segment.start_ms,
+                end_ms=segment.end_ms,
+                text=normalized_text,
+                confidence=segment.confidence,
+                speaker_label=segment.speaker_label,
+            )
+        )
         previous_end = segment.end_ms
-    return tuple(normalized)
+    normalized_segments = tuple(normalized)
+    if len(transcript_full_text(normalized_segments)) > settings.transcript_max_total_chars:
+        raise SceneSpeechPermanentError("TRANSCRIPT_INVALID")
+    return normalized_segments
+
+
+def _normalize_transcript_text(value: str) -> str:
+    """Accept ordinary spaces/newlines while rejecting PostgreSQL-unsafe controls."""
+
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        raise SceneSpeechPermanentError("TRANSCRIPT_INVALID")
+    for character in normalized:
+        if character in {"\n", "\t"}:
+            continue
+        if unicodedata.category(character).startswith("C"):
+            raise SceneSpeechPermanentError("TRANSCRIPT_INVALID")
+    return normalized
+
+
+def transcript_full_text(segments: tuple[TranscriptCandidate, ...]) -> str:
+    """Use the same bounded representation for validation and persistence."""
+
+    return " ".join(segment.text for segment in segments)
 
 
 class SceneSpeechAnalysisService:
@@ -250,43 +284,38 @@ class SceneSpeechAnalysisService:
     async def process_claimed(
         self, *, business_id: UUID, job_id: UUID, workdir: Path
     ) -> BackgroundJob:
-        async with self._session.begin():
-            job = await self._operations.get_job_for_update(business_id, job_id)
-            if (
-                job is None
-                or job.job_type != "media.scene_speech_analysis"
-                or job.status != JobStatus.RUNNING
-            ):
-                raise self._not_found()
-            asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
-            analysis = await self._media.get_technical_analysis(
-                business_id, job.resource_id, lock=True
-            )
-            metadata = await self._media.get_technical_metadata(business_id, job.resource_id)
-            proxy = await self._media.get_derivative(
-                business_id, job.resource_id, "proxy", lock=True
-            )
-            if (
-                asset is None
-                or analysis is None
-                or analysis.status != TechnicalAnalysisStatus.COMPLETED
-                or metadata is None
-                or proxy is None
-                or proxy.status != MediaDerivativeStatus.READY
-            ):
-                raise ProblemException(
-                    status=409,
-                    code="RESOURCE_STATE_CONFLICT",
-                    title="Invalid media state",
-                    detail="The media is not ready for scene and speech analysis.",
-                )
-            proxy_key, duration_ms, has_audio, timeout = (
-                proxy.storage_object_key,
-                metadata.duration_ms,
-                metadata.has_audio,
-                job.timeout_seconds,
-            )
         try:
+            async with self._session.begin():
+                job = await self._operations.get_job_for_update(business_id, job_id)
+                if (
+                    job is None
+                    or job.job_type != "media.scene_speech_analysis"
+                    or job.status != JobStatus.RUNNING
+                ):
+                    raise self._not_found()
+                asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
+                analysis = await self._media.get_technical_analysis(
+                    business_id, job.resource_id, lock=True
+                )
+                metadata = await self._media.get_technical_metadata(business_id, job.resource_id)
+                proxy = await self._media.get_derivative(
+                    business_id, job.resource_id, "proxy", lock=True
+                )
+                if (
+                    asset is None
+                    or analysis is None
+                    or analysis.status != TechnicalAnalysisStatus.COMPLETED
+                    or metadata is None
+                    or proxy is None
+                    or proxy.status != MediaDerivativeStatus.READY
+                ):
+                    raise SceneSpeechPermanentError("SCENE_SPEECH_RESOURCE_STATE_INVALID")
+                proxy_key, duration_ms, has_audio, timeout = (
+                    proxy.storage_object_key,
+                    metadata.duration_ms,
+                    metadata.has_audio,
+                    job.timeout_seconds,
+                )
             proxy_path = await self._materializer.materialize(object_key=proxy_key, workdir=workdir)
             scenes = normalize_scenes(
                 settings=self._settings,
@@ -315,25 +344,60 @@ class SceneSpeechAnalysisService:
             else:
                 segments = ()
                 audio_metadata = None
+            return await self._persist_results(
+                business_id=business_id,
+                job_id=job_id,
+                duration_ms=duration_ms,
+                scenes=scenes,
+                speech_result=speech_result,
+                segments=segments,
+                audio_output=audio_output,
+                audio_metadata=audio_metadata,
+            )
         except (StorageUnavailableError, SceneSpeechTransientError):
             return await self._fail(
                 business_id, job_id, "SCENE_SPEECH_DEPENDENCY_UNAVAILABLE", True
             )
-        except (StoragePermanentError, SceneSpeechPermanentError):
+        except StoragePermanentError:
             return await self._fail(business_id, job_id, "SCENE_SPEECH_VALIDATION_FAILED", False)
+        except SceneSpeechPermanentError as error:
+            return await self._fail(business_id, job_id, str(error), False)
+        except ProblemException:
+            return await self._fail(
+                business_id, job_id, "SCENE_SPEECH_RESOURCE_STATE_INVALID", False
+            )
+        except IntegrityError:
+            return await self._fail(business_id, job_id, "SCENE_SPEECH_PERSISTENCE_FAILED", False)
+        except SQLAlchemyError:
+            return await self._fail(
+                business_id, job_id, "SCENE_SPEECH_PERSISTENCE_UNAVAILABLE", True
+            )
+
+    async def _persist_results(
+        self,
+        *,
+        business_id: UUID,
+        job_id: UUID,
+        duration_ms: int,
+        scenes: tuple[SceneCandidate, ...],
+        speech_result: SpeechResult | None,
+        segments: tuple[TranscriptCandidate, ...],
+        audio_output: AudioOutput | None,
+        audio_metadata: StoredObjectMetadata | None,
+    ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("scene speech job disappeared")
             existing = await self._media.get_transcript(business_id, job.resource_id, lock=True)
             if existing is not None:
-                raise RuntimeError("scene speech result already exists")
+                return await self._mark_succeeded(job)
             transcript = Transcript(
                 business_id=business_id,
                 asset_id=job.resource_id,
                 language=speech_result.language if speech_result else "und",
                 duration_ms=duration_ms,
-                full_text=" ".join(item.text for item in segments),
+                full_text=transcript_full_text(segments),
                 provider=speech_result.provider if speech_result else "none",
                 status=TranscriptStatus.COMPLETED if speech_result else TranscriptStatus.NO_SPEECH,
             )
@@ -377,10 +441,7 @@ class SceneSpeechAnalysisService:
                         speaker_label=segment.speaker_label,
                     )
                 )
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if attempt is not None:
-                attempt.status, attempt.finished_at = JobAttemptStatus.SUCCEEDED, datetime.now(UTC)
-            job.status, job.finished_at = JobStatus.SUCCEEDED, datetime.now(UTC)
+            await self._mark_succeeded(job)
             self._session.add(
                 OutboxEvent(
                     business_id=business_id,
@@ -396,6 +457,19 @@ class SceneSpeechAnalysisService:
             )
             return job
 
+    async def _mark_succeeded(self, job: BackgroundJob) -> BackgroundJob:
+        attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
+        if attempt is not None:
+            attempt.status = JobAttemptStatus.SUCCEEDED
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error_code = None
+            attempt.error_summary = None
+        job.status = JobStatus.SUCCEEDED
+        job.finished_at = datetime.now(UTC)
+        job.last_error_code = None
+        job.last_error_summary = None
+        return job
+
     async def _persist_audio(
         self, business_id: UUID, asset_id: UUID, audio: AudioOutput
     ) -> StoredObjectMetadata:
@@ -405,6 +479,7 @@ class SceneSpeechAnalysisService:
         )
         if (
             metadata.byte_size != audio.byte_size
+            or metadata.content_type.lower() != "audio/wav"
             or metadata.sha256_checksum != audio.sha256_checksum
         ):
             raise StoragePermanentError("audio metadata mismatch")

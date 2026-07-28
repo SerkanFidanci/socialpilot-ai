@@ -6,7 +6,17 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -347,7 +357,7 @@ class Transcript(Base):
     )
     language: Mapped[str] = mapped_column(String(16), nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
-    full_text: Mapped[str] = mapped_column(String(20_000), nullable=False)
+    full_text: Mapped[str] = mapped_column(Text, nullable=False)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[TranscriptStatus] = mapped_column(
         Enum(

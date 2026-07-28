@@ -38,6 +38,7 @@ flowchart LR
 - Use bounded exponential backoff with jitter and a maximum attempt count.
 - On exhaustion, persist a dead-letter state and emit a safe operational event; do not silently discard work.
 - Workers re-authorize tenant/resource state before any side effect and preserve correlation IDs in logs and downstream envelopes.
+- A tenant-scoped recovery command locks only `running` jobs whose `started_at + timeout_seconds` has elapsed, using `FOR UPDATE SKIP LOCKED`. It finalizes the open attempt with `JOB_TIMEOUT`, then schedules bounded retry or marks the job `dead`; it never reclaims an active job.
 
 ## Phase 0 limitations
 

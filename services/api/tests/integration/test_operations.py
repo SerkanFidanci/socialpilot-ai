@@ -7,6 +7,7 @@ import os
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from typing import cast
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -23,11 +24,14 @@ from app.modules.media.storage import StoredObjectMetadata
 from app.modules.operations.models import (
     AuditLog,
     BackgroundJob,
+    JobAttempt,
+    JobAttemptStatus,
     JobStatus,
     OutboxEvent,
     OutboxStatus,
 )
 from app.modules.operations.service import (
+    JobRecoveryService,
     JobStateService,
     OutboxDispatchService,
     TransientPublishError,
@@ -316,3 +320,73 @@ def test_outbox_locking_retry_dead_letter_job_states_and_audit_scope() -> None:
             await engine.dispose()
 
     asyncio.run(dispatch_and_check())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_stale_running_jobs_finalize_attempts_and_retry_or_dead_letter() -> None:
+    owner = auth("stale-recovery", "stale-recovery@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Stale recovery", "timezone": "UTC"}
+        ).json()["id"]
+        retry_upload = create_upload(client, business_id, owner)
+        dead_upload = create_upload(client, business_id, owner)
+        mark_uploaded(client, str(retry_upload["id"]))
+        mark_uploaded(client, str(dead_upload["id"]))
+        for upload, key in ((retry_upload, "retry"), (dead_upload, "dead")):
+            assert (
+                client.post(
+                    complete_path(business_id, str(upload["id"])),
+                    headers={**owner, "Idempotency-Key": key},
+                    json=complete_body(),
+                ).status_code
+                == 200
+            )
+
+    async def recover() -> tuple[JobStatus, JobStatus, list[JobAttempt]]:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        try:
+            async with factory() as session:
+                jobs = list(
+                    (await session.scalars(select(BackgroundJob).order_by(BackgroundJob.id))).all()
+                )
+                assert len(jobs) == 2
+                retry_job = jobs[0]
+                await session.commit()
+                for job in jobs:
+                    async with session.begin():
+                        await JobStateService(session).transition(
+                            business_id=job.business_id, job_id=job.id, target=JobStatus.RUNNING
+                        )
+                dead_job = jobs[1]
+                await session.execute(
+                    text(
+                        "UPDATE jobs SET timeout_seconds = 1, "
+                        "started_at = timezone('utc', now()) - interval '2 seconds'"
+                    )
+                )
+                await session.execute(
+                    text("UPDATE jobs SET max_attempts = 1 WHERE id = :job_id"),
+                    {"job_id": str(dead_job.id)},
+                )
+                await session.commit()
+            async with factory() as recovery_session:
+                recovered = await JobRecoveryService(recovery_session).recover_stale_running_jobs(
+                    business_id=UUID(str(business_id))
+                )
+                assert len(recovered) == 2
+            async with factory() as session:
+                jobs = list(
+                    (await session.scalars(select(BackgroundJob).order_by(BackgroundJob.id))).all()
+                )
+                attempts = list((await session.scalars(select(JobAttempt))).all())
+                statuses = {job.id: job.status for job in jobs}
+                return statuses[retry_job.id], statuses[dead_job.id], attempts
+        finally:
+            await engine.dispose()
+
+    retry_status, dead_status, attempts = asyncio.run(recover())
+    assert retry_status == JobStatus.FAILED and dead_status == JobStatus.DEAD
+    assert all(attempt.status == JobAttemptStatus.FAILED for attempt in attempts)
+    assert all(attempt.error_code == "JOB_TIMEOUT" for attempt in attempts)

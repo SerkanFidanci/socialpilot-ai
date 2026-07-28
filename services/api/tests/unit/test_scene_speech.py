@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.modules.media.scene_speech import (
@@ -16,6 +17,7 @@ from app.modules.media.scene_speech import (
     TranscriptCandidate,
     normalize_scenes,
     normalize_transcript,
+    transcript_full_text,
 )
 
 
@@ -58,6 +60,71 @@ def test_transcript_segments_must_be_ordered_and_bounded() -> None:
             settings=resolved,
             duration_ms=1_000,
             result=SpeechResult("tr", "fake", (TranscriptCandidate(-1, 500, "bad", 0.8),)),
+        )
+
+
+@pytest.mark.parametrize("text", ["unsafe\x00text", "unsafe\x01text", "\x02"])
+def test_transcript_text_rejects_postgresql_unsafe_control_characters(text: str) -> None:
+    with pytest.raises(SceneSpeechPermanentError, match="TRANSCRIPT_INVALID"):
+        normalize_transcript(
+            settings=settings(),
+            duration_ms=1_000,
+            result=SpeechResult("tr", "fake", (TranscriptCandidate(0, 500, text, 0.8),)),
+        )
+
+
+def test_transcript_text_normalizes_line_endings_and_enforces_total_length() -> None:
+    resolved = settings().model_copy(
+        update={"transcript_max_segment_chars": 10, "transcript_max_total_chars": 12}
+    )
+    valid = normalize_transcript(
+        settings=resolved,
+        duration_ms=1_000,
+        result=SpeechResult(
+            "tr",
+            "fake",
+            (
+                TranscriptCandidate(0, 400, "  one\r\ntwo  ", 0.8),
+                TranscriptCandidate(400, 800, "ok", 0.8),
+            ),
+        ),
+    )
+    assert transcript_full_text(valid) == "one\ntwo ok"
+    with pytest.raises(SceneSpeechPermanentError, match="TRANSCRIPT_INVALID"):
+        normalize_transcript(
+            settings=resolved,
+            duration_ms=1_000,
+            result=SpeechResult(
+                "tr",
+                "fake",
+                (
+                    TranscriptCandidate(0, 400, "123456", 0.8),
+                    TranscriptCandidate(400, 800, "abcdef", 0.8),
+                ),
+            ),
+        )
+
+
+def test_audio_size_limit_must_cover_configured_pcm_duration() -> None:
+    assert (
+        Settings(
+            database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+            redis_url="redis://localhost:6379/0",
+            celery_broker_url="redis://localhost:6379/1",
+            celery_result_backend="redis://localhost:6379/2",
+            media_max_duration_seconds=1,
+            media_max_extracted_audio_bytes=32_044,
+        ).media_max_extracted_audio_bytes
+        == 32_044
+    )
+    with pytest.raises(ValidationError, match="MEDIA_MAX_EXTRACTED_AUDIO_BYTES"):
+        Settings(
+            database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+            redis_url="redis://localhost:6379/0",
+            celery_broker_url="redis://localhost:6379/1",
+            celery_result_backend="redis://localhost:6379/2",
+            media_max_duration_seconds=1,
+            media_max_extracted_audio_bytes=32_043,
         )
 
 

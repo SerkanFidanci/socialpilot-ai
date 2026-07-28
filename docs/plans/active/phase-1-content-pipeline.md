@@ -106,6 +106,8 @@ Acceptance criteria:
 - Asset reaches `ready` only after required enabled analysis steps have valid normalized results. It exposes safe aggregate status, not provider diagnostics.
 - Metrics/logs/traces include business ID, asset ID, job ID, correlation ID, capability, duration, status, attempt, queue delay, and cost aggregate, with redaction tests.
 
+**1C hardening record:** Migration `0008_scene_speech_hardening` changes transcript full text to PostgreSQL `TEXT`. Application Settings bound transcript segment, count, and total length; untrusted ASR text rejects PostgreSQL-unsafe controls and normalizes line endings before persistence. The technical proxy preserves an audio stream for scene/speech processing; WAV extraction remains 16 kHz mono signed 16-bit PCM with a byte limit mathematically consistent with the maximum supported duration. Completion persistence is transaction-safe and finalizes job attempts on classified failure. A tenant-scoped stale-running recovery service locks only expired jobs, records `JOB_TIMEOUT`, and schedules retry or dead-letter state without reclaiming active work.
+
 ## 6. Database changes planned per implementation slice
 
 All new identifiers are UUIDs; timestamps are UTC; all money is integer minor units plus ISO currency; every business-owned query begins with `business_id`.

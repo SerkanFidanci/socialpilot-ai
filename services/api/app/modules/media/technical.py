@@ -250,7 +250,8 @@ class FFmpegDerivativeAdapter(MediaDerivativePort):
                 self._proxy_scale_filter(),
                 "-c:v",
                 "libx264",
-                "-an",
+                "-c:a",
+                "aac",
                 str(proxy),
             ],
         )

@@ -301,6 +301,42 @@ class JobStateService:
         return value[:512]
 
 
+class JobRecoveryService:
+    """Recover timed-out durable jobs without reclaiming active work."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._repository = OperationsRepository(session)
+
+    async def recover_stale_running_jobs(
+        self, *, business_id: UUID, limit: int = 100
+    ) -> list[BackgroundJob]:
+        if limit < 1 or limit > 1_000:
+            raise ValueError("recovery limit must be between 1 and 1000")
+        now = datetime.now(UTC)
+        async with self._session.begin():
+            jobs = await self._repository.lock_stale_running_jobs(
+                business_id=business_id, limit=limit
+            )
+            for job in jobs:
+                attempt = await self._repository.get_attempt_for_update(job.id, job.attempt_count)
+                if attempt is not None and attempt.status == JobAttemptStatus.STARTED:
+                    attempt.status = JobAttemptStatus.FAILED
+                    attempt.finished_at = now
+                    attempt.error_code = "JOB_TIMEOUT"
+                    attempt.error_summary = "Job execution exceeded its timeout."
+                job.last_error_code = "JOB_TIMEOUT"
+                job.last_error_summary = "Job execution exceeded its timeout."
+                job.finished_at = now
+                if job.attempt_count < job.max_attempts:
+                    job.status = JobStatus.FAILED
+                    job.next_attempt_at = now + timedelta(seconds=min(2**job.attempt_count, 60))
+                else:
+                    job.status = JobStatus.DEAD
+                    job.next_attempt_at = None
+            return jobs
+
+
 class OutboxDispatchService:
     """Claim, publish, and safely retry outbox events using an injected publisher port."""
 

@@ -39,17 +39,31 @@ from app.modules.media.models import (
     MediaScene,
     MediaTechnicalMetadata,
     Transcript,
+    TranscriptSegment,
     TranscriptStatus,
 )
 from app.modules.media.repository import MediaRepository
-from app.modules.media.scene_speech import SceneSpeechAnalysisService
+from app.modules.media.scene_speech import (
+    AudioExtractionPort,
+    FFmpegAudioExtractionAdapter,
+    SceneSpeechAnalysisService,
+    SpeechResult,
+    SpeechToTextPort,
+    TranscriptCandidate,
+)
 from app.modules.media.storage import StoredObjectMetadata
 from app.modules.media.technical import (
     FFmpegDerivativeAdapter,
     FFprobeAdapter,
     TechnicalAnalysisService,
 )
-from app.modules.operations.models import BackgroundJob, JobAttempt, JobAttemptStatus, JobStatus
+from app.modules.operations.models import (
+    BackgroundJob,
+    JobAttempt,
+    JobAttemptStatus,
+    JobStatus,
+    OutboxEvent,
+)
 
 pytestmark = pytest.mark.integration
 KEY, CHECKSUM = "test-local-identity-signing-key-123", "a" * 64
@@ -205,19 +219,26 @@ async def process_technical_next(
 
 
 async def process_scene_speech_next(
-    *, materializer: FakeMediaMaterializer, storage: FakeMultipartStorage, workdir: Path
+    *,
+    materializer: FakeMediaMaterializer,
+    storage: FakeMultipartStorage,
+    workdir: Path,
+    resolved_settings: Settings | None = None,
+    audio_extractor: AudioExtractionPort | None = None,
+    speech_to_text: SpeechToTextPort | None = None,
 ) -> BackgroundJob | None:
     engine = create_async_engine(os.environ["DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     try:
         async with factory() as session:
+            worker_settings = resolved_settings or config()
             return await SceneSpeechAnalysisService(
                 session,
-                config(),
+                worker_settings,
                 materializer,
                 FakeSceneDetector(),
-                FakeAudioExtractor(),
-                FakeSpeechToText(),
+                audio_extractor or FakeAudioExtractor(),
+                speech_to_text or FakeSpeechToText(),
                 storage,
             ).process_next(workdir=workdir)
     finally:
@@ -442,10 +463,155 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
                     assert await repository.get_technical_analysis(other_business, asset_id) is None
                     assert await repository.get_technical_metadata(other_business, asset_id) is None
                     assert await repository.list_derivatives(other_business, asset_id) == []
+                    assert await repository.get_transcript(other_business, asset_id) is None
+                    assert await repository.list_scenes(other_business, asset_id) == []
             finally:
                 await engine.dispose()
 
         asyncio.run(cross_tenant_records_are_hidden())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_scene_speech_has_audio_persists_wav_and_long_text_transcript(tmp_path: Path) -> None:
+    source = tmp_path / "with-audio.mp4"
+    subprocess.run(
+        [
+            config().ffmpeg_binary,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x48:r=12",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:sample_rate=16000",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    owner = auth("scene-audio", "scene-audio@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        application = cast(FastAPI, client.app)
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Scene audio", "timezone": "UTC"}
+        ).json()["id"]
+        asset = complete_upload(
+            client, business_id, owner, byte_size=source.stat().st_size, checksum=checksum
+        )
+        assert asyncio.run(process_next(application)) is not None
+        persisted_asset, _ = asyncio.run(stored_asset(str(asset["id"])))
+        storage = cast(FakeMultipartStorage, application.state.storage)
+        materializer = FakeMediaMaterializer()
+        materializer.register_for_testing(
+            object_key=persisted_asset.storage_object_key, fixture_path=source
+        )
+        technical_job = asyncio.run(
+            process_technical_next(materializer=materializer, storage=storage, workdir=tmp_path)
+        )
+        assert technical_job is not None and technical_job.status == JobStatus.SUCCEEDED
+
+        async def proxy_path() -> tuple[str, Path]:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as session:
+                    proxy = await session.scalar(
+                        select(MediaDerivative).where(
+                            MediaDerivative.business_id == business_id,
+                            MediaDerivative.asset_id == asset["id"],
+                            MediaDerivative.kind == "proxy",
+                        )
+                    )
+                    assert proxy is not None
+                    return proxy.storage_object_key, storage.persisted_file_for_testing(
+                        proxy.storage_object_key
+                    )
+            finally:
+                await engine.dispose()
+
+        proxy_key, proxy_file = asyncio.run(proxy_path())
+        materializer.register_for_testing(object_key=proxy_key, fixture_path=proxy_file)
+        asr = FakeSpeechToText()
+        asr.set_result_for_testing(
+            SpeechResult(
+                language="tr",
+                provider="fake-asr",
+                segments=tuple(
+                    TranscriptCandidate(index * 100, (index + 1) * 100, "x" * 3_500, 0.9)
+                    for index in range(6)
+                ),
+            )
+        )
+        scene_settings = config().model_copy(update={"transcript_max_total_chars": 25_000})
+        scene_job = asyncio.run(
+            process_scene_speech_next(
+                materializer=materializer,
+                storage=storage,
+                workdir=tmp_path,
+                resolved_settings=scene_settings,
+                audio_extractor=FFmpegAudioExtractionAdapter(scene_settings),
+                speech_to_text=asr,
+            )
+        )
+        assert scene_job is not None and scene_job.status == JobStatus.SUCCEEDED
+
+        async def persisted_audio_result() -> tuple[Transcript, int, MediaDerivative, int]:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as session:
+                    transcript = await session.scalar(
+                        select(Transcript).where(
+                            Transcript.business_id == business_id,
+                            Transcript.asset_id == asset["id"],
+                        )
+                    )
+                    audio = await session.scalar(
+                        select(MediaDerivative).where(
+                            MediaDerivative.business_id == business_id,
+                            MediaDerivative.asset_id == asset["id"],
+                            MediaDerivative.kind == "audio",
+                        )
+                    )
+                    outbox_count = int(
+                        await session.scalar(
+                            select(text("count(*)"))
+                            .select_from(OutboxEvent)
+                            .where(
+                                OutboxEvent.business_id == business_id,
+                                OutboxEvent.aggregate_id == asset["id"],
+                                OutboxEvent.event_type == "media.scene_speech.completed",
+                            )
+                        )
+                        or 0
+                    )
+                    assert transcript is not None and audio is not None
+                    segment_count = int(
+                        await session.scalar(
+                            select(text("count(*)"))
+                            .select_from(TranscriptSegment)
+                            .where(TranscriptSegment.transcript_id == transcript.id)
+                        )
+                        or 0
+                    )
+                    return transcript, segment_count, audio, outbox_count
+            finally:
+                await engine.dispose()
+
+        transcript, segment_count, audio, outbox_count = asyncio.run(persisted_audio_result())
+        assert (
+            transcript.status == TranscriptStatus.COMPLETED and len(transcript.full_text) > 20_000
+        )
+        assert segment_count == 6 and audio.status == "ready" and audio.byte_size
+        assert storage.persisted_file_for_testing(audio.storage_object_key).is_file()
+        assert outbox_count == 1
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")

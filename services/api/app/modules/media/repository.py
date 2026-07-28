@@ -13,6 +13,7 @@ from app.modules.media.models import (
     MediaDerivative,
     MediaIngestInspection,
     MediaMalwareScan,
+    MediaScene,
     MediaTechnicalAnalysis,
     MediaTechnicalMetadata,
     MediaUploadSession,
@@ -118,6 +119,14 @@ class MediaRepository:
         if lock:
             statement = statement.with_for_update()
         return cast(Transcript | None, await self._session.scalar(statement))
+
+    async def list_scenes(self, business_id: UUID, asset_id: UUID) -> list[MediaScene]:
+        statement = (
+            select(MediaScene)
+            .where(MediaScene.business_id == business_id, MediaScene.asset_id == asset_id)
+            .order_by(MediaScene.scene_index)
+        )
+        return list((await self._session.scalars(statement)).all())
 
     def add(
         self, value: MediaAsset | MediaUploadSession | MediaIngestInspection | MediaMalwareScan

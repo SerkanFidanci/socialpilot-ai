@@ -8,6 +8,11 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PCM_WAV_HEADER_BYTES = 44
+PCM_AUDIO_SAMPLE_RATE_HZ = 16_000
+PCM_AUDIO_CHANNELS = 1
+PCM_AUDIO_BYTES_PER_SAMPLE = 2
+
 
 class Settings(BaseSettings):
     """Runtime settings without embedding secrets in source code."""
@@ -51,9 +56,11 @@ class Settings(BaseSettings):
     scene_min_duration_ms: int = Field(default=500, ge=1, le=60_000)
     scene_max_count: int = Field(default=500, ge=1, le=10_000)
     audio_extraction_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
-    media_max_extracted_audio_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
+    media_max_extracted_audio_bytes: int = Field(default=115_200_044, ge=1, le=2_147_483_647)
     asr_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     transcript_max_segment_count: int = Field(default=2_000, ge=1, le=20_000)
+    transcript_max_segment_chars: int = Field(default=4_000, ge=1, le=4_000)
+    transcript_max_total_chars: int = Field(default=1_000_000, ge=1, le=8_000_000)
     transcript_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
@@ -127,6 +134,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MEDIA_THUMBNAIL_MAX_SHORT_EDGE cannot exceed MEDIA_THUMBNAIL_MAX_LONG_EDGE"
             )
+        required_audio_bytes = (
+            self.media_max_duration_seconds
+            * PCM_AUDIO_SAMPLE_RATE_HZ
+            * PCM_AUDIO_CHANNELS
+            * PCM_AUDIO_BYTES_PER_SAMPLE
+            + PCM_WAV_HEADER_BYTES
+        )
+        if self.media_max_extracted_audio_bytes < required_audio_bytes:
+            raise ValueError(
+                "MEDIA_MAX_EXTRACTED_AUDIO_BYTES must cover the maximum PCM WAV duration"
+            )
+        if self.transcript_max_total_chars < self.transcript_max_segment_chars:
+            raise ValueError("TRANSCRIPT_MAX_TOTAL_CHARS cannot be below segment capacity")
+        if self.transcript_max_total_chars > (
+            self.transcript_max_segment_count * self.transcript_max_segment_chars
+        ):
+            raise ValueError("TRANSCRIPT_MAX_TOTAL_CHARS exceeds configured segment capacity")
         return self
 
     @model_validator(mode="after")
