@@ -8,10 +8,12 @@ import subprocess
 from collections.abc import Generator
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
@@ -36,6 +38,7 @@ from app.modules.media.models import (
     TranscriptStatus,
 )
 from app.modules.media.repository import MediaRepository
+from app.modules.media.video_understanding import FrameReference
 from app.modules.media.video_understanding_service import (
     VideoUnderstandingSchedulingService,
     VideoUnderstandingService,
@@ -52,14 +55,16 @@ from app.modules.operations.service import JobRecoveryService
 pytestmark = pytest.mark.integration
 
 
-def config() -> Settings:
-    return Settings(
-        app_env="test",
-        database_url=os.environ["DATABASE_URL"],
-        redis_url=os.environ["REDIS_URL"],
-        celery_broker_url=os.environ["CELERY_BROKER_URL"],
-        celery_result_backend=os.environ["CELERY_RESULT_BACKEND"],
-    )
+def config(**changes: object) -> Settings:
+    values: dict[str, object] = {
+        "app_env": "test",
+        "database_url": os.environ["DATABASE_URL"],
+        "redis_url": os.environ["REDIS_URL"],
+        "celery_broker_url": os.environ["CELERY_BROKER_URL"],
+        "celery_result_backend": os.environ["CELERY_RESULT_BACKEND"],
+    }
+    values.update(changes)
+    return Settings(**values)  # type: ignore[arg-type]
 
 
 def factory() -> async_sessionmaker[AsyncSession]:
@@ -292,6 +297,194 @@ def test_no_speech_and_duplicate_delivery_complete_without_duplicate_records() -
         async with session_factory() as session:
             values = list(await session.scalars(select(MediaSceneUnderstanding)))
             assert len(values) == 1 and values[0].transcript_context == ""
+            assert values[0].quality_signals["insufficient_context"] is True
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_frame_budget_degrades_to_transcript_only_without_failing_job() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        resolved = config(video_understanding_max_frames_per_asset=3)
+        frames = tuple(
+            FrameReference(
+                scene_id=uuid4(),
+                timestamp_ms=index * 100,
+                local_path=Path(f"frame-{index}.jpg"),
+                width=100,
+                height=100,
+                byte_size=100,
+                content_type="image/jpeg",
+            )
+            for index in range(3)
+        )
+        async with session_factory() as session:
+            async with session.begin():
+                business_id, asset_id = await seed(session, scenes=2, transcript=True)
+                job = await VideoUnderstandingSchedulingService(
+                    session, resolved
+                ).schedule_after_scene_speech(
+                    business_id=business_id, asset_id=asset_id, correlation_id="budget"
+                )
+                assert job is not None
+        async with session_factory() as worker:
+            service = VideoUnderstandingService(
+                worker,
+                resolved,
+                FakeFrameExtractionAdapter(resolved, frames),
+                FakeVideoUnderstandingAdapter(resolved),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            claimed = await service.claim_next()
+            assert claimed is not None
+            assert (
+                await service.process_claimed(business_id=business_id, job_id=claimed.id)
+            ).status == JobStatus.SUCCEEDED
+        async with session_factory() as session:
+            values = list(
+                await session.scalars(
+                    select(MediaSceneUnderstanding)
+                    .where(MediaSceneUnderstanding.business_id == business_id)
+                    .order_by(MediaSceneUnderstanding.created_at)
+                )
+            )
+            counts = [cast(int, value.quality_signals["frame_count"]) for value in values]
+            assert counts == [3, 0]
+            assert sum(counts) <= resolved.video_understanding_max_frames_per_asset
+            assert [value.transcript_context for value in values] == ["first scene", "second scene"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_scene_understanding_unique_jsonb_and_cascade_constraints() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        async with session_factory() as session:
+            async with session.begin():
+                records: list[tuple[UUID, UUID, UUID]] = []
+                for _ in range(3):
+                    business_id, asset_id = await seed(session, scenes=1)
+                    scene = (await MediaRepository(session).list_scenes(business_id, asset_id))[0]
+                    session.add(
+                        MediaSceneUnderstanding(
+                            business_id=business_id,
+                            asset_id=asset_id,
+                            scene_id=scene.id,
+                            status="completed",
+                            provider="test",
+                            model_name="test",
+                            summary="summary",
+                            visual_description="description",
+                            transcript_context="context",
+                            confidence=0.9,
+                            labels=["label"],
+                            objects=["object"],
+                            actions=["action"],
+                            visible_text=["text"],
+                            dominant_topics=["topic"],
+                            safety_flags=[],
+                            quality_signals={"nested": {"number": 7}, "flag": True},
+                        )
+                    )
+                    records.append((business_id, asset_id, scene.id))
+                await session.flush()
+                first_business, first_asset, first_scene = records[0]
+                async with session.begin_nested():
+                    session.add(
+                        MediaSceneUnderstanding(
+                            business_id=first_business,
+                            asset_id=first_asset,
+                            scene_id=first_scene,
+                            status="completed",
+                            provider="duplicate",
+                            model_name="test",
+                            summary="summary",
+                            visual_description="description",
+                            transcript_context="context",
+                            confidence=0.9,
+                            labels=[],
+                            objects=[],
+                            actions=[],
+                            visible_text=[],
+                            dominant_topics=[],
+                            safety_flags=[],
+                            quality_signals={},
+                        )
+                    )
+                    with pytest.raises(IntegrityError):
+                        await session.flush()
+                stored = await session.scalar(
+                    select(MediaSceneUnderstanding).where(
+                        MediaSceneUnderstanding.scene_id == first_scene
+                    )
+                )
+                assert stored is not None and stored.quality_signals == {
+                    "nested": {"number": 7},
+                    "flag": True,
+                }
+                await session.delete(await session.get(MediaScene, first_scene))
+                await session.flush()
+                assert not await session.scalar(
+                    select(MediaSceneUnderstanding.id).where(
+                        MediaSceneUnderstanding.scene_id == first_scene
+                    )
+                )
+                _, second_asset, _ = records[1]
+                await session.delete(await session.get(MediaAsset, second_asset))
+                await session.flush()
+                assert not await session.scalar(
+                    select(MediaSceneUnderstanding.id).where(
+                        MediaSceneUnderstanding.asset_id == second_asset
+                    )
+                )
+                third_business, _, _ = records[2]
+                await session.delete(await session.get(Business, third_business))
+                await session.flush()
+                assert not await session.scalar(
+                    select(MediaSceneUnderstanding.id).where(
+                        MediaSceneUnderstanding.business_id == third_business
+                    )
+                )
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_provider_failure_for_one_scene_persists_no_partial_understandings() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        async with session_factory() as session:
+            async with session.begin():
+                business_id, asset_id = await seed(session, scenes=2)
+                job = await VideoUnderstandingSchedulingService(
+                    session, config()
+                ).schedule_after_scene_speech(
+                    business_id=business_id, asset_id=asset_id, correlation_id="partial"
+                )
+                assert job is not None
+        async with session_factory() as worker:
+            service = VideoUnderstandingService(
+                worker,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config(), "transient"),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            claimed = await service.claim_next()
+            assert claimed is not None
+            assert (
+                await service.process_claimed(business_id=business_id, job_id=claimed.id)
+            ).status == JobStatus.FAILED
+        async with session_factory() as session:
+            assert not list(
+                await session.scalars(
+                    select(MediaSceneUnderstanding).where(
+                        MediaSceneUnderstanding.business_id == business_id
+                    )
+                )
+            )
 
     asyncio.run(run())
 

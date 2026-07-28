@@ -75,7 +75,10 @@ class FakeVideoUnderstandingAdapter(VideoUnderstandingPort):
             visual_description="Deterministic visual scene",
             confidence=0.9,
             labels=("scene",),
-            quality_signals={"frame_count": len(request.frames)},
+            quality_signals={
+                "frame_count": len(request.frames),
+                "insufficient_context": not request.frames and not request.transcript_context,
+            },
         )
 
 

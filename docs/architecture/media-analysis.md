@@ -34,7 +34,12 @@ paths with argument arrays and bounded timeouts, and passes validated JPEG
 paths (never frame bytes) to the provider port. Frames are deterministic within
 each scene, stay within its time bounds, are capped per asset, and are removed
 with the temporary directory after the provider returns. The default 50 frames
-at 1 MiB each reserve no more than 50 MiB of the worker's 512 MiB `/tmp`.
+at 1 MiB each reserve no more than 50 MiB of the worker's 512 MiB `/tmp`. The
+extractor invokes one bounded FFmpeg subprocess per selected frame; its job
+budget therefore includes `frames_per_scene × frame-extraction timeout` plus
+provider timeout and persistence margin. On asset-budget exhaustion later scenes
+use an empty frame tuple for transcript-only or safe no-context analysis; this
+is not a retry condition.
 
 ## Technical-analysis contract
 

@@ -53,7 +53,7 @@ class FrameReference:
 
 @dataclass(frozen=True)
 class VideoUnderstandingRequest:
-    """Provider-neutral input; it deliberately has no ORM dependencies."""
+    """Provider-neutral input; frames may be empty for transcript-only degradation."""
 
     asset_id: UUID
     scene_id: UUID
@@ -96,7 +96,7 @@ class FrameExtractionPort(Protocol):
 
 
 class VideoUnderstandingPort(Protocol):
-    """External video-understanding provider boundary."""
+    """External provider boundary; adapters must accept an empty frame tuple safely."""
 
     async def understand(
         self, *, request: VideoUnderstandingRequest, timeout_seconds: int

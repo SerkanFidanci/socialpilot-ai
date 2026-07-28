@@ -47,7 +47,21 @@ def test_job_state_machine_rejects_terminal_and_skipping_transitions() -> None:
 
 def test_video_understanding_timeout_scales_with_scene_count_and_rejects_overflow() -> None:
     resolved = settings()
-    assert calculate_video_understanding_job_timeout(resolved, scene_count=1) == 120
-    assert calculate_video_understanding_job_timeout(resolved, scene_count=2) == 210
+    assert calculate_video_understanding_job_timeout(resolved, scene_count=1) == 180
+    assert calculate_video_understanding_job_timeout(resolved, scene_count=2) == 330
     with pytest.raises(ValueError, match="VIDEO_UNDERSTANDING_JOB_TIMEOUT_EXCEEDED"):
         calculate_video_understanding_job_timeout(resolved, scene_count=10)
+
+
+def test_per_scene_timeout_accounts_for_every_frame_subprocess_and_provider() -> None:
+    resolved = settings(
+        video_understanding_frames_per_scene=3,
+        frame_extraction_timeout_seconds=30,
+        video_understanding_timeout_seconds=60,
+    )
+    assert resolved.video_understanding_job_per_scene_timeout_seconds == 150
+    assert (
+        calculate_video_understanding_job_timeout(resolved, scene_count=2)
+        - calculate_video_understanding_job_timeout(resolved, scene_count=1)
+        == 150
+    )

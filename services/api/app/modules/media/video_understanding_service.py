@@ -30,6 +30,7 @@ from app.modules.media.video_understanding import (
     FrameExtractionPermanentError,
     FrameExtractionPort,
     FrameExtractionTransientError,
+    FrameReference,
     VideoUnderstandingPermanentError,
     VideoUnderstandingPort,
     VideoUnderstandingRequest,
@@ -160,13 +161,15 @@ class VideoUnderstandingService:
                         transcript_context=context,
                         frames=(),
                     )
-                    frames = await self._frame_extractor.extract(
-                        request=request,
-                        source_path=proxy_path,
-                        workdir=temporary_path,
-                        timeout_seconds=self._settings.frame_extraction_timeout_seconds,
-                        maximum_frames=remaining_frames,
-                    )
+                    frames: tuple[FrameReference, ...] = ()
+                    if remaining_frames > 0:
+                        frames = await self._frame_extractor.extract(
+                            request=request,
+                            source_path=proxy_path,
+                            workdir=temporary_path,
+                            timeout_seconds=self._settings.frame_extraction_timeout_seconds,
+                            maximum_frames=remaining_frames,
+                        )
                     remaining_frames -= len(frames)
                     result = await self._provider.understand(
                         request=VideoUnderstandingRequest(

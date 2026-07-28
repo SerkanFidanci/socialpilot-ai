@@ -191,3 +191,26 @@ async def test_timeout_and_nonzero_failures_are_classified(tmp_path: Path) -> No
             timeout_seconds=5,
             maximum_frames=1,
         )
+
+
+@pytest.mark.asyncio
+async def test_excessive_stderr_is_rejected_without_leaking_diagnostics(tmp_path: Path) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    source = workdir / "proxy.mp4"
+    make_video(source, size="320x180")
+    noisy = tmp_path / "noisy"
+    secret = "private-frame-diagnostic"
+    noisy.write_text(f"#!/bin/sh\nyes '{secret}' | head -c 20000 >&2\nexit 1\n", encoding="utf-8")
+    noisy.chmod(0o755)
+    with pytest.raises(
+        FrameExtractionPermanentError, match="FRAME_DIAGNOSTIC_LIMIT_EXCEEDED"
+    ) as error:
+        await FFmpegFrameExtractionAdapter(settings(ffmpeg_binary=str(noisy))).extract(
+            request=request(),
+            source_path=source,
+            workdir=workdir,
+            timeout_seconds=5,
+            maximum_frames=1,
+        )
+    assert secret not in str(error.value)

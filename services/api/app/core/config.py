@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     video_understanding_frame_boundary_offset_ms: int = Field(default=100, ge=0, le=60_000)
     video_understanding_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
     video_understanding_job_base_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
-    video_understanding_job_per_scene_timeout_seconds: int = Field(default=90, ge=1, le=3_600)
+    video_understanding_job_per_scene_timeout_seconds: int = Field(default=150, ge=1, le=7_200)
     video_understanding_job_persistence_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
     video_understanding_job_max_timeout_seconds: int = Field(default=900, ge=1, le=7_200)
     job_timeout_grace_seconds: int = Field(default=15, ge=0, le=600)
@@ -183,12 +183,14 @@ class Settings(BaseSettings):
             self.transcript_max_segment_count * self.transcript_max_segment_chars
         ):
             raise ValueError("TRANSCRIPT_MAX_TOTAL_CHARS exceeds configured segment capacity")
-        if self.video_understanding_job_per_scene_timeout_seconds < (
-            self.frame_extraction_timeout_seconds + self.video_understanding_timeout_seconds
-        ):
+        required_video_scene_timeout = (
+            self.video_understanding_frames_per_scene * self.frame_extraction_timeout_seconds
+            + self.video_understanding_timeout_seconds
+        )
+        if self.video_understanding_job_per_scene_timeout_seconds < required_video_scene_timeout:
             raise ValueError(
                 "VIDEO_UNDERSTANDING_JOB_PER_SCENE_TIMEOUT_SECONDS cannot be below the combined "
-                "frame extraction and provider timeouts"
+                "per-frame extraction and provider timeouts"
             )
         if self.celery_task_soft_time_limit_seconds >= self.celery_task_timeout_seconds:
             raise ValueError(

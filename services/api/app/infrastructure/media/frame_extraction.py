@@ -6,6 +6,7 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryFile
 
 from app.core.config import Settings
 from app.modules.media.video_understanding import (
@@ -130,7 +131,9 @@ class FFmpegFrameExtractionAdapter(FrameExtractionPort):
             "3",
             str(output),
         ]
-        await self._run(command, workdir, timeout_seconds, "FRAME_EXTRACTION_FAILED")
+        await self._run(
+            command, workdir, timeout_seconds, "FRAME_EXTRACTION_FAILED", capture_stdout=False
+        )
 
     async def _probe_dimensions(
         self, output: Path, workdir: Path, timeout_seconds: int
@@ -151,36 +154,64 @@ class FFmpegFrameExtractionAdapter(FrameExtractionPort):
             workdir,
             timeout_seconds,
             "FRAME_OUTPUT_INVALID",
+            capture_stdout=True,
         )
         try:
-            stream = json.loads(result.stdout).get("streams", [])[0]
+            stream = json.loads(result.stdout or "").get("streams", [])[0]
             width, height = int(stream["width"]), int(stream["height"])
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise FrameExtractionPermanentError("FRAME_OUTPUT_INVALID") from error
         return width, height
 
     async def _run(
-        self, command: list[str], workdir: Path, timeout_seconds: int, error_code: str
+        self,
+        command: list[str],
+        workdir: Path,
+        timeout_seconds: int,
+        error_code: str,
+        *,
+        capture_stdout: bool,
     ) -> subprocess.CompletedProcess[str]:
         try:
-            result = await asyncio.to_thread(
-                subprocess.run,
+            result, stderr_size = await asyncio.to_thread(
+                _run_with_bounded_diagnostics,
                 command,
-                cwd=workdir,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
+                workdir,
+                timeout_seconds,
+                capture_stdout,
             )
         except subprocess.TimeoutExpired as error:
             raise FrameExtractionTransientError("FRAME_EXTRACTION_TIMEOUT") from error
         except OSError as error:
             raise FrameExtractionTransientError("FRAME_EXTRACTION_UNAVAILABLE") from error
-        _ = result.stderr[:_STDERR_LIMIT]
+        if stderr_size > _STDERR_LIMIT:
+            raise FrameExtractionPermanentError("FRAME_DIAGNOSTIC_LIMIT_EXCEEDED")
         if result.returncode != 0:
             raise FrameExtractionPermanentError(error_code)
         return result
+
+
+def _run_with_bounded_diagnostics(
+    command: list[str], workdir: Path, timeout_seconds: int, capture_stdout: bool
+) -> tuple[subprocess.CompletedProcess[str], int]:
+    """Run without retaining diagnostic output in process memory or error details.
+
+    FFmpeg diagnostics are deliberately written to a private temporary file.  The file size is
+    checked before any result is interpreted, and neither stderr nor its path reaches callers.
+    """
+
+    with TemporaryFile(mode="w+b", dir=workdir) as stderr_file:
+        result = subprocess.run(
+            command,
+            cwd=workdir,
+            shell=False,
+            stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
+            stderr=stderr_file,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        return result, stderr_file.tell()
 
 
 def _controlled_directory(workdir: Path) -> Path:

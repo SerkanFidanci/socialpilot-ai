@@ -104,6 +104,15 @@ completion outbox event, and finalizes every attempt on success, retry, or
 failure. The real FFmpeg frame extractor, worker/Celery composition, and
 provider routing/usage accounting remain deferred within 1D.
 
+**1D hardening record — 2026-07-29:** Frame extraction uses one bounded FFmpeg
+subprocess per selected frame, so the per-scene wall-clock budget is
+`frames_per_scene × frame_extraction_timeout + provider_timeout` (150 seconds by
+default), plus job-level persistence margin. Frames are allocated deterministically
+in scene order and never exceed the per-asset limit. Once exhausted, remaining
+scenes invoke the provider with an empty frame tuple: providers must support this
+transcript-only/no-context request and return a safe deterministic quality signal,
+not a retryable failure. FFmpeg diagnostics are bounded and never exposed.
+
 Acceptance criteria:
 
 - Requests use an adapter-controlled short-lived resource reference for the approved proxy or selected scene, never a client URL or the original provider credential.
