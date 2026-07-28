@@ -16,6 +16,7 @@ def create_celery_app(settings: Settings) -> Celery:
         backend=settings.celery_result_backend,
     )
     application.conf.update(
+        include=["app.worker.tasks"],
         task_default_queue="default",
         task_serializer="json",
         accept_content=["json"],

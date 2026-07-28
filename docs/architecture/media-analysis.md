@@ -41,6 +41,11 @@ provider timeout and persistence margin. On asset-budget exhaustion later scenes
 use an empty frame tuple for transcript-only or safe no-context analysis; this
 is not a retry condition.
 
+When visual-frame budget is exhausted, the service—not the provider—writes the
+authoritative `visual_input_available=false` and `analysis_mode` quality signals.
+Transcript-only and no-context results receive a deterministic confidence cap, so
+provider output cannot represent them as full visual analysis.
+
 ## Technical-analysis contract
 
 `MediaProbePort` exposes verified container/stream facts: duration, container, codec, width, height, normalized rotation/aspect ratio, frame-rate numerator/denominator, video/audio stream presence, audio sample rate/channels, and bounded safe diagnostics. Original FFprobe output is diagnostic-only and must never become an API response or an audit payload.

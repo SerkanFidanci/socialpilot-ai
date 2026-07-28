@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
@@ -206,7 +207,32 @@ class VideoUnderstandingService:
                         ),
                         timeout_seconds=self._settings.video_understanding_timeout_seconds,
                     )
-                    results.append((scene, normalize_result(result, self._settings), context))
+                    normalized = normalize_result(result, self._settings)
+                    quality_signals = dict(normalized.quality_signals or {})
+                    if frames:
+                        quality_signals.update(
+                            {
+                                "visual_input_available": True,
+                                "analysis_mode": "visual_and_transcript" if context else "visual",
+                            }
+                        )
+                    else:
+                        quality_signals.update(
+                            {
+                                "visual_input_available": False,
+                                "analysis_mode": "transcript_only" if context else "no_context",
+                            }
+                        )
+                        normalized = replace(
+                            normalized,
+                            confidence=min(
+                                normalized.confidence,
+                                self._settings.video_understanding_nonvisual_max_confidence,
+                            ),
+                        )
+                    results.append(
+                        (scene, replace(normalized, quality_signals=quality_signals), context)
+                    )
             return await self._persist_results(
                 business_id=business_id,
                 job_id=job_id,

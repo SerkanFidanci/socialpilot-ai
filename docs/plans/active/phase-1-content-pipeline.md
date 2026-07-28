@@ -123,6 +123,13 @@ scene/speech, and VLM worker claim carries its attempt number; persistence and
 failure transactions require the same `RUNNING` job, attempt number, and
 `STARTED` attempt, making reaped workers safe no-ops.
 
+**1D worker composition record — 2026-07-29:** Celery now runs bounded durable
+drain tasks through a process-local composition context. PostgreSQL remains the
+only job truth and each drain iteration uses a fresh session; task payloads carry
+no trusted tenant/job identity. Beat and a concrete outbox-to-Celery publisher
+remain deferred. Framesless analysis writes service-authoritative quality signals
+and a capped non-visual confidence.
+
 Acceptance criteria:
 
 - Requests use an adapter-controlled short-lived resource reference for the approved proxy or selected scene, never a client URL or the original provider credential.
@@ -263,8 +270,8 @@ Phase 1 is complete when an authorized uploaded media asset reliably reaches `re
   bounded FFmpeg JPEG frame extraction are implemented. Real VLM routing, worker composition,
   provider usage/cost controls, and final slice acceptance remain pending.
 - [ ] 1D: Step timeout separation, scene-count-based whole-job VLM budgets, recovery grace,
-  global stale-job scanning, and stale-worker ownership checks are implemented. Celery task
-  wiring and beat remain deferred.
+  global stale-job scanning, stale-worker ownership checks, and bounded Celery drain-task
+  composition are implemented. Beat scheduling and concrete outbox publishing remain deferred.
 - [ ] 1E: Add analysis orchestration, reprocessing, cost limits, observability, and end-to-end quality checks.
 - [ ] Run slice-specific migrations, unit/contract/PostgreSQL tests, OpenAPI verification, Compose worker validation, lint, format, mypy, and security regression checks.
 - [ ] Move this plan to `docs/plans/completed/` only after every acceptance criterion is verified.

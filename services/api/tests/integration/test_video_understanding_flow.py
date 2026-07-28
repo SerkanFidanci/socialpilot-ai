@@ -298,6 +298,9 @@ def test_no_speech_and_duplicate_delivery_complete_without_duplicate_records() -
             values = list(await session.scalars(select(MediaSceneUnderstanding)))
             assert len(values) == 1 and values[0].transcript_context == ""
             assert values[0].quality_signals["insufficient_context"] is True
+            assert values[0].quality_signals["visual_input_available"] is False
+            assert values[0].quality_signals["analysis_mode"] == "no_context"
+            assert values[0].confidence == 0.5
 
     asyncio.run(run())
 

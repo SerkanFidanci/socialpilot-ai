@@ -78,3 +78,13 @@ reapers do not finalize one attempt twice. A late worker must still own the `RUN
 claimed attempt number, and its `STARTED` attempt before it writes results. Celery soft limit is
 below hard limit, and hard
 limit covers the maximum whole-job budget plus grace.
+
+## Celery worker composition
+
+Celery messages only wake a bounded database drain; they do not carry trusted
+tenant or job identity. Each worker process creates one private composition
+context and SQLAlchemy engine after fork, then opens a new session per iteration.
+The drain tasks use PostgreSQL `SKIP LOCKED` claims and stop on an empty queue or
+their configured batch limit. Beat scheduling and a concrete outbox publisher are
+not part of this slice; the outbox-dispatch task returns `not_configured` without
+changing any event state.

@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     celery_result_backend: str = Field(min_length=1)
     celery_task_timeout_seconds: int = Field(default=960, gt=0, le=7200)
     celery_task_soft_time_limit_seconds: int = Field(default=900, gt=0, le=7200)
+    worker_drain_batch_size: int = Field(default=10, ge=1, le=100)
+    worker_temp_root: str = Field(default="/tmp/socialpilot-worker", min_length=1, max_length=512)
     media_max_bytes: int = Field(default=104_857_600, gt=0, le=2_147_483_647)
     media_max_parts: int = Field(default=100, ge=1, le=1_000)
     media_upload_session_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
@@ -80,6 +82,7 @@ class Settings(BaseSettings):
     video_understanding_max_json_bytes: int = Field(default=32_768, ge=256, le=1_048_576)
     video_understanding_max_json_depth: int = Field(default=5, ge=1, le=20)
     video_understanding_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    video_understanding_nonvisual_max_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     frame_extraction_timeout_seconds: int = Field(default=30, ge=1, le=3_600)
     video_understanding_frames_per_scene: int = Field(default=3, ge=1, le=20)
     video_understanding_max_frames_per_asset: int = Field(default=50, ge=1, le=200)
@@ -139,6 +142,13 @@ class Settings(BaseSettings):
     def validate_media_binary(cls, value: str) -> str:
         if not value.startswith("/") or "\x00" in value:
             raise ValueError("media binary paths must be absolute paths")
+        return value
+
+    @field_validator("worker_temp_root")
+    @classmethod
+    def validate_worker_temp_root(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value:
+            raise ValueError("WORKER_TEMP_ROOT must be an absolute path")
         return value
 
     @model_validator(mode="after")
