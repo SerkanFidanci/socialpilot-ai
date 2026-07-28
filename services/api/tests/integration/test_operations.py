@@ -363,7 +363,7 @@ def test_stale_running_jobs_finalize_attempts_and_retry_or_dead_letter() -> None
                 await session.execute(
                     text(
                         "UPDATE jobs SET timeout_seconds = 1, "
-                        "started_at = timezone('utc', now()) - interval '2 seconds'"
+                        "started_at = timezone('utc', now()) - interval '20 seconds'"
                     )
                 )
                 await session.execute(

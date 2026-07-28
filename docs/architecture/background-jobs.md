@@ -61,3 +61,17 @@ retryable video-understanding failure. Invalid source paths, invalid JPEG
 outputs, frame-size/dimension policy failures, and FFmpeg non-zero exits are
 terminal. In both paths the common job finalizer closes the durable attempt,
 so no `JobAttempt` or job remains `started`/`running` after an extraction error.
+
+## Timeout semantics and global recovery
+
+`jobs.timeout_seconds` is a whole-job wall-clock budget, never an adapter timeout. FFprobe,
+derivative generation, scene detection, audio extraction, ASR, frame extraction, and video
+understanding each use dedicated Settings timeouts. A video-understanding budget is calculated
+at creation from a base margin, real scene count × per-scene frame/provider budget, and a
+persistence margin. A value above the configured maximum is rejected rather than shortened.
+
+Recovery uses `started_at + timeout_seconds + JOB_TIMEOUT_GRACE_SECONDS`. It can scan all
+tenants or retain a tenant filter; ordered `FOR UPDATE SKIP LOCKED` claims ensure concurrent
+reapers do not finalize one attempt twice. A late worker must still own the `RUNNING` job and
+its `STARTED` attempt before it writes results. Celery soft limit is below hard limit, and hard
+limit covers the maximum whole-job budget plus grace.

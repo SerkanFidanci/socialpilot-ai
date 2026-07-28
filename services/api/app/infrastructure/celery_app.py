@@ -21,7 +21,7 @@ def create_celery_app(settings: Settings) -> Celery:
         accept_content=["json"],
         result_serializer="json",
         task_time_limit=settings.celery_task_timeout_seconds,
-        task_soft_time_limit=max(settings.celery_task_timeout_seconds - 5, 1),
+        task_soft_time_limit=settings.celery_task_soft_time_limit_seconds,
         worker_prefetch_multiplier=1,
         task_acks_late=True,
     )

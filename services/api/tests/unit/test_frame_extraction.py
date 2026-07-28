@@ -94,8 +94,11 @@ def test_timestamp_selection_is_bounded_deterministic_and_nonduplicating() -> No
 def test_frame_limits_are_configuration_bounded() -> None:
     with pytest.raises(ValidationError, match="FRAMES_PER_SCENE"):
         settings(video_understanding_frames_per_scene=2, video_understanding_max_frames_per_asset=1)
-    with pytest.raises(ValidationError, match="VIDEO_UNDERSTANDING_JOB_TIMEOUT_SECONDS"):
-        settings(frame_extraction_timeout_seconds=120, video_understanding_job_timeout_seconds=120)
+    with pytest.raises(ValidationError, match="VIDEO_UNDERSTANDING_JOB_PER_SCENE_TIMEOUT_SECONDS"):
+        settings(
+            frame_extraction_timeout_seconds=120,
+            video_understanding_job_per_scene_timeout_seconds=120,
+        )
 
 
 @pytest.mark.asyncio

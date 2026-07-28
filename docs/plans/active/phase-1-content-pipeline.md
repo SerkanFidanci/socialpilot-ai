@@ -243,6 +243,9 @@ Phase 1 is complete when an authorized uploaded media asset reliably reaches `re
 - [ ] 1D: Video-understanding contracts, durable scheduling, tenant-scoped persistence, and
   bounded FFmpeg JPEG frame extraction are implemented. Real VLM routing, worker composition,
   provider usage/cost controls, and final slice acceptance remain pending.
+- [ ] 1D: Step timeout separation, scene-count-based whole-job VLM budgets, recovery grace,
+  global stale-job scanning, and stale-worker ownership checks are implemented. Celery task
+  wiring and beat remain deferred.
 - [ ] 1E: Add analysis orchestration, reprocessing, cost limits, observability, and end-to-end quality checks.
 - [ ] Run slice-specific migrations, unit/contract/PostgreSQL tests, OpenAPI verification, Compose worker validation, lint, format, mypy, and security regression checks.
 - [ ] Move this plan to `docs/plans/completed/` only after every acceptance criterion is verified.

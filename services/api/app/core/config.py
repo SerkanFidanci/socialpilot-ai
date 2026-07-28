@@ -39,7 +39,8 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     celery_broker_url: str = Field(min_length=1)
     celery_result_backend: str = Field(min_length=1)
-    celery_task_timeout_seconds: int = Field(default=300, gt=0, le=3600)
+    celery_task_timeout_seconds: int = Field(default=960, gt=0, le=7200)
+    celery_task_soft_time_limit_seconds: int = Field(default=900, gt=0, le=7200)
     media_max_bytes: int = Field(default=104_857_600, gt=0, le=2_147_483_647)
     media_max_parts: int = Field(default=100, ge=1, le=1_000)
     media_upload_session_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
@@ -54,8 +55,13 @@ class Settings(BaseSettings):
     media_thumbnail_max_long_edge: int = Field(default=640, ge=2, le=16_384)
     media_thumbnail_max_short_edge: int = Field(default=640, ge=2, le=16_384)
     media_max_derivative_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
+    media_probe_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
+    media_derivative_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    media_technical_job_timeout_seconds: int = Field(default=300, ge=1, le=7_200)
     scene_min_duration_ms: int = Field(default=500, ge=1, le=60_000)
     scene_max_count: int = Field(default=500, ge=1, le=10_000)
+    scene_detection_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
+    scene_speech_job_timeout_seconds: int = Field(default=300, ge=1, le=7_200)
     audio_extraction_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     media_max_extracted_audio_bytes: int = Field(default=115_200_044, ge=1, le=2_147_483_647)
     asr_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
@@ -82,7 +88,11 @@ class Settings(BaseSettings):
     video_understanding_max_frame_bytes: int = Field(default=1_048_576, ge=1, le=16_777_216)
     video_understanding_frame_boundary_offset_ms: int = Field(default=100, ge=0, le=60_000)
     video_understanding_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
-    video_understanding_job_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    video_understanding_job_base_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
+    video_understanding_job_per_scene_timeout_seconds: int = Field(default=90, ge=1, le=3_600)
+    video_understanding_job_persistence_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
+    video_understanding_job_max_timeout_seconds: int = Field(default=900, ge=1, le=7_200)
+    job_timeout_grace_seconds: int = Field(default=15, ge=0, le=600)
     video_understanding_max_attempts: int = Field(default=3, ge=1, le=10)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
@@ -173,16 +183,22 @@ class Settings(BaseSettings):
             self.transcript_max_segment_count * self.transcript_max_segment_chars
         ):
             raise ValueError("TRANSCRIPT_MAX_TOTAL_CHARS exceeds configured segment capacity")
-        if self.video_understanding_job_timeout_seconds < (
+        if self.video_understanding_job_per_scene_timeout_seconds < (
             self.frame_extraction_timeout_seconds + self.video_understanding_timeout_seconds
         ):
             raise ValueError(
-                "VIDEO_UNDERSTANDING_JOB_TIMEOUT_SECONDS cannot be below the combined "
+                "VIDEO_UNDERSTANDING_JOB_PER_SCENE_TIMEOUT_SECONDS cannot be below the combined "
                 "frame extraction and provider timeouts"
             )
-        if self.frame_extraction_timeout_seconds >= self.video_understanding_job_timeout_seconds:
+        if self.celery_task_soft_time_limit_seconds >= self.celery_task_timeout_seconds:
             raise ValueError(
-                "FRAME_EXTRACTION_TIMEOUT_SECONDS must be below the video understanding job timeout"
+                "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS must be below CELERY_TASK_TIMEOUT_SECONDS"
+            )
+        if self.celery_task_timeout_seconds < (
+            self.video_understanding_job_max_timeout_seconds + self.job_timeout_grace_seconds
+        ):
+            raise ValueError(
+                "CELERY_TASK_TIMEOUT_SECONDS must cover maximum job timeout plus recovery grace"
             )
         if (
             self.video_understanding_frames_per_scene

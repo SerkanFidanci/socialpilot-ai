@@ -44,6 +44,11 @@ at 1 MiB each reserve no more than 50 MiB of the worker's 512 MiB `/tmp`.
 
 Technical admission validates FFprobe's encoded raster against `MEDIA_MAX_LONG_EDGE`, `MEDIA_MAX_SHORT_EDGE`, and `MEDIA_MAX_TOTAL_PIXELS`; it is deliberately orientation-independent, so landscape and portrait sources follow the same policy. Rotation is retained as metadata and does not change that admission decision. FFmpeg uses its normal autorotation behavior for derivatives, while the symmetric admission check remains invariant. Proxy and thumbnail targets are independent from source-admission limits: the default proxy bounds are 1280x720 and the thumbnail bounds are 640x640. FFmpeg preserves aspect ratio, never enlarges a source, and produces codec-safe even proxy dimensions (for example, a 1080x1920 source becomes approximately 404x720).
 
+Scene detection uses its own provider-neutral timeout and reports timeout as a retryable
+dependency failure. It does not inherit the scene/speech whole-job wall-clock budget; this same
+step/job separation applies to FFprobe, derivatives, audio extraction, ASR, frame extraction,
+and video understanding.
+
 Transcript persistence uses PostgreSQL `TEXT`, but remains application-bounded: each normalized segment is limited by `TRANSCRIPT_MAX_SEGMENT_CHARS`, the joined representation by `TRANSCRIPT_MAX_TOTAL_CHARS`, and the segment count by `TRANSCRIPT_MAX_SEGMENT_COUNT`. Provider text is untrusted: NUL and other control characters are rejected, CRLF/CR are normalized to LF, and ordinary spaces, tabs, and newlines remain valid. Neither raw transcript text nor provider diagnostics is logged or included in safe error responses.
 
 ## Subprocess safety

@@ -59,3 +59,15 @@ def test_settings_reject_local_only_database_credential_in_production() -> None:
 
     with pytest.raises(ValidationError):
         Settings.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"celery_task_soft_time_limit_seconds": 960},
+        {"celery_task_timeout_seconds": 914},
+    ],
+)
+def test_settings_enforce_celery_and_job_timeout_invariants(override: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate(valid_values() | override)

@@ -156,22 +156,25 @@ class OperationsRepository:
         return existing, False
 
     async def lock_stale_running_jobs(
-        self, *, business_id: UUID, limit: int
+        self, *, business_id: UUID | None, grace_seconds: int, limit: int
     ) -> list[BackgroundJob]:
         """Lock only expired tenant jobs; active RUNNING work remains untouched."""
 
         statement = (
             select(BackgroundJob)
             .where(
-                BackgroundJob.business_id == business_id,
                 BackgroundJob.status == JobStatus.RUNNING,
                 BackgroundJob.started_at.is_not(None),
-                text("started_at + (timeout_seconds * interval '1 second') <= now()"),
+                text(
+                    "started_at + ((timeout_seconds + :grace_seconds) * interval '1 second') <= now()"
+                ).bindparams(grace_seconds=grace_seconds),
             )
             .order_by(BackgroundJob.started_at, BackgroundJob.id)
             .with_for_update(skip_locked=True)
             .limit(limit)
         )
+        if business_id is not None:
+            statement = statement.where(BackgroundJob.business_id == business_id)
         return list((await self._session.scalars(statement)).all())
 
     async def _claim_next_media_job(self, job_type: str) -> BackgroundJob | None:

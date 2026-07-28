@@ -77,7 +77,9 @@ class AudioOutput:
 
 
 class SceneDetectionPort(Protocol):
-    async def detect(self, *, proxy_path: Path, duration_ms: int) -> tuple[SceneCandidate, ...]: ...
+    async def detect(
+        self, *, proxy_path: Path, duration_ms: int, timeout_seconds: int
+    ) -> tuple[SceneCandidate, ...]: ...
 
 
 class AudioExtractionPort(Protocol):
@@ -310,18 +312,19 @@ class SceneSpeechAnalysisService:
                     or proxy.status != MediaDerivativeStatus.READY
                 ):
                     raise SceneSpeechPermanentError("SCENE_SPEECH_RESOURCE_STATE_INVALID")
-                proxy_key, duration_ms, has_audio, timeout = (
+                proxy_key, duration_ms, has_audio = (
                     proxy.storage_object_key,
                     metadata.duration_ms,
                     metadata.has_audio,
-                    job.timeout_seconds,
                 )
             proxy_path = await self._materializer.materialize(object_key=proxy_key, workdir=workdir)
             scenes = normalize_scenes(
                 settings=self._settings,
                 duration_ms=duration_ms,
                 scenes=await self._scene_detector.detect(
-                    proxy_path=proxy_path, duration_ms=duration_ms
+                    proxy_path=proxy_path,
+                    duration_ms=duration_ms,
+                    timeout_seconds=self._settings.scene_detection_timeout_seconds,
                 ),
             )
             audio_output: AudioOutput | None = None
@@ -330,7 +333,7 @@ class SceneSpeechAnalysisService:
                 audio_output = await self._audio_extractor.extract(
                     input_path=proxy_path,
                     output_dir=workdir,
-                    timeout_seconds=min(timeout, self._settings.audio_extraction_timeout_seconds),
+                    timeout_seconds=self._settings.audio_extraction_timeout_seconds,
                 )
                 audio_metadata = await self._persist_audio(
                     business_id, job.resource_id, audio_output
@@ -389,6 +392,11 @@ class SceneSpeechAnalysisService:
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("scene speech job disappeared")
+            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
+            if job.status != JobStatus.RUNNING or (
+                attempt is None or attempt.status != JobAttemptStatus.STARTED
+            ):
+                return job
             existing = await self._media.get_transcript(business_id, job.resource_id, lock=True)
             if existing is not None:
                 from app.modules.media.video_understanding_service import (
@@ -515,6 +523,8 @@ class SceneSpeechAnalysisService:
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("scene speech job disappeared")
+            if job.status != JobStatus.RUNNING:
+                return job
             attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
             if attempt is not None:
                 attempt.status = JobAttemptStatus.FAILED

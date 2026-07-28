@@ -168,7 +168,7 @@ class OperationsService:
             resource_type="media_asset",
             resource_id=asset_id,
             status=JobStatus.QUEUED,
-            timeout_seconds=self._settings.media_ingest_timeout_seconds,
+            timeout_seconds=self._settings.media_technical_job_timeout_seconds,
             max_attempts=self._settings.media_ingest_max_attempts,
             correlation_id=correlation_id,
             next_attempt_at=datetime.now(UTC),
@@ -199,7 +199,7 @@ class OperationsService:
             resource_type="media_asset",
             resource_id=asset_id,
             status=JobStatus.QUEUED,
-            timeout_seconds=self._settings.audio_extraction_timeout_seconds,
+            timeout_seconds=self._settings.scene_speech_job_timeout_seconds,
             max_attempts=self._settings.media_ingest_max_attempts,
             correlation_id=correlation_id,
             next_attempt_at=datetime.now(UTC),
@@ -222,7 +222,7 @@ class OperationsService:
         return job
 
     async def record_video_understanding(
-        self, *, business_id: UUID, asset_id: UUID, correlation_id: str
+        self, *, business_id: UUID, asset_id: UUID, correlation_id: str, scene_count: int = 1
     ) -> BackgroundJob:
         """Create one durable VLM job/event pair for a completed scene/speech run."""
 
@@ -233,7 +233,9 @@ class OperationsService:
             resource_type="media_asset",
             resource_id=asset_id,
             status=JobStatus.QUEUED,
-            timeout_seconds=self._settings.video_understanding_job_timeout_seconds,
+            timeout_seconds=calculate_video_understanding_job_timeout(
+                self._settings, scene_count=scene_count
+            ),
             attempt_count=0,
             max_attempts=self._settings.video_understanding_max_attempts,
             correlation_id=correlation_id,
@@ -340,19 +342,20 @@ class JobStateService:
 class JobRecoveryService:
     """Recover timed-out durable jobs without reclaiming active work."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, settings: Settings | None = None) -> None:
         self._session = session
         self._repository = OperationsRepository(session)
+        self._grace_seconds = settings.job_timeout_grace_seconds if settings else 15
 
     async def recover_stale_running_jobs(
-        self, *, business_id: UUID, limit: int = 100
+        self, *, business_id: UUID | None = None, limit: int = 100
     ) -> list[BackgroundJob]:
         if limit < 1 or limit > 1_000:
             raise ValueError("recovery limit must be between 1 and 1000")
         now = datetime.now(UTC)
         async with self._session.begin():
             jobs = await self._repository.lock_stale_running_jobs(
-                business_id=business_id, limit=limit
+                business_id=business_id, grace_seconds=self._grace_seconds, limit=limit
             )
             for job in jobs:
                 attempt = await self._repository.get_attempt_for_update(job.id, job.attempt_count)
@@ -371,6 +374,21 @@ class JobRecoveryService:
                     job.status = JobStatus.DEAD
                     job.next_attempt_at = None
             return jobs
+
+
+def calculate_video_understanding_job_timeout(settings: Settings, *, scene_count: int) -> int:
+    """Return a durable wall-clock budget; adapters retain their own step timeouts."""
+
+    if scene_count < 1:
+        raise ValueError("VIDEO_UNDERSTANDING_SCENE_COUNT_INVALID")
+    timeout = (
+        settings.video_understanding_job_base_timeout_seconds
+        + scene_count * settings.video_understanding_job_per_scene_timeout_seconds
+        + settings.video_understanding_job_persistence_timeout_seconds
+    )
+    if timeout > settings.video_understanding_job_max_timeout_seconds:
+        raise ValueError("VIDEO_UNDERSTANDING_JOB_TIMEOUT_EXCEEDED")
+    return timeout
 
 
 class OutboxDispatchService:

@@ -9,10 +9,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.infrastructure.media.fake_scene_speech import FakeSceneDetector
 from app.modules.media.scene_speech import (
     FFmpegAudioExtractionAdapter,
     SceneCandidate,
     SceneSpeechPermanentError,
+    SceneSpeechTransientError,
     SpeechResult,
     TranscriptCandidate,
     normalize_scenes,
@@ -159,3 +161,16 @@ async def test_ffmpeg_audio_extraction_uses_a_real_small_fixture(tmp_path: Path)
         input_path=source, output_dir=tmp_path, timeout_seconds=10
     )
     assert audio.path.is_file() and audio.byte_size > 0 and len(audio.sha256_checksum) == 64
+
+
+@pytest.mark.asyncio
+async def test_fake_scene_detector_classifies_timeout_as_transient(tmp_path: Path) -> None:
+    detector = FakeSceneDetector()
+    assert await detector.detect(
+        proxy_path=tmp_path / "proxy.mp4", duration_ms=1_000, timeout_seconds=1
+    )
+    detector.fail_for_testing()
+    with pytest.raises(SceneSpeechTransientError, match="SCENE_DETECTION_UNAVAILABLE"):
+        await detector.detect(
+            proxy_path=tmp_path / "proxy.mp4", duration_ms=1_000, timeout_seconds=1
+        )

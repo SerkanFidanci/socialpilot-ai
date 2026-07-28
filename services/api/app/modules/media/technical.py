@@ -414,13 +414,12 @@ class TechnicalAnalysisService:
                 analysis.safe_error_code = None
             object_key = asset.storage_object_key
             asset_byte_size = asset.byte_size
-            timeout_seconds = job.timeout_seconds
         try:
             input_path = await self._materializer.materialize(
                 object_key=object_key, workdir=workdir
             )
             metadata = await self._probe.probe(
-                input_path=input_path, timeout_seconds=timeout_seconds
+                input_path=input_path, timeout_seconds=self._settings.media_probe_timeout_seconds
             )
             validate_technical_metadata(
                 settings=self._settings,
@@ -428,7 +427,9 @@ class TechnicalAnalysisService:
                 metadata=metadata,
             )
             derivatives = await self._derivatives.generate(
-                input_path=input_path, output_dir=workdir, timeout_seconds=timeout_seconds
+                input_path=input_path,
+                output_dir=workdir,
+                timeout_seconds=self._settings.media_derivative_timeout_seconds,
             )
             persisted_derivatives = await self._persist_derivatives(
                 business_id=business_id,
@@ -456,6 +457,11 @@ class TechnicalAnalysisService:
             )
             if job is None or asset is None:
                 raise RuntimeError("technical analysis resource disappeared")
+            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
+            if job.status != JobStatus.RUNNING or (
+                attempt is None or attempt.status != JobAttemptStatus.STARTED
+            ):
+                return job
             completed_analysis = await self._media.get_technical_analysis(
                 business_id, asset.id, lock=True
             )
@@ -540,6 +546,8 @@ class TechnicalAnalysisService:
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("technical job disappeared")
+            if job.status != JobStatus.RUNNING:
+                return job
             analysis = await self._media.get_technical_analysis(
                 business_id, job.resource_id, lock=True
             )

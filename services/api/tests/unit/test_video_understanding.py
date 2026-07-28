@@ -206,7 +206,7 @@ def test_fake_adapters_are_rejected_in_production() -> None:
 
 
 def test_job_timeout_covers_combined_frame_and_provider_steps() -> None:
-    with pytest.raises(ValidationError, match="VIDEO_UNDERSTANDING_JOB_TIMEOUT_SECONDS"):
+    with pytest.raises(ValidationError, match="VIDEO_UNDERSTANDING_JOB_PER_SCENE_TIMEOUT_SECONDS"):
         Settings(
             database_url="postgresql+asyncpg://test:test@localhost:5432/test",
             redis_url="redis://localhost:6379/0",
@@ -214,7 +214,7 @@ def test_job_timeout_covers_combined_frame_and_provider_steps() -> None:
             celery_result_backend="redis://localhost:6379/2",
             frame_extraction_timeout_seconds=30,
             video_understanding_timeout_seconds=60,
-            video_understanding_job_timeout_seconds=89,
+            video_understanding_job_per_scene_timeout_seconds=89,
         )
 
 

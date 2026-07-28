@@ -18,9 +18,19 @@ from app.modules.media.scene_speech import (
 
 
 class FakeSceneDetector(SceneDetectionPort):
-    async def detect(self, *, proxy_path: Path, duration_ms: int) -> tuple[SceneCandidate, ...]:
+    def __init__(self) -> None:
+        self._unavailable = False
+
+    async def detect(
+        self, *, proxy_path: Path, duration_ms: int, timeout_seconds: int
+    ) -> tuple[SceneCandidate, ...]:
         del proxy_path
+        if timeout_seconds < 1 or self._unavailable:
+            raise SceneSpeechTransientError("SCENE_DETECTION_UNAVAILABLE")
         return (SceneCandidate(0, duration_ms, 1.0),)
+
+    def fail_for_testing(self) -> None:
+        self._unavailable = True
 
 
 class FakeAudioExtractor(AudioExtractionPort):

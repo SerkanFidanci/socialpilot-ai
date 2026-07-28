@@ -53,7 +53,8 @@ services:
       REQUEST_TIMEOUT_SECONDS: 10
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      CELERY_TASK_TIMEOUT_SECONDS: 300
+      CELERY_TASK_TIMEOUT_SECONDS: 960
+      CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: 900
       LOCAL_IDENTITY_SIGNING_KEY: development-local-identity-key-not-for-production
       PYTEST_ADDOPTS: -p no:cacheprovider
       RUFF_CACHE_DIR: /tmp/ruff-cache

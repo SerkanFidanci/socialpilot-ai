@@ -62,10 +62,12 @@ class VideoUnderstandingSchedulingService:
     ) -> BackgroundJob | None:
         if not await self._media.has_completed_scene_speech(business_id, asset_id):
             return None
+        scenes = await self._media.list_scenes(business_id, asset_id)
         return await self._operations.record_video_understanding(
             business_id=business_id,
             asset_id=asset_id,
             correlation_id=correlation_id,
+            scene_count=len(scenes),
         )
 
 
@@ -259,7 +261,12 @@ class VideoUnderstandingService:
                 raise self._not_found()
             if job.status == JobStatus.SUCCEEDED:
                 return job
-            if job.status != JobStatus.RUNNING or not results:
+            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
+            if job.status != JobStatus.RUNNING or (
+                attempt is None or attempt.status != JobAttemptStatus.STARTED
+            ):
+                return job
+            if not results:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
             expected_scenes = await self._media.list_scenes(business_id, job.resource_id)
             if [scene.id for scene in expected_scenes] != [scene.id for scene, _, _ in results]:
@@ -313,6 +320,8 @@ class VideoUnderstandingService:
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("video understanding job disappeared")
+            if job.status != JobStatus.RUNNING:
+                return job
             existing = await self._media.list_scene_understandings(business_id, job.resource_id)
             scenes = await self._media.list_scenes(business_id, job.resource_id)
             if existing and {value.scene_id for value in existing} == {
@@ -344,7 +353,7 @@ class VideoUnderstandingService:
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("video understanding job disappeared")
-            if job.status == JobStatus.SUCCEEDED:
+            if job.status != JobStatus.RUNNING:
                 return job
             attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
             if attempt is not None and attempt.status == JobAttemptStatus.STARTED:

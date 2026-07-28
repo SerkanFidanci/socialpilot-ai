@@ -387,6 +387,115 @@ def test_provider_errors_retry_then_dead_and_finalize_attempts() -> None:
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_global_recovery_honors_job_budget_grace_and_concurrent_ownership() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        async with session_factory() as session:
+            async with session.begin():
+                first_business, first_asset = await seed(session, scenes=1)
+                second_business, second_asset = await seed(session, scenes=2)
+                first_job = await VideoUnderstandingSchedulingService(
+                    session, config()
+                ).schedule_after_scene_speech(
+                    business_id=first_business, asset_id=first_asset, correlation_id="global-first"
+                )
+                second_job = await VideoUnderstandingSchedulingService(
+                    session, config()
+                ).schedule_after_scene_speech(
+                    business_id=second_business,
+                    asset_id=second_asset,
+                    correlation_id="global-second",
+                )
+                assert first_job is not None and second_job is not None
+        async with session_factory() as first, session_factory() as second:
+            first_service = VideoUnderstandingService(
+                first,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            second_service = VideoUnderstandingService(
+                second,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            assert await first_service.claim_next() is not None
+            assert await second_service.claim_next() is not None
+        async with session_factory() as session:
+            assert not await JobRecoveryService(session, config()).recover_stale_running_jobs()
+        async with session_factory() as session:
+            async with session.begin():
+                jobs = list(await session.scalars(select(BackgroundJob).order_by(BackgroundJob.id)))
+                for job in jobs:
+                    job.started_at = job.requested_at.replace(year=2000)
+        async with session_factory() as first, session_factory() as second:
+            recovered = await asyncio.gather(
+                JobRecoveryService(first, config()).recover_stale_running_jobs(),
+                JobRecoveryService(second, config()).recover_stale_running_jobs(),
+            )
+            assert sum(len(batch) for batch in recovered) == 2
+        async with session_factory() as session:
+            jobs = list(await session.scalars(select(BackgroundJob)))
+            attempts = list(await session.scalars(select(JobAttempt)))
+            assert {job.status for job in jobs} == {JobStatus.FAILED}
+            assert {attempt.error_code for attempt in attempts} == {"JOB_TIMEOUT"}
+            assert {job.business_id for job in jobs} == {first_business, second_business}
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_reaped_video_worker_cannot_persist_late_results() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        async with session_factory() as session:
+            async with session.begin():
+                business_id, asset_id = await seed(session, scenes=1)
+                job = await VideoUnderstandingSchedulingService(
+                    session, config()
+                ).schedule_after_scene_speech(
+                    business_id=business_id, asset_id=asset_id, correlation_id="late-worker"
+                )
+                assert job is not None
+        async with session_factory() as worker:
+            service = VideoUnderstandingService(
+                worker,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            claimed = await service.claim_next()
+            assert claimed is not None
+        async with session_factory() as session:
+            async with session.begin():
+                stored = await session.get(BackgroundJob, job.id, with_for_update=True)
+                assert stored is not None
+                stored.started_at = stored.requested_at.replace(year=2000)
+        async with session_factory() as session:
+            assert (
+                len(await JobRecoveryService(session, config()).recover_stale_running_jobs()) == 1
+            )
+        async with session_factory() as worker:
+            late = VideoUnderstandingService(
+                worker,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            result = await late.process_claimed(business_id=business_id, job_id=job.id)
+            assert result.status == JobStatus.FAILED
+        async with session_factory() as session:
+            assert not list(await session.scalars(select(MediaSceneUnderstanding)))
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
 def test_concurrent_claim_allows_only_one_worker() -> None:
     async def run() -> None:
         session_factory = factory()
