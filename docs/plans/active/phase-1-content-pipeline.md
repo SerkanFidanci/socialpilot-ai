@@ -113,6 +113,16 @@ scenes invoke the provider with an empty frame tuple: providers must support thi
 transcript-only/no-context request and return a safe deterministic quality signal,
 not a retryable failure. FFmpeg diagnostics are bounded and never exposed.
 
+**1D ownership and timeout hardening record — 2026-07-29:** The VLM job stores
+only the deterministic prefix of scenes that fits its configured ceiling; all
+scene and transcript records remain durable when the detector produces more.
+The default ceiling supports five scenes and job timeout calculation cannot exceed
+its 900-second maximum. Technical and scene/speech job budgets are validated
+against their complete step budgets plus persistence margin. Every technical,
+scene/speech, and VLM worker claim carries its attempt number; persistence and
+failure transactions require the same `RUNNING` job, attempt number, and
+`STARTED` attempt, making reaped workers safe no-ops.
+
 Acceptance criteria:
 
 - Requests use an adapter-controlled short-lived resource reference for the approved proxy or selected scene, never a client URL or the original provider credential.

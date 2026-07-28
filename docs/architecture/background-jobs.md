@@ -68,10 +68,13 @@ so no `JobAttempt` or job remains `started`/`running` after an extraction error.
 derivative generation, scene detection, audio extraction, ASR, frame extraction, and video
 understanding each use dedicated Settings timeouts. A video-understanding budget is calculated
 at creation from a base margin, real scene count × per-scene frame/provider budget, and a
-persistence margin. A value above the configured maximum is rejected rather than shortened.
+persistence margin. All detected scenes remain persisted; video understanding deterministically
+uses only the earliest scene prefix that fits the configured maximum rather than rolling back the
+completed scene/speech transaction.
 
 Recovery uses `started_at + timeout_seconds + JOB_TIMEOUT_GRACE_SECONDS`. It can scan all
 tenants or retain a tenant filter; ordered `FOR UPDATE SKIP LOCKED` claims ensure concurrent
-reapers do not finalize one attempt twice. A late worker must still own the `RUNNING` job and
-its `STARTED` attempt before it writes results. Celery soft limit is below hard limit, and hard
+reapers do not finalize one attempt twice. A late worker must still own the `RUNNING` job, its
+claimed attempt number, and its `STARTED` attempt before it writes results. Celery soft limit is
+below hard limit, and hard
 limit covers the maximum whole-job budget plus grace.

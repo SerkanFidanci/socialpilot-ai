@@ -340,6 +340,7 @@ class TechnicalAnalysisService:
             storage,
         )
         self._media, self._operations = MediaRepository(session), OperationsRepository(session)
+        self._claimed_attempts: dict[UUID, int] = {}
 
     async def claim_next(self) -> BackgroundJob | None:
         """Atomically claim a due technical job using PostgreSQL SKIP LOCKED."""
@@ -363,6 +364,7 @@ class TechnicalAnalysisService:
                     correlation_id=job.correlation_id,
                 )
             )
+            self._claimed_attempts[job.id] = job.attempt_count
             return job
 
     async def process_next(self, *, workdir: Path) -> BackgroundJob | None:
@@ -374,18 +376,29 @@ class TechnicalAnalysisService:
                 business_id=job.business_id,
                 job_id=job.id,
                 workdir=Path(temporary_directory),
+                attempt_number=job.attempt_count,
             )
 
     async def process_claimed(
-        self, *, business_id: UUID, job_id: UUID, workdir: Path
+        self, *, business_id: UUID, job_id: UUID, workdir: Path, attempt_number: int | None = None
     ) -> BackgroundJob:
+        expected_attempt_number = attempt_number or self._claimed_attempts.get(job_id)
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
+            if job is None:
+                raise ProblemException(
+                    status=404,
+                    code="TENANT_RESOURCE_NOT_FOUND",
+                    title="Resource not found",
+                    detail="The requested resource is not available.",
+                )
+            expected_attempt_number = expected_attempt_number or job.attempt_count
             if (
-                job is None
-                or job.job_type != "media.technical_analysis"
-                or job.status != JobStatus.RUNNING
+                await self._operations.get_active_attempt_for_update(job, expected_attempt_number)
+                is None
             ):
+                return job
+            if job.job_type != "media.technical_analysis":
                 raise ProblemException(
                     status=404,
                     code="TENANT_RESOURCE_NOT_FOUND",
@@ -438,16 +451,28 @@ class TechnicalAnalysisService:
             )
         except StorageUnavailableError:
             return await self._fail(
-                business_id, job_id, "DERIVATIVE_STORAGE_UNAVAILABLE", transient=True
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "DERIVATIVE_STORAGE_UNAVAILABLE",
+                transient=True,
             )
         except StoragePermanentError:
             return await self._fail(
-                business_id, job_id, "DERIVATIVE_STORAGE_METADATA_INVALID", transient=False
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "DERIVATIVE_STORAGE_METADATA_INVALID",
+                transient=False,
             )
         except TechnicalTransientError as error:
-            return await self._fail(business_id, job_id, str(error), transient=True)
+            return await self._fail(
+                business_id, job_id, expected_attempt_number, str(error), transient=True
+            )
         except TechnicalPermanentError as error:
-            return await self._fail(business_id, job_id, str(error), transient=False)
+            return await self._fail(
+                business_id, job_id, expected_attempt_number, str(error), transient=False
+            )
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             asset = (
@@ -457,10 +482,10 @@ class TechnicalAnalysisService:
             )
             if job is None or asset is None:
                 raise RuntimeError("technical analysis resource disappeared")
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if job.status != JobStatus.RUNNING or (
-                attempt is None or attempt.status != JobAttemptStatus.STARTED
-            ):
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is None:
                 return job
             completed_analysis = await self._media.get_technical_analysis(
                 business_id, asset.id, lock=True
@@ -490,10 +515,8 @@ class TechnicalAnalysisService:
                         ready_at=datetime.now(UTC),
                     )
                 )
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if attempt is not None:
-                attempt.status = JobAttemptStatus.SUCCEEDED
-                attempt.finished_at = datetime.now(UTC)
+            attempt.status = JobAttemptStatus.SUCCEEDED
+            attempt.finished_at = datetime.now(UTC)
             job.status, job.finished_at = JobStatus.SUCCEEDED, datetime.now(UTC)
             await OperationsService(self._session, self._settings).record_scene_speech_analysis(
                 business_id=business_id,
@@ -540,25 +563,32 @@ class TechnicalAnalysisService:
         return persisted
 
     async def _fail(
-        self, business_id: UUID, job_id: UUID, code: str, *, transient: bool
+        self,
+        business_id: UUID,
+        job_id: UUID,
+        expected_attempt_number: int,
+        code: str,
+        *,
+        transient: bool,
     ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("technical job disappeared")
-            if job.status != JobStatus.RUNNING:
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is None:
                 return job
             analysis = await self._media.get_technical_analysis(
                 business_id, job.resource_id, lock=True
             )
             if analysis is not None:
                 analysis.status, analysis.safe_error_code = (TechnicalAnalysisStatus.FAILED, code)
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if attempt is not None:
-                attempt.status = JobAttemptStatus.FAILED
-                attempt.finished_at = datetime.now(UTC)
-                attempt.error_code = code
-                attempt.error_summary = code
+            attempt.status = JobAttemptStatus.FAILED
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error_code = code
+            attempt.error_summary = code
             job.last_error_code, job.last_error_summary, job.finished_at = (
                 code,
                 code,

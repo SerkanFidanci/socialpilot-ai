@@ -71,3 +71,18 @@ def test_settings_reject_local_only_database_credential_in_production() -> None:
 def test_settings_enforce_celery_and_job_timeout_invariants(override: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         Settings.model_validate(valid_values() | override)
+
+
+def test_settings_enforce_media_step_job_timeout_invariants() -> None:
+    for override in (
+        {"media_technical_job_timeout_seconds": 314},
+        {"scene_speech_job_timeout_seconds": 314},
+        {"celery_task_soft_time_limit_seconds": 899},
+    ):
+        with pytest.raises(ValidationError):
+            Settings.model_validate(valid_values() | override)
+
+
+def test_settings_calculate_supported_video_understanding_scene_limit() -> None:
+    settings = Settings.model_validate(valid_values())
+    assert settings.video_understanding_supported_scene_count == 5

@@ -57,11 +57,11 @@ class Settings(BaseSettings):
     media_max_derivative_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
     media_probe_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
     media_derivative_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
-    media_technical_job_timeout_seconds: int = Field(default=300, ge=1, le=7_200)
+    media_technical_job_timeout_seconds: int = Field(default=315, ge=1, le=7_200)
     scene_min_duration_ms: int = Field(default=500, ge=1, le=60_000)
     scene_max_count: int = Field(default=500, ge=1, le=10_000)
     scene_detection_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
-    scene_speech_job_timeout_seconds: int = Field(default=300, ge=1, le=7_200)
+    scene_speech_job_timeout_seconds: int = Field(default=315, ge=1, le=7_200)
     audio_extraction_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     media_max_extracted_audio_bytes: int = Field(default=115_200_044, ge=1, le=2_147_483_647)
     asr_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     video_understanding_job_persistence_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
     video_understanding_job_max_timeout_seconds: int = Field(default=900, ge=1, le=7_200)
     job_timeout_grace_seconds: int = Field(default=15, ge=0, le=600)
+    media_job_persistence_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
     video_understanding_max_attempts: int = Field(default=3, ge=1, le=10)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
@@ -192,13 +193,41 @@ class Settings(BaseSettings):
                 "VIDEO_UNDERSTANDING_JOB_PER_SCENE_TIMEOUT_SECONDS cannot be below the combined "
                 "per-frame extraction and provider timeouts"
             )
+        technical_required_timeout = (
+            self.media_probe_timeout_seconds
+            + 2 * self.media_derivative_timeout_seconds
+            + self.media_job_persistence_timeout_seconds
+        )
+        if self.media_technical_job_timeout_seconds < technical_required_timeout:
+            raise ValueError(
+                "MEDIA_TECHNICAL_JOB_TIMEOUT_SECONDS cannot be below probe, derivatives, and persistence"
+            )
+        scene_speech_required_timeout = (
+            self.scene_detection_timeout_seconds
+            + self.audio_extraction_timeout_seconds
+            + self.asr_timeout_seconds
+            + self.media_job_persistence_timeout_seconds
+        )
+        if self.scene_speech_job_timeout_seconds < scene_speech_required_timeout:
+            raise ValueError(
+                "SCENE_SPEECH_JOB_TIMEOUT_SECONDS cannot be below scene, audio, ASR, and persistence"
+            )
+        if self.video_understanding_supported_scene_count < 1:
+            raise ValueError("VIDEO_UNDERSTANDING_JOB_MAX_TIMEOUT_SECONDS cannot support one scene")
         if self.celery_task_soft_time_limit_seconds >= self.celery_task_timeout_seconds:
             raise ValueError(
                 "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS must be below CELERY_TASK_TIMEOUT_SECONDS"
             )
-        if self.celery_task_timeout_seconds < (
-            self.video_understanding_job_max_timeout_seconds + self.job_timeout_grace_seconds
-        ):
+        maximum_job_timeout = max(
+            self.media_technical_job_timeout_seconds,
+            self.scene_speech_job_timeout_seconds,
+            self.video_understanding_job_max_timeout_seconds,
+        )
+        if self.celery_task_soft_time_limit_seconds < maximum_job_timeout:
+            raise ValueError(
+                "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS must cover every maximum job timeout"
+            )
+        if self.celery_task_timeout_seconds < maximum_job_timeout + self.job_timeout_grace_seconds:
             raise ValueError(
                 "CELERY_TASK_TIMEOUT_SECONDS must cover maximum job timeout plus recovery grace"
             )
@@ -222,6 +251,17 @@ class Settings(BaseSettings):
                 "video-understanding frame limits exceed the worker temporary-disk budget"
             )
         return self
+
+    @property
+    def video_understanding_supported_scene_count(self) -> int:
+        """Maximum VLM scene count that fits the durable job timeout ceiling."""
+
+        available = (
+            self.video_understanding_job_max_timeout_seconds
+            - self.video_understanding_job_base_timeout_seconds
+            - self.video_understanding_job_persistence_timeout_seconds
+        )
+        return max(0, available // self.video_understanding_job_per_scene_timeout_seconds)
 
     @model_validator(mode="after")
     def reject_local_only_production_urls(self) -> Settings:

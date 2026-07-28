@@ -253,6 +253,7 @@ class SceneSpeechAnalysisService:
             storage,
         )
         self._media, self._operations = MediaRepository(session), OperationsRepository(session)
+        self._claimed_attempts: dict[UUID, int] = {}
 
     async def claim_next(self) -> BackgroundJob | None:
         async with self._session.begin():
@@ -272,6 +273,7 @@ class SceneSpeechAnalysisService:
                     correlation_id=job.correlation_id,
                 )
             )
+            self._claimed_attempts[job.id] = job.attempt_count
             return job
 
     async def process_next(self, *, workdir: Path) -> BackgroundJob | None:
@@ -280,20 +282,30 @@ class SceneSpeechAnalysisService:
             return None
         with TemporaryDirectory(prefix="scene-speech-", dir=workdir) as temporary_directory:
             return await self.process_claimed(
-                business_id=job.business_id, job_id=job.id, workdir=Path(temporary_directory)
+                business_id=job.business_id,
+                job_id=job.id,
+                workdir=Path(temporary_directory),
+                attempt_number=job.attempt_count,
             )
 
     async def process_claimed(
-        self, *, business_id: UUID, job_id: UUID, workdir: Path
+        self, *, business_id: UUID, job_id: UUID, workdir: Path, attempt_number: int | None = None
     ) -> BackgroundJob:
+        expected_attempt_number = attempt_number or self._claimed_attempts.get(job_id)
         try:
             async with self._session.begin():
                 job = await self._operations.get_job_for_update(business_id, job_id)
+                if job is None:
+                    raise self._not_found()
+                expected_attempt_number = expected_attempt_number or job.attempt_count
                 if (
-                    job is None
-                    or job.job_type != "media.scene_speech_analysis"
-                    or job.status != JobStatus.RUNNING
+                    await self._operations.get_active_attempt_for_update(
+                        job, expected_attempt_number
+                    )
+                    is None
                 ):
+                    return job
+                if job.job_type != "media.scene_speech_analysis":
                     raise self._not_found()
                 asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
                 analysis = await self._media.get_technical_analysis(
@@ -356,24 +368,49 @@ class SceneSpeechAnalysisService:
                 segments=segments,
                 audio_output=audio_output,
                 audio_metadata=audio_metadata,
+                expected_attempt_number=expected_attempt_number,
             )
         except (StorageUnavailableError, SceneSpeechTransientError):
             return await self._fail(
-                business_id, job_id, "SCENE_SPEECH_DEPENDENCY_UNAVAILABLE", True
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "SCENE_SPEECH_DEPENDENCY_UNAVAILABLE",
+                True,
             )
         except StoragePermanentError:
-            return await self._fail(business_id, job_id, "SCENE_SPEECH_VALIDATION_FAILED", False)
+            return await self._fail(
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "SCENE_SPEECH_VALIDATION_FAILED",
+                False,
+            )
         except SceneSpeechPermanentError as error:
-            return await self._fail(business_id, job_id, str(error), False)
+            return await self._fail(business_id, job_id, expected_attempt_number, str(error), False)
         except ProblemException:
             return await self._fail(
-                business_id, job_id, "SCENE_SPEECH_RESOURCE_STATE_INVALID", False
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "SCENE_SPEECH_RESOURCE_STATE_INVALID",
+                False,
             )
         except IntegrityError:
-            return await self._fail(business_id, job_id, "SCENE_SPEECH_PERSISTENCE_FAILED", False)
+            return await self._fail(
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "SCENE_SPEECH_PERSISTENCE_FAILED",
+                False,
+            )
         except SQLAlchemyError:
             return await self._fail(
-                business_id, job_id, "SCENE_SPEECH_PERSISTENCE_UNAVAILABLE", True
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "SCENE_SPEECH_PERSISTENCE_UNAVAILABLE",
+                True,
             )
 
     async def _persist_results(
@@ -387,15 +424,16 @@ class SceneSpeechAnalysisService:
         segments: tuple[TranscriptCandidate, ...],
         audio_output: AudioOutput | None,
         audio_metadata: StoredObjectMetadata | None,
+        expected_attempt_number: int,
     ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("scene speech job disappeared")
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if job.status != JobStatus.RUNNING or (
-                attempt is None or attempt.status != JobAttemptStatus.STARTED
-            ):
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is None:
                 return job
             existing = await self._media.get_transcript(business_id, job.resource_id, lock=True)
             if existing is not None:
@@ -410,7 +448,7 @@ class SceneSpeechAnalysisService:
                     asset_id=job.resource_id,
                     correlation_id=job.correlation_id,
                 )
-                return await self._mark_succeeded(job)
+                return await self._mark_succeeded(job, expected_attempt_number)
             transcript = Transcript(
                 business_id=business_id,
                 asset_id=job.resource_id,
@@ -461,7 +499,7 @@ class SceneSpeechAnalysisService:
                         speaker_label=segment.speaker_label,
                     )
                 )
-            await self._mark_succeeded(job)
+            await self._mark_succeeded(job, expected_attempt_number)
             from app.modules.media.video_understanding_service import (
                 VideoUnderstandingSchedulingService,
             )
@@ -488,13 +526,16 @@ class SceneSpeechAnalysisService:
             )
             return job
 
-    async def _mark_succeeded(self, job: BackgroundJob) -> BackgroundJob:
-        attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-        if attempt is not None:
-            attempt.status = JobAttemptStatus.SUCCEEDED
-            attempt.finished_at = datetime.now(UTC)
-            attempt.error_code = None
-            attempt.error_summary = None
+    async def _mark_succeeded(
+        self, job: BackgroundJob, expected_attempt_number: int
+    ) -> BackgroundJob:
+        attempt = await self._operations.get_active_attempt_for_update(job, expected_attempt_number)
+        if attempt is None:
+            return job
+        attempt.status = JobAttemptStatus.SUCCEEDED
+        attempt.finished_at = datetime.now(UTC)
+        attempt.error_code = None
+        attempt.error_summary = None
         job.status = JobStatus.SUCCEEDED
         job.finished_at = datetime.now(UTC)
         job.last_error_code = None
@@ -517,20 +558,28 @@ class SceneSpeechAnalysisService:
         return metadata
 
     async def _fail(
-        self, business_id: UUID, job_id: UUID, code: str, transient: bool
+        self,
+        business_id: UUID,
+        job_id: UUID,
+        expected_attempt_number: int | None,
+        code: str,
+        transient: bool,
     ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("scene speech job disappeared")
-            if job.status != JobStatus.RUNNING:
+            if expected_attempt_number is None:
                 return job
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if attempt is not None:
-                attempt.status = JobAttemptStatus.FAILED
-                attempt.finished_at = datetime.now(UTC)
-                attempt.error_code = code
-                attempt.error_summary = code
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is None:
+                return job
+            attempt.status = JobAttemptStatus.FAILED
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error_code = code
+            attempt.error_summary = code
             job.last_error_code = code
             job.last_error_summary = code
             job.finished_at = datetime.now(UTC)

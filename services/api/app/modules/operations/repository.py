@@ -15,6 +15,7 @@ from app.modules.operations.models import (
     BackgroundJob,
     IdempotencyKey,
     JobAttempt,
+    JobAttemptStatus,
     JobStatus,
     OutboxEvent,
     OutboxStatus,
@@ -92,6 +93,18 @@ class OperationsRepository:
             .with_for_update()
         )
         return cast(BackgroundJob | None, await self._session.scalar(statement))
+
+    async def get_active_attempt_for_update(
+        self, job: BackgroundJob, expected_attempt_number: int
+    ) -> JobAttempt | None:
+        """Return an attempt only while this worker still owns the active claim."""
+
+        if job.status != JobStatus.RUNNING or job.attempt_count != expected_attempt_number:
+            return None
+        attempt = await self.get_attempt_for_update(job.id, expected_attempt_number)
+        if attempt is None or attempt.status != JobAttemptStatus.STARTED:
+            return None
+        return attempt
 
     async def claim_next_ingest_job(self) -> BackgroundJob | None:
         return await self._claim_next_media_job("media.ingest")

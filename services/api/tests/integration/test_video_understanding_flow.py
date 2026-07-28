@@ -358,6 +358,127 @@ def test_frame_budget_degrades_to_transcript_only_without_failing_job() -> None:
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_scene_speech_records_are_preserved_when_vlm_scope_is_capped() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        resolved = config()
+        async with session_factory() as session:
+            async with session.begin():
+                business_id, asset_id = await seed(
+                    session,
+                    scenes=resolved.video_understanding_supported_scene_count + 1,
+                )
+                job = await VideoUnderstandingSchedulingService(
+                    session, resolved
+                ).schedule_after_scene_speech(
+                    business_id=business_id, asset_id=asset_id, correlation_id="capped-scenes"
+                )
+                assert job is not None
+                assert job.timeout_seconds <= resolved.video_understanding_job_max_timeout_seconds
+            assert len(await MediaRepository(session).list_scenes(business_id, asset_id)) == (
+                resolved.video_understanding_supported_scene_count + 1
+            )
+            transcript = await MediaRepository(session).get_transcript(business_id, asset_id)
+            assert transcript is not None
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_stale_video_worker_cannot_complete_a_new_attempt() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        async with session_factory() as session:
+            async with session.begin():
+                business_id, asset_id = await seed(session, scenes=1)
+                job = await VideoUnderstandingSchedulingService(
+                    session, config()
+                ).schedule_after_scene_speech(
+                    business_id=business_id, asset_id=asset_id, correlation_id="fencing"
+                )
+                assert job is not None
+        async with session_factory() as first:
+            old_worker = VideoUnderstandingService(
+                first,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            old_claim = await old_worker.claim_next()
+            assert old_claim is not None
+        async with session_factory() as session:
+            async with session.begin():
+                stored = await session.get(BackgroundJob, job.id, with_for_update=True)
+                assert stored is not None
+                stored.started_at = stored.requested_at.replace(year=2000)
+        async with session_factory() as reaper:
+            assert len(await JobRecoveryService(reaper, config()).recover_stale_running_jobs()) == 1
+        async with session_factory() as session:
+            async with session.begin():
+                stored = await session.get(BackgroundJob, job.id, with_for_update=True)
+                assert stored is not None
+                stored.next_attempt_at = stored.requested_at
+        async with session_factory() as second:
+            new_worker = VideoUnderstandingService(
+                second,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            new_claim = await new_worker.claim_next()
+            assert new_claim is not None and new_claim.attempt_count == old_claim.attempt_count + 1
+            stale = await old_worker.process_claimed(
+                business_id=business_id,
+                job_id=old_claim.id,
+                attempt_number=old_claim.attempt_count,
+            )
+            assert (
+                stale.status == JobStatus.RUNNING and stale.attempt_count == new_claim.attempt_count
+            )
+        async with session_factory() as check_session:
+            assert not list(await check_session.scalars(select(MediaSceneUnderstanding)))
+        async with session_factory() as second:
+            new_worker = VideoUnderstandingService(
+                second,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            assert (
+                await new_worker.process_claimed(
+                    business_id=business_id,
+                    job_id=new_claim.id,
+                    attempt_number=new_claim.attempt_count,
+                )
+            ).status == JobStatus.SUCCEEDED
+        async with session_factory() as session:
+            attempts = list(
+                await session.scalars(select(JobAttempt).where(JobAttempt.job_id == job.id))
+            )
+            assert [attempt.status for attempt in attempts] == [
+                JobAttemptStatus.FAILED,
+                JobAttemptStatus.SUCCEEDED,
+            ]
+            assert (
+                len(
+                    list(
+                        await session.scalars(
+                            select(OutboxEvent).where(
+                                OutboxEvent.event_type == "media.video_understanding.completed"
+                            )
+                        )
+                    )
+                )
+                == 1
+            )
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
 def test_scene_understanding_unique_jsonb_and_cascade_constraints() -> None:
     async def run() -> None:
         session_factory = factory()

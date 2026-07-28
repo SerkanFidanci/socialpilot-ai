@@ -57,6 +57,7 @@ class VideoUnderstandingSchedulingService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self._media = MediaRepository(session)
         self._operations = OperationsService(session, settings)
+        self._settings = settings
 
     async def schedule_after_scene_speech(
         self, *, business_id: UUID, asset_id: UUID, correlation_id: str
@@ -64,11 +65,16 @@ class VideoUnderstandingSchedulingService:
         if not await self._media.has_completed_scene_speech(business_id, asset_id):
             return None
         scenes = await self._media.list_scenes(business_id, asset_id)
+        supported_scenes = min(
+            len(scenes), self._settings.video_understanding_supported_scene_count
+        )
+        if supported_scenes < 1:
+            return None
         return await self._operations.record_video_understanding(
             business_id=business_id,
             asset_id=asset_id,
             correlation_id=correlation_id,
-            scene_count=len(scenes),
+            scene_count=supported_scenes,
         )
 
 
@@ -90,6 +96,7 @@ class VideoUnderstandingService:
         self._provider = provider
         self._media = MediaRepository(session)
         self._operations = OperationsRepository(session)
+        self._claimed_attempts: dict[UUID, int] = {}
 
     async def claim_next(self) -> BackgroundJob | None:
         """Claim exactly one due job and begin its matching durable attempt."""
@@ -114,6 +121,7 @@ class VideoUnderstandingService:
                     correlation_id=job.correlation_id,
                 )
             )
+            self._claimed_attempts[job.id] = job.attempt_count
             return job
 
     async def process_next(self, *, workdir: Path) -> BackgroundJob | None:
@@ -123,17 +131,33 @@ class VideoUnderstandingService:
         if job is None:
             return None
         return await self.process_claimed(
-            business_id=job.business_id, job_id=job.id, workdir=workdir
+            business_id=job.business_id,
+            job_id=job.id,
+            workdir=workdir,
+            attempt_number=job.attempt_count,
         )
 
     async def process_claimed(
-        self, *, business_id: UUID, job_id: UUID, workdir: Path | None = None
+        self,
+        *,
+        business_id: UUID,
+        job_id: UUID,
+        workdir: Path | None = None,
+        attempt_number: int | None = None,
     ) -> BackgroundJob:
         """Complete the claimed asset job, leaving no attempt in STARTED state."""
 
         try:
-            scenes, transcript_segments, proxy_object_key = await self._load_inputs(
-                business_id=business_id, job_id=job_id
+            expected_attempt_number = attempt_number or self._claimed_attempts.get(job_id)
+            (
+                scenes,
+                transcript_segments,
+                proxy_object_key,
+                expected_attempt_number,
+            ) = await self._load_inputs(
+                business_id=business_id,
+                job_id=job_id,
+                expected_attempt_number=expected_attempt_number,
             )
             if self._materializer is None:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_MATERIALIZER_REQUIRED")
@@ -184,7 +208,10 @@ class VideoUnderstandingService:
                     )
                     results.append((scene, normalize_result(result, self._settings), context))
             return await self._persist_results(
-                business_id=business_id, job_id=job_id, results=tuple(results)
+                business_id=business_id,
+                job_id=job_id,
+                results=tuple(results),
+                expected_attempt_number=expected_attempt_number,
             )
         except (
             VideoUnderstandingTransientError,
@@ -192,7 +219,11 @@ class VideoUnderstandingService:
             TechnicalTransientError,
         ):
             return await self._fail(
-                business_id, job_id, "VIDEO_UNDERSTANDING_PROVIDER_UNAVAILABLE", transient=True
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "VIDEO_UNDERSTANDING_PROVIDER_UNAVAILABLE",
+                transient=True,
             )
         except (
             VideoUnderstandingPermanentError,
@@ -201,30 +232,48 @@ class VideoUnderstandingService:
             ProblemException,
         ):
             return await self._fail(
-                business_id, job_id, "VIDEO_UNDERSTANDING_VALIDATION_FAILED", transient=False
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "VIDEO_UNDERSTANDING_VALIDATION_FAILED",
+                transient=False,
             )
         except IntegrityError:
-            return await self._recover_duplicate_or_fail(business_id, job_id)
+            return await self._recover_duplicate_or_fail(
+                business_id, job_id, expected_attempt_number
+            )
         except SQLAlchemyError:
             return await self._fail(
-                business_id, job_id, "VIDEO_UNDERSTANDING_PERSISTENCE_UNAVAILABLE", transient=True
+                business_id,
+                job_id,
+                expected_attempt_number,
+                "VIDEO_UNDERSTANDING_PERSISTENCE_UNAVAILABLE",
+                transient=True,
             )
 
     async def _load_inputs(
-        self, *, business_id: UUID, job_id: UUID
-    ) -> tuple[list[MediaScene], tuple[TranscriptCandidate, ...] | None, str]:
+        self, *, business_id: UUID, job_id: UUID, expected_attempt_number: int | None
+    ) -> tuple[list[MediaScene], tuple[TranscriptCandidate, ...] | None, str, int]:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None or job.job_type != "media.video_understanding":
                 raise self._not_found()
+            expected_attempt_number = expected_attempt_number or job.attempt_count
+            if (
+                await self._operations.get_active_attempt_for_update(job, expected_attempt_number)
+                is None
+            ):
+                return [], None, "", expected_attempt_number
             if job.status == JobStatus.SUCCEEDED:
-                return [], None, ""
+                return [], None, "", expected_attempt_number
             if job.status != JobStatus.RUNNING:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_JOB_STATE_INVALID")
             asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
             proxy = await self._media.get_ready_proxy(business_id, job.resource_id)
             transcript = await self._media.get_transcript(business_id, job.resource_id, lock=True)
-            scenes = await self._media.list_scenes(business_id, job.resource_id)
+            scenes = (await self._media.list_scenes(business_id, job.resource_id))[
+                : self._settings.video_understanding_supported_scene_count
+            ]
             if (
                 asset is None
                 or proxy is None
@@ -234,7 +283,7 @@ class VideoUnderstandingService:
             ):
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
             if transcript.status == TranscriptStatus.NO_SPEECH:
-                return scenes, (), proxy.storage_object_key
+                return scenes, (), proxy.storage_object_key, expected_attempt_number
             segments = await self._media.list_transcript_segments(business_id, transcript.id)
             return (
                 scenes,
@@ -249,6 +298,7 @@ class VideoUnderstandingService:
                     for segment in segments
                 ),
                 proxy.storage_object_key,
+                expected_attempt_number,
             )
 
     async def _persist_results(
@@ -257,6 +307,7 @@ class VideoUnderstandingService:
         business_id: UUID,
         job_id: UUID,
         results: tuple[tuple[MediaScene, VideoUnderstandingResult, str], ...],
+        expected_attempt_number: int,
     ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
@@ -264,20 +315,22 @@ class VideoUnderstandingService:
                 raise self._not_found()
             if job.status == JobStatus.SUCCEEDED:
                 return job
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if job.status != JobStatus.RUNNING or (
-                attempt is None or attempt.status != JobAttemptStatus.STARTED
-            ):
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is None:
                 return job
             if not results:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
-            expected_scenes = await self._media.list_scenes(business_id, job.resource_id)
+            expected_scenes = (await self._media.list_scenes(business_id, job.resource_id))[
+                : self._settings.video_understanding_supported_scene_count
+            ]
             if [scene.id for scene in expected_scenes] != [scene.id for scene, _, _ in results]:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
             existing = await self._media.list_scene_understandings(business_id, job.resource_id)
             if existing:
                 if {value.scene_id for value in existing} == {scene.id for scene, _, _ in results}:
-                    return await self._mark_succeeded(job)
+                    return await self._mark_succeeded(job, expected_attempt_number)
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_DUPLICATE_CONFLICT")
             for scene, result, context in results:
                 self._media.add(
@@ -302,7 +355,7 @@ class VideoUnderstandingService:
                     )
                 )
             await self._session.flush()
-            await self._mark_succeeded(job)
+            await self._mark_succeeded(job, expected_attempt_number)
             self._operations.add(
                 OutboxEvent(
                     business_id=business_id,
@@ -318,30 +371,47 @@ class VideoUnderstandingService:
             )
             return job
 
-    async def _recover_duplicate_or_fail(self, business_id: UUID, job_id: UUID) -> BackgroundJob:
+    async def _recover_duplicate_or_fail(
+        self, business_id: UUID, job_id: UUID, expected_attempt_number: int | None
+    ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("video understanding job disappeared")
-            if job.status != JobStatus.RUNNING:
+            if (
+                expected_attempt_number is None
+                or await self._operations.get_active_attempt_for_update(
+                    job, expected_attempt_number
+                )
+                is None
+            ):
                 return job
             existing = await self._media.list_scene_understandings(business_id, job.resource_id)
-            scenes = await self._media.list_scenes(business_id, job.resource_id)
+            scenes = (await self._media.list_scenes(business_id, job.resource_id))[
+                : self._settings.video_understanding_supported_scene_count
+            ]
             if existing and {value.scene_id for value in existing} == {
                 scene.id for scene in scenes
             }:
-                return await self._mark_succeeded(job)
+                return await self._mark_succeeded(job, expected_attempt_number)
         return await self._fail(
-            business_id, job_id, "VIDEO_UNDERSTANDING_PERSISTENCE_FAILED", transient=False
+            business_id,
+            job_id,
+            expected_attempt_number,
+            "VIDEO_UNDERSTANDING_PERSISTENCE_FAILED",
+            transient=False,
         )
 
-    async def _mark_succeeded(self, job: BackgroundJob) -> BackgroundJob:
-        attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-        if attempt is not None:
-            attempt.status = JobAttemptStatus.SUCCEEDED
-            attempt.finished_at = datetime.now(UTC)
-            attempt.error_code = None
-            attempt.error_summary = None
+    async def _mark_succeeded(
+        self, job: BackgroundJob, expected_attempt_number: int
+    ) -> BackgroundJob:
+        attempt = await self._operations.get_active_attempt_for_update(job, expected_attempt_number)
+        if attempt is None:
+            return job
+        attempt.status = JobAttemptStatus.SUCCEEDED
+        attempt.finished_at = datetime.now(UTC)
+        attempt.error_code = None
+        attempt.error_summary = None
         job.status = JobStatus.SUCCEEDED
         job.finished_at = datetime.now(UTC)
         job.next_attempt_at = None
@@ -350,16 +420,30 @@ class VideoUnderstandingService:
         return job
 
     async def _fail(
-        self, business_id: UUID, job_id: UUID, code: str, *, transient: bool
+        self,
+        business_id: UUID,
+        job_id: UUID,
+        expected_attempt_number: int | None,
+        code: str,
+        *,
+        transient: bool,
     ) -> BackgroundJob:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None:
                 raise RuntimeError("video understanding job disappeared")
-            if job.status != JobStatus.RUNNING:
+            if (
+                expected_attempt_number is None
+                or await self._operations.get_active_attempt_for_update(
+                    job, expected_attempt_number
+                )
+                is None
+            ):
                 return job
-            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
-            if attempt is not None and attempt.status == JobAttemptStatus.STARTED:
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is not None:
                 attempt.status = JobAttemptStatus.FAILED
                 attempt.finished_at = datetime.now(UTC)
                 attempt.error_code = code

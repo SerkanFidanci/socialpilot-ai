@@ -65,3 +65,15 @@ def test_per_scene_timeout_accounts_for_every_frame_subprocess_and_provider() ->
         - calculate_video_understanding_job_timeout(resolved, scene_count=1)
         == 150
     )
+
+
+def test_video_understanding_timeout_stays_within_ceiling_at_supported_scene_limit() -> None:
+    resolved = settings()
+    maximum = resolved.video_understanding_supported_scene_count
+    assert calculate_video_understanding_job_timeout(resolved, scene_count=1) == 180
+    assert calculate_video_understanding_job_timeout(resolved, scene_count=3) == 480
+    assert calculate_video_understanding_job_timeout(resolved, scene_count=maximum) <= (
+        resolved.video_understanding_job_max_timeout_seconds
+    )
+    with pytest.raises(ValueError, match="VIDEO_UNDERSTANDING_JOB_TIMEOUT_EXCEEDED"):
+        calculate_video_understanding_job_timeout(resolved, scene_count=maximum + 1)
