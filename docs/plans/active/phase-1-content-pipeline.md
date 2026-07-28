@@ -94,6 +94,16 @@ normalization. It intentionally does not yet create a job, outbox event, worker
 claim, provider route decision, persistence service, or provider-usage record;
 those remain in the next 1D slice.
 
+**1D-A2 implementation record — 2026-07-29:** A completed scene/speech
+transaction now idempotently creates one `media.video_understanding` job and
+one `media.video_understanding.requested` outbox event. The durable service
+claims that job with PostgreSQL locking, builds tenant-scoped per-scene
+transcript context, invokes only the deterministic frame/VLM fakes with
+separate step timeouts, atomically writes all normalized scene results and the
+completion outbox event, and finalizes every attempt on success, retry, or
+failure. The real FFmpeg frame extractor, worker/Celery composition, and
+provider routing/usage accounting remain deferred within 1D.
+
 Acceptance criteria:
 
 - Requests use an adapter-controlled short-lived resource reference for the approved proxy or selected scene, never a client URL or the original provider credential.

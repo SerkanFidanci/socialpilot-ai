@@ -76,13 +76,17 @@ class VideoUnderstandingResult:
 class FrameExtractionPort(Protocol):
     """Future frame extraction boundary, kept separate from AI providers."""
 
-    async def extract(self, request: VideoUnderstandingRequest) -> tuple[FrameReference, ...]: ...
+    async def extract(
+        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
+    ) -> tuple[FrameReference, ...]: ...
 
 
 class VideoUnderstandingPort(Protocol):
     """External video-understanding provider boundary."""
 
-    async def understand(self, request: VideoUnderstandingRequest) -> VideoUnderstandingResult: ...
+    async def understand(
+        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
+    ) -> VideoUnderstandingResult: ...
 
 
 def build_transcript_context(
@@ -221,7 +225,11 @@ class FakeFrameExtractionAdapter(FrameExtractionPort):
     def __init__(self, frames: tuple[FrameReference, ...] = ()) -> None:
         self._frames = frames
 
-    async def extract(self, request: VideoUnderstandingRequest) -> tuple[FrameReference, ...]:
+    async def extract(
+        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
+    ) -> tuple[FrameReference, ...]:
+        if timeout_seconds < 1:
+            raise VideoUnderstandingPermanentError("FRAME_EXTRACTION_TIMEOUT_INVALID")
         return self._frames or request.frames
 
 
@@ -234,7 +242,11 @@ class FakeVideoUnderstandingAdapter(VideoUnderstandingPort):
     ) -> None:
         self._mode = mode
 
-    async def understand(self, request: VideoUnderstandingRequest) -> VideoUnderstandingResult:
+    async def understand(
+        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
+    ) -> VideoUnderstandingResult:
+        if timeout_seconds < 1:
+            raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_TIMEOUT_INVALID")
         if self._mode == "transient":
             raise VideoUnderstandingTransientError("VLM_UNAVAILABLE")
         if self._mode == "permanent":

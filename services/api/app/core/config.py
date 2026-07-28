@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     video_understanding_max_json_bytes: int = Field(default=32_768, ge=256, le=1_048_576)
     video_understanding_max_json_depth: int = Field(default=5, ge=1, le=20)
     video_understanding_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    frame_extraction_timeout_seconds: int = Field(default=30, ge=1, le=3_600)
+    video_understanding_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
+    video_understanding_job_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    video_understanding_max_attempts: int = Field(default=3, ge=1, le=10)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
     media_allowed_mime_types: tuple[str, ...] = (
@@ -162,6 +166,13 @@ class Settings(BaseSettings):
             self.transcript_max_segment_count * self.transcript_max_segment_chars
         ):
             raise ValueError("TRANSCRIPT_MAX_TOTAL_CHARS exceeds configured segment capacity")
+        if self.video_understanding_job_timeout_seconds < (
+            self.frame_extraction_timeout_seconds + self.video_understanding_timeout_seconds
+        ):
+            raise ValueError(
+                "VIDEO_UNDERSTANDING_JOB_TIMEOUT_SECONDS cannot be below the combined "
+                "frame extraction and provider timeouts"
+            )
         return self
 
     @model_validator(mode="after")

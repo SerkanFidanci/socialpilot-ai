@@ -11,13 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.media.models import (
     MediaAsset,
     MediaDerivative,
+    MediaDerivativeStatus,
     MediaIngestInspection,
     MediaMalwareScan,
     MediaScene,
+    MediaSceneUnderstanding,
     MediaTechnicalAnalysis,
     MediaTechnicalMetadata,
     MediaUploadSession,
     Transcript,
+    TranscriptSegment,
+    TranscriptStatus,
 )
 
 
@@ -110,6 +114,19 @@ class MediaRepository:
             statement = statement.with_for_update()
         return cast(MediaDerivative | None, await self._session.scalar(statement))
 
+    async def get_ready_proxy(self, business_id: UUID, asset_id: UUID) -> MediaDerivative | None:
+        return cast(
+            MediaDerivative | None,
+            await self._session.scalar(
+                select(MediaDerivative).where(
+                    MediaDerivative.business_id == business_id,
+                    MediaDerivative.asset_id == asset_id,
+                    MediaDerivative.kind == "proxy",
+                    MediaDerivative.status == MediaDerivativeStatus.READY,
+                )
+            ),
+        )
+
     async def get_transcript(
         self, business_id: UUID, asset_id: UUID, *, lock: bool = False
     ) -> Transcript | None:
@@ -128,7 +145,82 @@ class MediaRepository:
         )
         return list((await self._session.scalars(statement)).all())
 
+    async def get_scene(
+        self, business_id: UUID, scene_id: UUID, *, lock: bool = False
+    ) -> MediaScene | None:
+        statement = select(MediaScene).where(
+            MediaScene.business_id == business_id, MediaScene.id == scene_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(MediaScene | None, await self._session.scalar(statement))
+
+    async def list_transcript_segments(
+        self, business_id: UUID, transcript_id: UUID
+    ) -> list[TranscriptSegment]:
+        statement = (
+            select(TranscriptSegment)
+            .join(Transcript, Transcript.id == TranscriptSegment.transcript_id)
+            .where(
+                Transcript.business_id == business_id,
+                Transcript.id == transcript_id,
+            )
+            .order_by(TranscriptSegment.segment_index)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def get_scene_understanding(
+        self, business_id: UUID, understanding_id: UUID, *, lock: bool = False
+    ) -> MediaSceneUnderstanding | None:
+        statement = select(MediaSceneUnderstanding).where(
+            MediaSceneUnderstanding.business_id == business_id,
+            MediaSceneUnderstanding.id == understanding_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(MediaSceneUnderstanding | None, await self._session.scalar(statement))
+
+    async def get_scene_understanding_for_scene(
+        self, business_id: UUID, scene_id: UUID, *, lock: bool = False
+    ) -> MediaSceneUnderstanding | None:
+        statement = select(MediaSceneUnderstanding).where(
+            MediaSceneUnderstanding.business_id == business_id,
+            MediaSceneUnderstanding.scene_id == scene_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(MediaSceneUnderstanding | None, await self._session.scalar(statement))
+
+    async def list_scene_understandings(
+        self, business_id: UUID, asset_id: UUID
+    ) -> list[MediaSceneUnderstanding]:
+        statement = (
+            select(MediaSceneUnderstanding)
+            .where(
+                MediaSceneUnderstanding.business_id == business_id,
+                MediaSceneUnderstanding.asset_id == asset_id,
+            )
+            .order_by(MediaSceneUnderstanding.created_at, MediaSceneUnderstanding.id)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def has_completed_scene_speech(self, business_id: UUID, asset_id: UUID) -> bool:
+        transcript = await self.get_transcript(business_id, asset_id)
+        scenes = await self.list_scenes(business_id, asset_id)
+        return bool(
+            transcript
+            and transcript.status in {TranscriptStatus.COMPLETED, TranscriptStatus.NO_SPEECH}
+            and scenes
+        )
+
     def add(
-        self, value: MediaAsset | MediaUploadSession | MediaIngestInspection | MediaMalwareScan
+        self,
+        value: (
+            MediaAsset
+            | MediaUploadSession
+            | MediaIngestInspection
+            | MediaMalwareScan
+            | MediaSceneUnderstanding
+        ),
     ) -> None:
         self._session.add(value)

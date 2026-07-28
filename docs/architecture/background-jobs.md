@@ -43,3 +43,15 @@ flowchart LR
 ## Phase 0 limitations
 
 The first dispatched job is `media.ingest` after completion. It records intake status only; it does not run FFmpeg, inspect media, call AI, or transfer binaries. Separate queues and resource profiles for analysis/rendering are later-phase decisions built on this contract.
+
+## Phase 1 video-understanding boundary
+
+`media.video_understanding` is created only after durable scene and transcript
+prerequisites exist, with a partial unique index on its tenant/resource scope.
+Its requested and completed outbox events are transactionally paired with the
+job creation and normalized result writes respectively. The existing stale-job
+recovery handles this job type through its common `running` job contract,
+including finalizing the open attempt with `JOB_TIMEOUT` and choosing retry or
+dead-letter from the durable attempt budget. Celery hard-timeout alignment and
+the composition root are intentionally deferred; no beat/reaper wiring is
+introduced by this slice.

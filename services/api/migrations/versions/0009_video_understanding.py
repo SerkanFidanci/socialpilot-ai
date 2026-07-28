@@ -65,9 +65,17 @@ def upgrade() -> None:
         ["business_id", "asset_id"],
     )
     op.create_index("ix_scene_understandings_asset", "media_scene_understandings", ["asset_id"])
+    op.create_index(
+        "uq_jobs_video_understanding_resource",
+        "jobs",
+        ["business_id", "job_type", "resource_type", "resource_id"],
+        unique=True,
+        postgresql_where=sa.text("job_type = 'media.video_understanding'"),
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS uq_jobs_video_understanding_resource")
     op.drop_index("ix_scene_understandings_asset", table_name="media_scene_understandings")
     op.drop_index("ix_scene_understandings_business_asset", table_name="media_scene_understandings")
     op.drop_table("media_scene_understandings")

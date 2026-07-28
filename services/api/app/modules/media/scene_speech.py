@@ -391,6 +391,17 @@ class SceneSpeechAnalysisService:
                 raise RuntimeError("scene speech job disappeared")
             existing = await self._media.get_transcript(business_id, job.resource_id, lock=True)
             if existing is not None:
+                from app.modules.media.video_understanding_service import (
+                    VideoUnderstandingSchedulingService,
+                )
+
+                await VideoUnderstandingSchedulingService(
+                    self._session, self._settings
+                ).schedule_after_scene_speech(
+                    business_id=business_id,
+                    asset_id=job.resource_id,
+                    correlation_id=job.correlation_id,
+                )
                 return await self._mark_succeeded(job)
             transcript = Transcript(
                 business_id=business_id,
@@ -415,6 +426,7 @@ class SceneSpeechAnalysisService:
                         confidence=scene.confidence,
                     )
                 )
+            await self._session.flush()
             if audio_output is not None and audio_metadata is not None:
                 self._session.add(
                     MediaDerivative(
@@ -442,6 +454,17 @@ class SceneSpeechAnalysisService:
                     )
                 )
             await self._mark_succeeded(job)
+            from app.modules.media.video_understanding_service import (
+                VideoUnderstandingSchedulingService,
+            )
+
+            await VideoUnderstandingSchedulingService(
+                self._session, self._settings
+            ).schedule_after_scene_speech(
+                business_id=business_id,
+                asset_id=job.resource_id,
+                correlation_id=job.correlation_id,
+            )
             self._session.add(
                 OutboxEvent(
                     business_id=business_id,

@@ -1,0 +1,325 @@
+"""Tenant-safe durable orchestration for normalized video understanding."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import cast
+from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import Settings
+from app.core.errors import ProblemException
+from app.modules.media.models import (
+    MediaScene,
+    MediaSceneUnderstanding,
+    SceneUnderstandingStatus,
+    TranscriptStatus,
+)
+from app.modules.media.repository import MediaRepository
+from app.modules.media.scene_speech import TranscriptCandidate
+from app.modules.media.video_understanding import (
+    FrameExtractionPort,
+    VideoUnderstandingPermanentError,
+    VideoUnderstandingPort,
+    VideoUnderstandingRequest,
+    VideoUnderstandingResult,
+    VideoUnderstandingTransientError,
+    build_transcript_context,
+    normalize_result,
+)
+from app.modules.operations.models import (
+    BackgroundJob,
+    JobAttempt,
+    JobAttemptStatus,
+    JobStatus,
+    OutboxEvent,
+    OutboxStatus,
+)
+from app.modules.operations.repository import OperationsRepository
+from app.modules.operations.service import OperationsService
+
+
+class VideoUnderstandingSchedulingService:
+    """Schedule exactly one job only after durable scene/speech prerequisites exist."""
+
+    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+        self._media = MediaRepository(session)
+        self._operations = OperationsService(session, settings)
+
+    async def schedule_after_scene_speech(
+        self, *, business_id: UUID, asset_id: UUID, correlation_id: str
+    ) -> BackgroundJob | None:
+        if not await self._media.has_completed_scene_speech(business_id, asset_id):
+            return None
+        return await self._operations.record_video_understanding(
+            business_id=business_id,
+            asset_id=asset_id,
+            correlation_id=correlation_id,
+        )
+
+
+class VideoUnderstandingService:
+    """Run one durable asset job using provider-neutral, tenant-scoped inputs."""
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings,
+        frame_extractor: FrameExtractionPort,
+        provider: VideoUnderstandingPort,
+    ) -> None:
+        self._session = session
+        self._settings = settings
+        self._frame_extractor = frame_extractor
+        self._provider = provider
+        self._media = MediaRepository(session)
+        self._operations = OperationsRepository(session)
+
+    async def claim_next(self) -> BackgroundJob | None:
+        """Claim exactly one due job and begin its matching durable attempt."""
+
+        async with self._session.begin():
+            job = await self._operations.claim_next_video_understanding_job()
+            if job is None:
+                return None
+            now = datetime.now(UTC)
+            job.status = JobStatus.RUNNING
+            job.attempt_count += 1
+            job.started_at = now
+            job.finished_at = None
+            job.next_attempt_at = None
+            job.last_error_code = None
+            job.last_error_summary = None
+            self._operations.add(
+                JobAttempt(
+                    job_id=job.id,
+                    attempt_number=job.attempt_count,
+                    status=JobAttemptStatus.STARTED,
+                    correlation_id=job.correlation_id,
+                )
+            )
+            return job
+
+    async def process_claimed(self, *, business_id: UUID, job_id: UUID) -> BackgroundJob:
+        """Complete the claimed asset job, leaving no attempt in STARTED state."""
+
+        try:
+            scenes, transcript_segments = await self._load_inputs(
+                business_id=business_id, job_id=job_id
+            )
+            results: list[tuple[MediaScene, VideoUnderstandingResult, str]] = []
+            for scene in scenes:
+                context = build_transcript_context(
+                    scene_start_ms=scene.start_ms,
+                    scene_end_ms=scene.end_ms,
+                    segments=transcript_segments,
+                    maximum_chars=self._settings.video_understanding_max_transcript_context_chars,
+                )
+                request = VideoUnderstandingRequest(
+                    asset_id=scene.asset_id,
+                    scene_id=scene.id,
+                    scene_start_ms=scene.start_ms,
+                    scene_end_ms=scene.end_ms,
+                    transcript_context=context,
+                    frames=(),
+                )
+                frames = await self._frame_extractor.extract(
+                    request=request,
+                    timeout_seconds=self._settings.frame_extraction_timeout_seconds,
+                )
+                result = await self._provider.understand(
+                    request=VideoUnderstandingRequest(
+                        asset_id=request.asset_id,
+                        scene_id=request.scene_id,
+                        scene_start_ms=request.scene_start_ms,
+                        scene_end_ms=request.scene_end_ms,
+                        transcript_context=request.transcript_context,
+                        frames=frames,
+                    ),
+                    timeout_seconds=self._settings.video_understanding_timeout_seconds,
+                )
+                results.append((scene, normalize_result(result, self._settings), context))
+            return await self._persist_results(
+                business_id=business_id, job_id=job_id, results=tuple(results)
+            )
+        except VideoUnderstandingTransientError:
+            return await self._fail(
+                business_id, job_id, "VIDEO_UNDERSTANDING_PROVIDER_UNAVAILABLE", transient=True
+            )
+        except (VideoUnderstandingPermanentError, ProblemException):
+            return await self._fail(
+                business_id, job_id, "VIDEO_UNDERSTANDING_VALIDATION_FAILED", transient=False
+            )
+        except IntegrityError:
+            return await self._recover_duplicate_or_fail(business_id, job_id)
+        except SQLAlchemyError:
+            return await self._fail(
+                business_id, job_id, "VIDEO_UNDERSTANDING_PERSISTENCE_UNAVAILABLE", transient=True
+            )
+
+    async def _load_inputs(
+        self, *, business_id: UUID, job_id: UUID
+    ) -> tuple[list[MediaScene], tuple[TranscriptCandidate, ...] | None]:
+        async with self._session.begin():
+            job = await self._operations.get_job_for_update(business_id, job_id)
+            if job is None or job.job_type != "media.video_understanding":
+                raise self._not_found()
+            if job.status == JobStatus.SUCCEEDED:
+                return [], None
+            if job.status != JobStatus.RUNNING:
+                raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_JOB_STATE_INVALID")
+            asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
+            proxy = await self._media.get_ready_proxy(business_id, job.resource_id)
+            transcript = await self._media.get_transcript(business_id, job.resource_id, lock=True)
+            scenes = await self._media.list_scenes(business_id, job.resource_id)
+            if (
+                asset is None
+                or proxy is None
+                or transcript is None
+                or transcript.status not in {TranscriptStatus.COMPLETED, TranscriptStatus.NO_SPEECH}
+                or not scenes
+            ):
+                raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
+            if transcript.status == TranscriptStatus.NO_SPEECH:
+                return scenes, ()
+            segments = await self._media.list_transcript_segments(business_id, transcript.id)
+            return scenes, tuple(
+                TranscriptCandidate(
+                    start_ms=segment.start_ms,
+                    end_ms=segment.end_ms,
+                    text=segment.text,
+                    confidence=segment.confidence,
+                    speaker_label=segment.speaker_label,
+                )
+                for segment in segments
+            )
+
+    async def _persist_results(
+        self,
+        *,
+        business_id: UUID,
+        job_id: UUID,
+        results: tuple[tuple[MediaScene, VideoUnderstandingResult, str], ...],
+    ) -> BackgroundJob:
+        async with self._session.begin():
+            job = await self._operations.get_job_for_update(business_id, job_id)
+            if job is None or job.job_type != "media.video_understanding":
+                raise self._not_found()
+            if job.status == JobStatus.SUCCEEDED:
+                return job
+            if job.status != JobStatus.RUNNING or not results:
+                raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
+            expected_scenes = await self._media.list_scenes(business_id, job.resource_id)
+            if [scene.id for scene in expected_scenes] != [scene.id for scene, _, _ in results]:
+                raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
+            existing = await self._media.list_scene_understandings(business_id, job.resource_id)
+            if existing:
+                if {value.scene_id for value in existing} == {scene.id for scene, _, _ in results}:
+                    return await self._mark_succeeded(job)
+                raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_DUPLICATE_CONFLICT")
+            for scene, result, context in results:
+                self._media.add(
+                    MediaSceneUnderstanding(
+                        business_id=business_id,
+                        asset_id=job.resource_id,
+                        scene_id=scene.id,
+                        status=SceneUnderstandingStatus.COMPLETED,
+                        provider=result.provider,
+                        model_name=result.model_name,
+                        summary=result.summary,
+                        visual_description=result.visual_description,
+                        transcript_context=context,
+                        confidence=result.confidence,
+                        labels=list(result.labels),
+                        objects=list(result.objects),
+                        actions=list(result.actions),
+                        visible_text=list(result.visible_text),
+                        dominant_topics=list(result.dominant_topics),
+                        safety_flags=list(result.safety_flags),
+                        quality_signals=cast(dict[str, object], result.quality_signals or {}),
+                    )
+                )
+            await self._session.flush()
+            await self._mark_succeeded(job)
+            self._operations.add(
+                OutboxEvent(
+                    business_id=business_id,
+                    event_type="media.video_understanding.completed",
+                    aggregate_type="media_asset",
+                    aggregate_id=job.resource_id,
+                    payload={"job_id": str(job.id), "asset_id": str(job.resource_id)},
+                    correlation_id=job.correlation_id,
+                    status=OutboxStatus.PENDING,
+                    max_attempts=job.max_attempts,
+                    next_attempt_at=datetime.now(UTC),
+                )
+            )
+            return job
+
+    async def _recover_duplicate_or_fail(self, business_id: UUID, job_id: UUID) -> BackgroundJob:
+        async with self._session.begin():
+            job = await self._operations.get_job_for_update(business_id, job_id)
+            if job is None:
+                raise RuntimeError("video understanding job disappeared")
+            existing = await self._media.list_scene_understandings(business_id, job.resource_id)
+            scenes = await self._media.list_scenes(business_id, job.resource_id)
+            if existing and {value.scene_id for value in existing} == {
+                scene.id for scene in scenes
+            }:
+                return await self._mark_succeeded(job)
+        return await self._fail(
+            business_id, job_id, "VIDEO_UNDERSTANDING_PERSISTENCE_FAILED", transient=False
+        )
+
+    async def _mark_succeeded(self, job: BackgroundJob) -> BackgroundJob:
+        attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
+        if attempt is not None:
+            attempt.status = JobAttemptStatus.SUCCEEDED
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error_code = None
+            attempt.error_summary = None
+        job.status = JobStatus.SUCCEEDED
+        job.finished_at = datetime.now(UTC)
+        job.next_attempt_at = None
+        job.last_error_code = None
+        job.last_error_summary = None
+        return job
+
+    async def _fail(
+        self, business_id: UUID, job_id: UUID, code: str, *, transient: bool
+    ) -> BackgroundJob:
+        async with self._session.begin():
+            job = await self._operations.get_job_for_update(business_id, job_id)
+            if job is None:
+                raise RuntimeError("video understanding job disappeared")
+            if job.status == JobStatus.SUCCEEDED:
+                return job
+            attempt = await self._operations.get_attempt_for_update(job.id, job.attempt_count)
+            if attempt is not None and attempt.status == JobAttemptStatus.STARTED:
+                attempt.status = JobAttemptStatus.FAILED
+                attempt.finished_at = datetime.now(UTC)
+                attempt.error_code = code
+                attempt.error_summary = code
+            job.last_error_code = code
+            job.last_error_summary = code
+            job.finished_at = datetime.now(UTC)
+            if transient and job.attempt_count < job.max_attempts:
+                job.status = JobStatus.FAILED
+                job.next_attempt_at = datetime.now(UTC) + timedelta(
+                    seconds=min(2**job.attempt_count, 60)
+                )
+            else:
+                job.status = JobStatus.DEAD if transient else JobStatus.FAILED
+                job.next_attempt_at = None
+            return job
+
+    @staticmethod
+    def _not_found() -> ProblemException:
+        return ProblemException(
+            status=404,
+            code="TENANT_RESOURCE_NOT_FOUND",
+            title="Resource not found",
+            detail="The requested resource is not available.",
+        )

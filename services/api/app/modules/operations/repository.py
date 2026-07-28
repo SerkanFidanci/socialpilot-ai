@@ -102,6 +102,59 @@ class OperationsRepository:
     async def claim_next_scene_speech_job(self) -> BackgroundJob | None:
         return await self._claim_next_media_job("media.scene_speech_analysis")
 
+    async def claim_next_video_understanding_job(self) -> BackgroundJob | None:
+        return await self._claim_next_media_job("media.video_understanding")
+
+    async def create_video_understanding_job_if_absent(
+        self, value: BackgroundJob
+    ) -> tuple[BackgroundJob, bool]:
+        """Create the per-asset job once, relying on the partial unique index.
+
+        The caller uses the boolean to create the corresponding requested event
+        only for a newly created durable job.
+        """
+
+        statement = (
+            insert(BackgroundJob)
+            .values(
+                id=value.id,
+                business_id=value.business_id,
+                job_type=value.job_type,
+                resource_type=value.resource_type,
+                resource_id=value.resource_id,
+                status=value.status,
+                timeout_seconds=value.timeout_seconds,
+                attempt_count=value.attempt_count,
+                max_attempts=value.max_attempts,
+                correlation_id=value.correlation_id,
+                next_attempt_at=value.next_attempt_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["business_id", "job_type", "resource_type", "resource_id"],
+                index_where=text("job_type = 'media.video_understanding'"),
+            )
+            .returning(BackgroundJob.id)
+        )
+        created_id = await self._session.scalar(statement)
+        if created_id is not None:
+            created = await self.get_job_for_update(value.business_id, value.id)
+            if created is None:
+                raise RuntimeError("new video understanding job was not found")
+            return created, True
+        existing = await self._session.scalar(
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.business_id == value.business_id,
+                BackgroundJob.job_type == "media.video_understanding",
+                BackgroundJob.resource_type == value.resource_type,
+                BackgroundJob.resource_id == value.resource_id,
+            )
+            .with_for_update()
+        )
+        if existing is None:
+            raise RuntimeError("existing video understanding job was not found")
+        return existing, False
+
     async def lock_stale_running_jobs(
         self, *, business_id: UUID, limit: int
     ) -> list[BackgroundJob]:

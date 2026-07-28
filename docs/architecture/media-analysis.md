@@ -20,6 +20,16 @@ flowchart TB
 
 Workers use separate queues/resource profiles for ingest, media analysis, ASR, and VLM work. PostgreSQL job status controls eligibility; Redis/Celery is only delivery. Prerequisites are checked from durable state at execution, so an out-of-order message cannot advance the asset.
 
+The current video-understanding slice creates `media.video_understanding` and
+its requested outbox event in the same scene/speech-completion transaction. A
+tenant-scoped service locks one due job, verifies the READY proxy, scenes, and
+completed or `no_speech` transcript, then writes every scene understanding and
+the completion event atomically. Frame extraction and VLM invocation are still
+deterministic fake ports at this stage; real FFmpeg extraction, provider route
+selection, and Celery worker composition are deferred. The durable job timeout
+is separately configured and cannot be less than the combined frame/provider
+step timeouts.
+
 ## Technical-analysis contract
 
 `MediaProbePort` exposes verified container/stream facts: duration, container, codec, width, height, normalized rotation/aspect ratio, frame-rate numerator/denominator, video/audio stream presence, audio sample rate/channels, and bounded safe diagnostics. Original FFprobe output is diagnostic-only and must never become an API response or an audit payload.

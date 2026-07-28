@@ -221,6 +221,42 @@ class OperationsService:
         )
         return job
 
+    async def record_video_understanding(
+        self, *, business_id: UUID, asset_id: UUID, correlation_id: str
+    ) -> BackgroundJob:
+        """Create one durable VLM job/event pair for a completed scene/speech run."""
+
+        candidate = BackgroundJob(
+            id=uuid4(),
+            business_id=business_id,
+            job_type="media.video_understanding",
+            resource_type="media_asset",
+            resource_id=asset_id,
+            status=JobStatus.QUEUED,
+            timeout_seconds=self._settings.video_understanding_job_timeout_seconds,
+            attempt_count=0,
+            max_attempts=self._settings.video_understanding_max_attempts,
+            correlation_id=correlation_id,
+            next_attempt_at=datetime.now(UTC),
+        )
+        job, created = await self._repository.create_video_understanding_job_if_absent(candidate)
+        if not created:
+            return job
+        self._repository.add(
+            OutboxEvent(
+                business_id=business_id,
+                event_type="media.video_understanding.requested",
+                aggregate_type="media_asset",
+                aggregate_id=asset_id,
+                payload={"job_id": str(job.id), "asset_id": str(asset_id)},
+                correlation_id=correlation_id,
+                status=OutboxStatus.PENDING,
+                max_attempts=job.max_attempts,
+                next_attempt_at=datetime.now(UTC),
+            )
+        )
+        return job
+
 
 class JobStateService:
     """One central state-machine for durable job transitions."""
