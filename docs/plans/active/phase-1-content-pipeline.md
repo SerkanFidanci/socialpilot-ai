@@ -63,6 +63,8 @@ Acceptance criteria:
 - [x] Thumbnail and proxy records use generated tenant/asset keys and persist checksum, size, content type, and immutable ownership metadata.
 - [x] Unit and PostgreSQL integration tests cover real FFmpeg/FFprobe fixture processing, durable metadata/derivative records, technical job/outbox creation, and tenant-scoped job claims.
 
+Technical admission uses orientation-independent long/short-edge and total-pixel Settings limits. Proxy (1280x720) and thumbnail (640x640) output targets are independent from source admission, preserve aspect ratio, never upscale, and normalize proxy dimensions for codec compatibility. The bounded worker `/tmp` remains sized consistently with the current materialization and derivative limits.
+
 **1B implementation record — 2026-07-28:** Migration `0006_technical_media_analysis` adds tenant-scoped technical-analysis, technical-metadata, and derivative records plus a unique technical-analysis job constraint. A clean `video/mp4` ingest atomically schedules `media.technical_analysis` and its outbox event. The worker uses provider-neutral materialization/probe/derivative ports; generated local files are streamed into the storage port, whose persisted metadata must match before a derivative becomes `ready`. The test adapter stores files on disk without storage credentials. FFmpeg/FFprobe paths and duration, dimensions, pixel, and derivative-size limits are Settings-controlled. The worker profile is non-root, read-only, CPU/memory/PID-limited, and has a bounded writable `/tmp`. JPEG/PNG/audio uploads are intentionally not sent to FFmpeg in 1B. Container verification passed: `30 passed, 17 skipped` without PostgreSQL integration mode and `55 passed` with it enabled.
 
 ### 1C — Scene and speech analysis

@@ -106,10 +106,16 @@ def validate_technical_metadata(
         raise TechnicalPermanentError("TECHNICAL_DURATION_EXCEEDED")
     if metadata.width is None or metadata.height is None:
         raise TechnicalPermanentError("TECHNICAL_VIDEO_STREAM_REQUIRED")
+    # FFprobe reports encoded raster dimensions. Rotation is metadata only, and
+    # symmetric long/short edge validation intentionally yields the same policy
+    # for landscape and portrait media.
+    long_edge = max(metadata.width, metadata.height)
+    short_edge = min(metadata.width, metadata.height)
+    total_pixels = metadata.width * metadata.height
     if (
-        metadata.width > settings.media_max_width
-        or metadata.height > settings.media_max_height
-        or metadata.width * metadata.height > settings.media_max_total_pixels
+        long_edge > settings.media_max_long_edge
+        or short_edge > settings.media_max_short_edge
+        or total_pixels > settings.media_max_total_pixels
     ):
         raise TechnicalPermanentError("TECHNICAL_DIMENSIONS_EXCEEDED")
 
@@ -230,7 +236,7 @@ class FFmpegDerivativeAdapter(MediaDerivativePort):
                 "-i",
                 str(input_path),
                 "-vf",
-                self._scale_filter(),
+                self._thumbnail_scale_filter(),
                 "-frames:v",
                 "1",
                 str(thumbnail),
@@ -241,7 +247,7 @@ class FFmpegDerivativeAdapter(MediaDerivativePort):
                 "-i",
                 str(input_path),
                 "-vf",
-                self._scale_filter(),
+                self._proxy_scale_filter(),
                 "-c:v",
                 "libx264",
                 "-an",
@@ -269,9 +275,24 @@ class FFmpegDerivativeAdapter(MediaDerivativePort):
             self._generated("proxy", proxy, "video/mp4"),
         )
 
-    def _scale_filter(self) -> str:
+    def _proxy_scale_filter(self) -> str:
+        return self._scale_filter(
+            max_width=self._settings.media_proxy_max_long_edge,
+            max_height=self._settings.media_proxy_max_short_edge,
+        )
+
+    def _thumbnail_scale_filter(self) -> str:
+        return self._scale_filter(
+            max_width=self._settings.media_thumbnail_max_long_edge,
+            max_height=self._settings.media_thumbnail_max_short_edge,
+        )
+
+    @staticmethod
+    def _scale_filter(*, max_width: int, max_height: int) -> str:
+        """Bound an output box without upscaling and normalize dimensions for codecs."""
+
         return (
-            f"scale={self._settings.media_max_width}:{self._settings.media_max_height}:"
+            f"scale=w='min(iw,{max_width})':h='min(ih,{max_height})':"
             "force_original_aspect_ratio=decrease:force_divisible_by=2"
         )
 

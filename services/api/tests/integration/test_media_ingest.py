@@ -311,7 +311,7 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
             "-f",
             "lavfi",
             "-i",
-            "color=c=black:s=64x48:r=12",
+            "color=c=black:s=360x640:r=12",
             "-t",
             "1",
             "-c:v",
@@ -388,7 +388,7 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
             metadata, derivatives, technical_job, attempt = asyncio.run(stored_results())
         finally:
             asyncio.run(engine.dispose())
-        assert metadata is not None and metadata.width == 64 and metadata.height == 48
+        assert metadata is not None and metadata.width == 360 and metadata.height == 640
         assert {item.kind for item in derivatives} == {"thumbnail", "proxy"}
         assert all(item.sha256_checksum and item.byte_size for item in derivatives)
         assert technical_job is not None and technical_job.attempt_count == 1

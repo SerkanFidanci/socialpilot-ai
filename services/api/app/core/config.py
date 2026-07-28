@@ -40,9 +40,13 @@ class Settings(BaseSettings):
     media_ingest_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     media_ingest_max_attempts: int = Field(default=3, ge=1, le=10)
     media_max_duration_seconds: int = Field(default=3_600, ge=1, le=86_400)
-    media_max_width: int = Field(default=3_840, ge=1, le=16_384)
-    media_max_height: int = Field(default=2_160, ge=1, le=16_384)
+    media_max_long_edge: int = Field(default=3_840, ge=1, le=16_384)
+    media_max_short_edge: int = Field(default=2_160, ge=1, le=16_384)
     media_max_total_pixels: int = Field(default=8_294_400, ge=1, le=268_435_456)
+    media_proxy_max_long_edge: int = Field(default=1_280, ge=2, le=16_384)
+    media_proxy_max_short_edge: int = Field(default=720, ge=2, le=16_384)
+    media_thumbnail_max_long_edge: int = Field(default=640, ge=2, le=16_384)
+    media_thumbnail_max_short_edge: int = Field(default=640, ge=2, le=16_384)
     media_max_derivative_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
     scene_min_duration_ms: int = Field(default=500, ge=1, le=60_000)
     scene_max_count: int = Field(default=500, ge=1, le=10_000)
@@ -64,6 +68,10 @@ class Settings(BaseSettings):
         default=SecretStr("development-local-identity-key-not-for-production"),
         min_length=32,
     )
+    # Deprecated environment compatibility only. New deployments must use the
+    # orientation-independent long/short edge settings above.
+    media_max_width: int | None = Field(default=None, ge=1, le=16_384)
+    media_max_height: int | None = Field(default=None, ge=1, le=16_384)
 
     @field_validator("database_url")
     @classmethod
@@ -92,6 +100,34 @@ class Settings(BaseSettings):
         if not value.startswith("/") or "\x00" in value:
             raise ValueError("media binary paths must be absolute paths")
         return value
+
+    @model_validator(mode="after")
+    def normalize_legacy_media_dimensions(self) -> Settings:
+        """Map the former width/height pair to orientation-independent limits."""
+
+        legacy_fields = {"media_max_width", "media_max_height"}
+        current_fields = {"media_max_long_edge", "media_max_short_edge"}
+        has_legacy = bool(self.model_fields_set & legacy_fields)
+        has_current = bool(self.model_fields_set & current_fields)
+        if has_legacy and has_current:
+            raise ValueError(
+                "MEDIA_MAX_WIDTH/MEDIA_MAX_HEIGHT cannot be combined with "
+                "MEDIA_MAX_LONG_EDGE/MEDIA_MAX_SHORT_EDGE"
+            )
+        if has_legacy:
+            if self.media_max_width is None or self.media_max_height is None:
+                raise ValueError("MEDIA_MAX_WIDTH and MEDIA_MAX_HEIGHT must be provided together")
+            self.media_max_long_edge = max(self.media_max_width, self.media_max_height)
+            self.media_max_short_edge = min(self.media_max_width, self.media_max_height)
+        if self.media_max_short_edge > self.media_max_long_edge:
+            raise ValueError("MEDIA_MAX_SHORT_EDGE cannot exceed MEDIA_MAX_LONG_EDGE")
+        if self.media_proxy_max_short_edge > self.media_proxy_max_long_edge:
+            raise ValueError("MEDIA_PROXY_MAX_SHORT_EDGE cannot exceed MEDIA_PROXY_MAX_LONG_EDGE")
+        if self.media_thumbnail_max_short_edge > self.media_thumbnail_max_long_edge:
+            raise ValueError(
+                "MEDIA_THUMBNAIL_MAX_SHORT_EDGE cannot exceed MEDIA_THUMBNAIL_MAX_LONG_EDGE"
+            )
+        return self
 
     @model_validator(mode="after")
     def reject_local_only_production_urls(self) -> Settings:

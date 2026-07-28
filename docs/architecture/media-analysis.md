@@ -26,11 +26,14 @@ Workers use separate queues/resource profiles for ingest, media analysis, ASR, a
 
 `MediaDerivativePort` creates a recorded proxy, thumbnails/keyframes, waveform where required, and extracted audio. Every `media_variant` is immutable, carries a content checksum/size/type/provenance, and is stored in the asset's tenant namespace. The original is never overwritten.
 
+Technical admission validates FFprobe's encoded raster against `MEDIA_MAX_LONG_EDGE`, `MEDIA_MAX_SHORT_EDGE`, and `MEDIA_MAX_TOTAL_PIXELS`; it is deliberately orientation-independent, so landscape and portrait sources follow the same policy. Rotation is retained as metadata and does not change that admission decision. FFmpeg uses its normal autorotation behavior for derivatives, while the symmetric admission check remains invariant. Proxy and thumbnail targets are independent from source-admission limits: the default proxy bounds are 1280x720 and the thumbnail bounds are 640x640. FFmpeg preserves aspect ratio, never enlarges a source, and produces codec-safe even proxy dimensions (for example, a 1080x1920 source becomes approximately 404x720).
+
 ## Subprocess safety
 
 - Resolve fixed trusted executable paths; pass argument arrays to `exec`, never a shell command string.
 - Treat filenames, object metadata, subtitle/transcript text, and all media-embedded strings as data; they cannot select an executable, option, filter, path, or URL.
 - Materialize bounded input in a per-job restricted temporary directory; allow only controlled output paths; clean up in `finally` and on worker recovery.
+- The development worker's writable `/tmp` is capped at 512 MiB. Current default materialization (100 MiB), derivative (50 MiB), and extracted-audio (50 MiB) limits leave headroom for bounded concurrent files; deployments must increase the temporary-disk budget together with any of those limits.
 - Enforce process, wall-clock, CPU, memory, disk, open-file/output-size, and network limits. Workers run with least privilege and no host socket/credential mount.
 - Probe before expensive transforms, validate every output, and classify timeout/resource exhaustion separately from permanent malformed input.
 
