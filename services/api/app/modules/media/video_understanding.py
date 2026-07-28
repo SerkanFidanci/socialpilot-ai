@@ -11,7 +11,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from app.core.config import Settings
@@ -24,6 +24,14 @@ class VideoUnderstandingPermanentError(RuntimeError):
 
 class VideoUnderstandingTransientError(RuntimeError):
     """Raised for a retryable provider outage."""
+
+
+class FrameExtractionPermanentError(RuntimeError):
+    """Raised when an extracted frame is unsafe or cannot be validated."""
+
+
+class FrameExtractionTransientError(RuntimeError):
+    """Raised when bounded frame extraction can safely be retried."""
 
 
 type JsonPrimitive = str | int | float | bool | None
@@ -77,7 +85,13 @@ class FrameExtractionPort(Protocol):
     """Future frame extraction boundary, kept separate from AI providers."""
 
     async def extract(
-        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
+        self,
+        *,
+        request: VideoUnderstandingRequest,
+        source_path: Path,
+        workdir: Path,
+        timeout_seconds: int,
+        maximum_frames: int,
     ) -> tuple[FrameReference, ...]: ...
 
 
@@ -217,57 +231,6 @@ def normalize_result(
         safety_flags=safety_flags,
         quality_signals=quality_signals,
     )
-
-
-class FakeFrameExtractionAdapter(FrameExtractionPort):
-    """Deterministic test adapter; it never accesses a media file or FFmpeg."""
-
-    def __init__(self, frames: tuple[FrameReference, ...] = ()) -> None:
-        self._frames = frames
-
-    async def extract(
-        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
-    ) -> tuple[FrameReference, ...]:
-        if timeout_seconds < 1:
-            raise VideoUnderstandingPermanentError("FRAME_EXTRACTION_TIMEOUT_INVALID")
-        return self._frames or request.frames
-
-
-class FakeVideoUnderstandingAdapter(VideoUnderstandingPort):
-    """Deterministic fake for success and explicit error-path tests."""
-
-    def __init__(
-        self,
-        mode: Literal["success", "transient", "permanent", "invalid"] = "success",
-    ) -> None:
-        self._mode = mode
-
-    async def understand(
-        self, *, request: VideoUnderstandingRequest, timeout_seconds: int
-    ) -> VideoUnderstandingResult:
-        if timeout_seconds < 1:
-            raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_TIMEOUT_INVALID")
-        if self._mode == "transient":
-            raise VideoUnderstandingTransientError("VLM_UNAVAILABLE")
-        if self._mode == "permanent":
-            raise VideoUnderstandingPermanentError("VLM_REJECTED")
-        if self._mode == "invalid":
-            return VideoUnderstandingResult(
-                provider="fake-vlm",
-                model_name="deterministic",
-                summary="\x00",
-                visual_description="invalid output",
-                confidence=2.0,
-            )
-        return VideoUnderstandingResult(
-            provider="fake-vlm",
-            model_name="deterministic",
-            summary="Scene analyzed",
-            visual_description="Deterministic visual scene",
-            confidence=0.9,
-            labels=("scene",),
-            quality_signals={"frame_count": len(request.frames)},
-        )
 
 
 def _required_string(value: object) -> str:

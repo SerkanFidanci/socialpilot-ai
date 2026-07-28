@@ -240,7 +240,9 @@ Phase 1 is complete when an authorized uploaded media asset reliably reaches `re
 - [x] 1A: Define storage inspection, content inspection, malware ports and asset/job gate; add tenant/atomicity/security tests.
 - [x] 1B: Add hardened FFprobe and derivative processing with isolated worker controls and tests.
 - [x] 1C: Add scene/audio/ASR contracts, models, jobs, and test fixtures.
-- [ ] 1D: Add video-understanding routing, normalization, provenance, and provider-usage controls.
+- [ ] 1D: Video-understanding contracts, durable scheduling, tenant-scoped persistence, and
+  bounded FFmpeg JPEG frame extraction are implemented. Real VLM routing, worker composition,
+  provider usage/cost controls, and final slice acceptance remain pending.
 - [ ] 1E: Add analysis orchestration, reprocessing, cost limits, observability, and end-to-end quality checks.
 - [ ] Run slice-specific migrations, unit/contract/PostgreSQL tests, OpenAPI verification, Compose worker validation, lint, format, mypy, and security regression checks.
 - [ ] Move this plan to `docs/plans/completed/` only after every acceptance criterion is verified.

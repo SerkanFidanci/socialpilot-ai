@@ -55,3 +55,9 @@ including finalizing the open attempt with `JOB_TIMEOUT` and choosing retry or
 dead-letter from the durable attempt budget. Celery hard-timeout alignment and
 the composition root are intentionally deferred; no beat/reaper wiring is
 introduced by this slice.
+
+Frame-extraction timeout or executable availability is classified as a
+retryable video-understanding failure. Invalid source paths, invalid JPEG
+outputs, frame-size/dimension policy failures, and FFmpeg non-zero exits are
+terminal. In both paths the common job finalizer closes the durable attempt,
+so no `JobAttempt` or job remains `started`/`running` after an extraction error.

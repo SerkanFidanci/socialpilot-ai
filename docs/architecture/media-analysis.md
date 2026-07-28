@@ -28,7 +28,13 @@ the completion event atomically. Frame extraction and VLM invocation are still
 deterministic fake ports at this stage; real FFmpeg extraction, provider route
 selection, and Celery worker composition are deferred. The durable job timeout
 is separately configured and cannot be less than the combined frame/provider
-step timeouts.
+step timeouts. Frame extraction materializes the tenant-scoped READY proxy into
+a per-job temporary directory, invokes only the fixed absolute FFmpeg/FFprobe
+paths with argument arrays and bounded timeouts, and passes validated JPEG
+paths (never frame bytes) to the provider port. Frames are deterministic within
+each scene, stay within its time bounds, are capped per asset, and are removed
+with the temporary directory after the provider returns. The default 50 frames
+at 1 MiB each reserve no more than 50 MiB of the worker's 512 MiB `/tmp`.
 
 ## Technical-analysis contract
 

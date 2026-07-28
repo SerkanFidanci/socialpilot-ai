@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 from collections.abc import Generator
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,6 +15,12 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
+from app.infrastructure.media.fake_ingest import FakeMediaMaterializer
+from app.infrastructure.media.fake_video_understanding import (
+    FakeFrameExtractionAdapter,
+    FakeVideoUnderstandingAdapter,
+)
+from app.infrastructure.media.frame_extraction import FFmpegFrameExtractionAdapter
 from app.modules.businesses.models import Business
 from app.modules.identity.models import User
 from app.modules.media.models import (
@@ -27,10 +36,6 @@ from app.modules.media.models import (
     TranscriptStatus,
 )
 from app.modules.media.repository import MediaRepository
-from app.modules.media.video_understanding import (
-    FakeFrameExtractionAdapter,
-    FakeVideoUnderstandingAdapter,
-)
 from app.modules.media.video_understanding_service import (
     VideoUnderstandingSchedulingService,
     VideoUnderstandingService,
@@ -148,8 +153,9 @@ def test_fake_flow_persists_every_scene_context_and_completion_event() -> None:
             service = VideoUnderstandingService(
                 worker_session,
                 config(),
-                FakeFrameExtractionAdapter(),
-                FakeVideoUnderstandingAdapter(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
             )
             claimed = await service.claim_next()
             assert claimed is not None
@@ -182,6 +188,79 @@ def test_fake_flow_persists_every_scene_context_and_completion_event() -> None:
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_real_proxy_frames_persist_understandings_and_cleanup_workdir() -> None:
+    async def run() -> None:
+        session_factory = factory()
+        with TemporaryDirectory(prefix="video-understanding-fixture-") as temporary:
+            root = Path(temporary)
+            fixture = root / "portrait-proxy.mp4"
+            subprocess.run(
+                [
+                    "/usr/bin/ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=180x320:rate=24",
+                    "-t",
+                    "1",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(fixture),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            async with session_factory() as session:
+                async with session.begin():
+                    business_id, asset_id = await seed(session, scenes=2, transcript=True)
+                    proxy = await MediaRepository(session).get_ready_proxy(business_id, asset_id)
+                    assert proxy is not None
+                    job = await VideoUnderstandingSchedulingService(
+                        session, config()
+                    ).schedule_after_scene_speech(
+                        business_id=business_id, asset_id=asset_id, correlation_id="real-frames"
+                    )
+                    assert job is not None
+            materializer = FakeMediaMaterializer()
+            materializer.register_for_testing(
+                object_key=proxy.storage_object_key, fixture_path=fixture
+            )
+            async with session_factory() as worker:
+                service = VideoUnderstandingService(
+                    worker,
+                    config(),
+                    FFmpegFrameExtractionAdapter(config()),
+                    FakeVideoUnderstandingAdapter(config()),
+                    materializer,
+                )
+                claimed = await service.claim_next()
+                assert claimed is not None
+                assert (
+                    await service.process_claimed(
+                        business_id=business_id, job_id=claimed.id, workdir=root
+                    )
+                ).status == JobStatus.SUCCEEDED
+            assert not list(root.glob("video-understanding-*"))
+            async with session_factory() as session:
+                values = list(
+                    await session.scalars(
+                        select(MediaSceneUnderstanding).where(
+                            MediaSceneUnderstanding.business_id == business_id
+                        )
+                    )
+                )
+                assert len(values) == 2
+                assert all(value.quality_signals["frame_count"] == 3 for value in values)
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
 def test_no_speech_and_duplicate_delivery_complete_without_duplicate_records() -> None:
     async def run() -> None:
         session_factory = factory()
@@ -198,8 +277,9 @@ def test_no_speech_and_duplicate_delivery_complete_without_duplicate_records() -
             service = VideoUnderstandingService(
                 worker,
                 config(),
-                FakeFrameExtractionAdapter(),
-                FakeVideoUnderstandingAdapter(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
             )
             claimed = await service.claim_next()
             assert claimed is not None
@@ -232,7 +312,11 @@ def test_tenant_scoped_repository_cannot_cross_scene_proxy_or_understanding_boun
                 assert job is not None
         async with session_factory() as worker:
             service = VideoUnderstandingService(
-                worker, config(), FakeFrameExtractionAdapter(), FakeVideoUnderstandingAdapter()
+                worker,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
             )
             claimed = await service.claim_next()
             assert claimed is not None
@@ -271,8 +355,9 @@ def test_provider_errors_retry_then_dead_and_finalize_attempts() -> None:
                 service = VideoUnderstandingService(
                     worker,
                     config(),
-                    FakeFrameExtractionAdapter(),
-                    FakeVideoUnderstandingAdapter("transient"),
+                    FakeFrameExtractionAdapter(config()),
+                    FakeVideoUnderstandingAdapter(config(), "transient"),
+                    FakeMediaMaterializer(allow_missing_for_testing=True),
                 )
                 claimed = await service.claim_next()
                 assert claimed is not None
@@ -317,10 +402,18 @@ def test_concurrent_claim_allows_only_one_worker() -> None:
         async with session_factory() as first, session_factory() as second:
             claims = await asyncio.gather(
                 VideoUnderstandingService(
-                    first, config(), FakeFrameExtractionAdapter(), FakeVideoUnderstandingAdapter()
+                    first,
+                    config(),
+                    FakeFrameExtractionAdapter(config()),
+                    FakeVideoUnderstandingAdapter(config()),
+                    FakeMediaMaterializer(allow_missing_for_testing=True),
                 ).claim_next(),
                 VideoUnderstandingService(
-                    second, config(), FakeFrameExtractionAdapter(), FakeVideoUnderstandingAdapter()
+                    second,
+                    config(),
+                    FakeFrameExtractionAdapter(config()),
+                    FakeVideoUnderstandingAdapter(config()),
+                    FakeMediaMaterializer(allow_missing_for_testing=True),
                 ).claim_next(),
             )
             assert sum(value is not None for value in claims) == 1
@@ -345,8 +438,9 @@ def test_invalid_output_missing_proxy_and_stale_recovery_are_safe() -> None:
             invalid = VideoUnderstandingService(
                 worker,
                 config(),
-                FakeFrameExtractionAdapter(),
-                FakeVideoUnderstandingAdapter("invalid"),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config(), "invalid"),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
             )
             claimed = await invalid.claim_next()
             assert claimed is not None
@@ -368,7 +462,11 @@ def test_invalid_output_missing_proxy_and_stale_recovery_are_safe() -> None:
                 assert proxy_job is not None
         async with session_factory() as worker:
             missing = VideoUnderstandingService(
-                worker, config(), FakeFrameExtractionAdapter(), FakeVideoUnderstandingAdapter()
+                worker,
+                config(),
+                FakeFrameExtractionAdapter(config()),
+                FakeVideoUnderstandingAdapter(config()),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
             )
             claimed = await missing.claim_next()
             assert claimed is not None

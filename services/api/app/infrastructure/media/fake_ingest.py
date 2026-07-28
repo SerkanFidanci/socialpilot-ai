@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from app.modules.media.ingest import (
@@ -53,15 +54,25 @@ class FakeMalwareScanner(MalwareScanPort):
 class FakeMediaMaterializer:
     """Fixture-backed worker input adapter; it never exposes storage credentials."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, allow_missing_for_testing: bool = False) -> None:
         self._fixtures: dict[str, Path] = {}
+        self._allow_missing_for_testing = allow_missing_for_testing
 
     def register_for_testing(self, *, object_key: str, fixture_path: Path) -> None:
         self._fixtures[object_key] = fixture_path
 
     async def materialize(self, *, object_key: str, workdir: Path) -> Path:
-        del workdir
-        try:
-            return self._fixtures[object_key]
-        except KeyError as error:
-            raise TechnicalPermanentError("MATERIALIZATION_NOT_FOUND") from error
+        source = self._fixtures.get(object_key)
+        if source is None:
+            if not self._allow_missing_for_testing:
+                raise TechnicalPermanentError("MATERIALIZATION_NOT_FOUND")
+            workdir.mkdir(parents=True, exist_ok=True)
+            destination = workdir / "materialized.mp4"
+            destination.write_bytes(b"test-only-media")
+            return destination
+        if source.is_symlink() or not source.is_file():
+            raise TechnicalPermanentError("MATERIALIZATION_SOURCE_INVALID")
+        workdir.mkdir(parents=True, exist_ok=True)
+        destination = workdir / f"materialized{source.suffix.lower()}"
+        shutil.copyfile(source, destination)
+        return destination

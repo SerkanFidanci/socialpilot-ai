@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory, gettempdir
 from typing import cast
 from uuid import UUID
 
@@ -19,8 +21,15 @@ from app.modules.media.models import (
 )
 from app.modules.media.repository import MediaRepository
 from app.modules.media.scene_speech import TranscriptCandidate
+from app.modules.media.technical import (
+    MediaMaterializerPort,
+    TechnicalPermanentError,
+    TechnicalTransientError,
+)
 from app.modules.media.video_understanding import (
+    FrameExtractionPermanentError,
     FrameExtractionPort,
+    FrameExtractionTransientError,
     VideoUnderstandingPermanentError,
     VideoUnderstandingPort,
     VideoUnderstandingRequest,
@@ -69,9 +78,11 @@ class VideoUnderstandingService:
         settings: Settings,
         frame_extractor: FrameExtractionPort,
         provider: VideoUnderstandingPort,
+        materializer: MediaMaterializerPort | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
+        self._materializer = materializer
         self._frame_extractor = frame_extractor
         self._provider = provider
         self._media = MediaRepository(session)
@@ -102,53 +113,88 @@ class VideoUnderstandingService:
             )
             return job
 
-    async def process_claimed(self, *, business_id: UUID, job_id: UUID) -> BackgroundJob:
+    async def process_next(self, *, workdir: Path) -> BackgroundJob | None:
+        """Claim a job and keep materialized proxy/frames private to one temp directory."""
+
+        job = await self.claim_next()
+        if job is None:
+            return None
+        return await self.process_claimed(
+            business_id=job.business_id, job_id=job.id, workdir=workdir
+        )
+
+    async def process_claimed(
+        self, *, business_id: UUID, job_id: UUID, workdir: Path | None = None
+    ) -> BackgroundJob:
         """Complete the claimed asset job, leaving no attempt in STARTED state."""
 
         try:
-            scenes, transcript_segments = await self._load_inputs(
+            scenes, transcript_segments, proxy_object_key = await self._load_inputs(
                 business_id=business_id, job_id=job_id
             )
-            results: list[tuple[MediaScene, VideoUnderstandingResult, str]] = []
-            for scene in scenes:
-                context = build_transcript_context(
-                    scene_start_ms=scene.start_ms,
-                    scene_end_ms=scene.end_ms,
-                    segments=transcript_segments,
-                    maximum_chars=self._settings.video_understanding_max_transcript_context_chars,
+            if self._materializer is None:
+                raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_MATERIALIZER_REQUIRED")
+            with TemporaryDirectory(
+                prefix="video-understanding-", dir=workdir or Path(gettempdir())
+            ) as temporary:
+                temporary_path = Path(temporary)
+                proxy_path = await self._materializer.materialize(
+                    object_key=proxy_object_key, workdir=temporary_path
                 )
-                request = VideoUnderstandingRequest(
-                    asset_id=scene.asset_id,
-                    scene_id=scene.id,
-                    scene_start_ms=scene.start_ms,
-                    scene_end_ms=scene.end_ms,
-                    transcript_context=context,
-                    frames=(),
-                )
-                frames = await self._frame_extractor.extract(
-                    request=request,
-                    timeout_seconds=self._settings.frame_extraction_timeout_seconds,
-                )
-                result = await self._provider.understand(
-                    request=VideoUnderstandingRequest(
-                        asset_id=request.asset_id,
-                        scene_id=request.scene_id,
-                        scene_start_ms=request.scene_start_ms,
-                        scene_end_ms=request.scene_end_ms,
-                        transcript_context=request.transcript_context,
-                        frames=frames,
-                    ),
-                    timeout_seconds=self._settings.video_understanding_timeout_seconds,
-                )
-                results.append((scene, normalize_result(result, self._settings), context))
+                results: list[tuple[MediaScene, VideoUnderstandingResult, str]] = []
+                remaining_frames = self._settings.video_understanding_max_frames_per_asset
+                for scene in scenes:
+                    context = build_transcript_context(
+                        scene_start_ms=scene.start_ms,
+                        scene_end_ms=scene.end_ms,
+                        segments=transcript_segments,
+                        maximum_chars=self._settings.video_understanding_max_transcript_context_chars,
+                    )
+                    request = VideoUnderstandingRequest(
+                        asset_id=scene.asset_id,
+                        scene_id=scene.id,
+                        scene_start_ms=scene.start_ms,
+                        scene_end_ms=scene.end_ms,
+                        transcript_context=context,
+                        frames=(),
+                    )
+                    frames = await self._frame_extractor.extract(
+                        request=request,
+                        source_path=proxy_path,
+                        workdir=temporary_path,
+                        timeout_seconds=self._settings.frame_extraction_timeout_seconds,
+                        maximum_frames=remaining_frames,
+                    )
+                    remaining_frames -= len(frames)
+                    result = await self._provider.understand(
+                        request=VideoUnderstandingRequest(
+                            asset_id=request.asset_id,
+                            scene_id=request.scene_id,
+                            scene_start_ms=request.scene_start_ms,
+                            scene_end_ms=request.scene_end_ms,
+                            transcript_context=request.transcript_context,
+                            frames=frames,
+                        ),
+                        timeout_seconds=self._settings.video_understanding_timeout_seconds,
+                    )
+                    results.append((scene, normalize_result(result, self._settings), context))
             return await self._persist_results(
                 business_id=business_id, job_id=job_id, results=tuple(results)
             )
-        except VideoUnderstandingTransientError:
+        except (
+            VideoUnderstandingTransientError,
+            FrameExtractionTransientError,
+            TechnicalTransientError,
+        ):
             return await self._fail(
                 business_id, job_id, "VIDEO_UNDERSTANDING_PROVIDER_UNAVAILABLE", transient=True
             )
-        except (VideoUnderstandingPermanentError, ProblemException):
+        except (
+            VideoUnderstandingPermanentError,
+            FrameExtractionPermanentError,
+            TechnicalPermanentError,
+            ProblemException,
+        ):
             return await self._fail(
                 business_id, job_id, "VIDEO_UNDERSTANDING_VALIDATION_FAILED", transient=False
             )
@@ -161,13 +207,13 @@ class VideoUnderstandingService:
 
     async def _load_inputs(
         self, *, business_id: UUID, job_id: UUID
-    ) -> tuple[list[MediaScene], tuple[TranscriptCandidate, ...] | None]:
+    ) -> tuple[list[MediaScene], tuple[TranscriptCandidate, ...] | None, str]:
         async with self._session.begin():
             job = await self._operations.get_job_for_update(business_id, job_id)
             if job is None or job.job_type != "media.video_understanding":
                 raise self._not_found()
             if job.status == JobStatus.SUCCEEDED:
-                return [], None
+                return [], None, ""
             if job.status != JobStatus.RUNNING:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_JOB_STATE_INVALID")
             asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
@@ -183,17 +229,21 @@ class VideoUnderstandingService:
             ):
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
             if transcript.status == TranscriptStatus.NO_SPEECH:
-                return scenes, ()
+                return scenes, (), proxy.storage_object_key
             segments = await self._media.list_transcript_segments(business_id, transcript.id)
-            return scenes, tuple(
-                TranscriptCandidate(
-                    start_ms=segment.start_ms,
-                    end_ms=segment.end_ms,
-                    text=segment.text,
-                    confidence=segment.confidence,
-                    speaker_label=segment.speaker_label,
-                )
-                for segment in segments
+            return (
+                scenes,
+                tuple(
+                    TranscriptCandidate(
+                        start_ms=segment.start_ms,
+                        end_ms=segment.end_ms,
+                        text=segment.text,
+                        confidence=segment.confidence,
+                        speaker_label=segment.speaker_label,
+                    )
+                    for segment in segments
+                ),
+                proxy.storage_object_key,
             )
 
     async def _persist_results(

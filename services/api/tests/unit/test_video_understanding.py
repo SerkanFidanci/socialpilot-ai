@@ -10,11 +10,14 @@ from pydantic import ValidationError
 from sqlalchemy import UniqueConstraint
 
 from app.core.config import Settings
+from app.infrastructure.media.fake_video_understanding import (
+    FakeFrameExtractionAdapter,
+    FakeVideoUnderstandingAdapter,
+)
 from app.modules.media.models import MediaSceneUnderstanding, SceneUnderstandingStatus
 from app.modules.media.scene_speech import TranscriptCandidate
 from app.modules.media.video_understanding import (
-    FakeFrameExtractionAdapter,
-    FakeVideoUnderstandingAdapter,
+    FrameExtractionPermanentError,
     FrameReference,
     VideoUnderstandingPermanentError,
     VideoUnderstandingRequest,
@@ -144,10 +147,14 @@ async def test_fake_adapters_are_deterministic_and_do_not_process_media() -> Non
         byte_size=128,
         content_type="image/jpeg",
     )
-    assert await FakeFrameExtractionAdapter((frame,)).extract(
-        request=resolved_request, timeout_seconds=1
+    assert await FakeFrameExtractionAdapter(settings(), (frame,)).extract(
+        request=resolved_request,
+        source_path=Path("/tmp/proxy.mp4"),
+        workdir=Path("/tmp"),
+        timeout_seconds=1,
+        maximum_frames=1,
     ) == (frame,)
-    provider = FakeVideoUnderstandingAdapter()
+    provider = FakeVideoUnderstandingAdapter(settings())
     assert await provider.understand(
         request=resolved_request, timeout_seconds=1
     ) == await provider.understand(request=resolved_request, timeout_seconds=1)
@@ -157,14 +164,14 @@ async def test_fake_adapters_are_deterministic_and_do_not_process_media() -> Non
 async def test_fake_provider_exposes_transient_permanent_and_invalid_cases() -> None:
     resolved_request = request()
     with pytest.raises(VideoUnderstandingTransientError, match="VLM_UNAVAILABLE"):
-        await FakeVideoUnderstandingAdapter("transient").understand(
+        await FakeVideoUnderstandingAdapter(settings(), "transient").understand(
             request=resolved_request, timeout_seconds=1
         )
     with pytest.raises(VideoUnderstandingPermanentError, match="VLM_REJECTED"):
-        await FakeVideoUnderstandingAdapter("permanent").understand(
+        await FakeVideoUnderstandingAdapter(settings(), "permanent").understand(
             request=resolved_request, timeout_seconds=1
         )
-    invalid = await FakeVideoUnderstandingAdapter("invalid").understand(
+    invalid = await FakeVideoUnderstandingAdapter(settings(), "invalid").understand(
         request=resolved_request, timeout_seconds=1
     )
     with pytest.raises(VideoUnderstandingPermanentError, match="VIDEO_UNDERSTANDING_INVALID"):
@@ -174,14 +181,28 @@ async def test_fake_provider_exposes_transient_permanent_and_invalid_cases() -> 
 @pytest.mark.asyncio
 async def test_fake_adapters_require_positive_step_timeouts() -> None:
     resolved_request = request()
-    with pytest.raises(VideoUnderstandingPermanentError, match="FRAME_EXTRACTION_TIMEOUT_INVALID"):
-        await FakeFrameExtractionAdapter().extract(request=resolved_request, timeout_seconds=0)
+    with pytest.raises(FrameExtractionPermanentError, match="FRAME_EXTRACTION_TIMEOUT_INVALID"):
+        await FakeFrameExtractionAdapter(settings()).extract(
+            request=resolved_request,
+            source_path=Path("/tmp/proxy.mp4"),
+            workdir=Path("/tmp"),
+            timeout_seconds=0,
+            maximum_frames=1,
+        )
     with pytest.raises(
         VideoUnderstandingPermanentError, match="VIDEO_UNDERSTANDING_TIMEOUT_INVALID"
     ):
-        await FakeVideoUnderstandingAdapter().understand(
+        await FakeVideoUnderstandingAdapter(settings()).understand(
             request=resolved_request, timeout_seconds=0
         )
+
+
+def test_fake_adapters_are_rejected_in_production() -> None:
+    production = settings().model_copy(update={"app_env": "production"})
+    with pytest.raises(RuntimeError, match="not allowed in production"):
+        FakeFrameExtractionAdapter(production)
+    with pytest.raises(RuntimeError, match="not allowed in production"):
+        FakeVideoUnderstandingAdapter(production)
 
 
 def test_job_timeout_covers_combined_frame_and_provider_steps() -> None:

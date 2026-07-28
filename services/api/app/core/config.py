@@ -12,6 +12,7 @@ PCM_WAV_HEADER_BYTES = 44
 PCM_AUDIO_SAMPLE_RATE_HZ = 16_000
 PCM_AUDIO_CHANNELS = 1
 PCM_AUDIO_BYTES_PER_SAMPLE = 2
+WORKER_TMPFS_BYTES = 512 * 1024 * 1024
 
 
 class Settings(BaseSettings):
@@ -74,6 +75,12 @@ class Settings(BaseSettings):
     video_understanding_max_json_depth: int = Field(default=5, ge=1, le=20)
     video_understanding_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     frame_extraction_timeout_seconds: int = Field(default=30, ge=1, le=3_600)
+    video_understanding_frames_per_scene: int = Field(default=3, ge=1, le=20)
+    video_understanding_max_frames_per_asset: int = Field(default=50, ge=1, le=200)
+    video_understanding_max_frame_width: int = Field(default=1_280, ge=1, le=4_096)
+    video_understanding_max_frame_height: int = Field(default=720, ge=1, le=4_096)
+    video_understanding_max_frame_bytes: int = Field(default=1_048_576, ge=1, le=16_777_216)
+    video_understanding_frame_boundary_offset_ms: int = Field(default=100, ge=0, le=60_000)
     video_understanding_timeout_seconds: int = Field(default=60, ge=1, le=3_600)
     video_understanding_job_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
     video_understanding_max_attempts: int = Field(default=3, ge=1, le=10)
@@ -172,6 +179,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 "VIDEO_UNDERSTANDING_JOB_TIMEOUT_SECONDS cannot be below the combined "
                 "frame extraction and provider timeouts"
+            )
+        if self.frame_extraction_timeout_seconds >= self.video_understanding_job_timeout_seconds:
+            raise ValueError(
+                "FRAME_EXTRACTION_TIMEOUT_SECONDS must be below the video understanding job timeout"
+            )
+        if (
+            self.video_understanding_frames_per_scene
+            > self.video_understanding_max_frames_per_asset
+        ):
+            raise ValueError(
+                "VIDEO_UNDERSTANDING_FRAMES_PER_SCENE cannot exceed the asset frame limit"
+            )
+        if (
+            self.video_understanding_max_frame_width > self.media_proxy_max_long_edge
+            or self.video_understanding_max_frame_height > self.media_proxy_max_long_edge
+        ):
+            raise ValueError("video-understanding frame dimensions must fit proxy admission limits")
+        if (
+            self.video_understanding_max_frames_per_asset * self.video_understanding_max_frame_bytes
+            > WORKER_TMPFS_BYTES // 2
+        ):
+            raise ValueError(
+                "video-understanding frame limits exceed the worker temporary-disk budget"
             )
         return self
 
