@@ -99,6 +99,9 @@ class OperationsRepository:
     async def claim_next_technical_analysis_job(self) -> BackgroundJob | None:
         return await self._claim_next_media_job("media.technical_analysis")
 
+    async def claim_next_scene_speech_job(self) -> BackgroundJob | None:
+        return await self._claim_next_media_job("media.scene_speech_analysis")
+
     async def _claim_next_media_job(self, job_type: str) -> BackgroundJob | None:
         now = datetime.now(UTC)
         statement = (

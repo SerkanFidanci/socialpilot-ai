@@ -31,3 +31,11 @@ def media_technical_analysis() -> dict[str, str]:
 
     logger.info("media_technical_analysis_triggered")
     return {"status": "triggered"}
+
+
+@celery_app.task(name="socialpilot.media.scene_speech_analysis")  # type: ignore[misc]
+def media_scene_speech_analysis() -> dict[str, str]:
+    """Durable trigger; worker composition injects scene and ASR ports."""
+
+    logger.info("media_scene_speech_analysis_triggered")
+    return {"status": "triggered"}

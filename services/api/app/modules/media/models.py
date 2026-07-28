@@ -51,6 +51,13 @@ class MediaDerivativeStatus(StrEnum):
     FAILED = "failed"
 
 
+class TranscriptStatus(StrEnum):
+    COMPLETED = "completed"
+    NO_SPEECH = "no_speech"
+    FAILED = "failed"
+    DEAD = "dead"
+
+
 class UploadSessionStatus(StrEnum):
     CREATED = "created"
     COMPLETED = "completed"
@@ -292,3 +299,87 @@ class MediaDerivative(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MediaScene(Base):
+    __tablename__ = "media_scenes"
+    __table_args__ = (
+        UniqueConstraint("business_id", "asset_id", "scene_index", name="uq_media_scene_index"),
+        Index("ix_media_scenes_business_asset", "business_id", "asset_id"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_assets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scene_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Transcript(Base):
+    __tablename__ = "transcripts"
+    __table_args__ = (
+        UniqueConstraint("business_id", "asset_id", name="uq_transcript_asset"),
+        Index("ix_transcripts_business_asset", "business_id", "asset_id"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_assets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    language: Mapped[str] = mapped_column(String(16), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    full_text: Mapped[str] = mapped_column(String(20_000), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[TranscriptStatus] = mapped_column(
+        Enum(
+            TranscriptStatus,
+            name="transcript_status",
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class TranscriptSegment(Base):
+    __tablename__ = "transcript_segments"
+    __table_args__ = (
+        UniqueConstraint("transcript_id", "segment_index", name="uq_transcript_segment_index"),
+        Index("ix_transcript_segments_transcript_index", "transcript_id", "segment_index"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    transcript_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("transcripts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(String(4_000), nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    speaker_label: Mapped[str | None] = mapped_column(String(128), nullable=True)

@@ -190,6 +190,37 @@ class OperationsService:
         )
         return job
 
+    async def record_scene_speech_analysis(
+        self, *, business_id: UUID, asset_id: UUID, correlation_id: str
+    ) -> BackgroundJob:
+        job = BackgroundJob(
+            business_id=business_id,
+            job_type="media.scene_speech_analysis",
+            resource_type="media_asset",
+            resource_id=asset_id,
+            status=JobStatus.QUEUED,
+            timeout_seconds=self._settings.audio_extraction_timeout_seconds,
+            max_attempts=self._settings.media_ingest_max_attempts,
+            correlation_id=correlation_id,
+            next_attempt_at=datetime.now(UTC),
+        )
+        self._repository.add(job)
+        await self._session.flush()
+        self._repository.add(
+            OutboxEvent(
+                business_id=business_id,
+                event_type="media.scene_speech.requested",
+                aggregate_type="media_asset",
+                aggregate_id=asset_id,
+                payload={"job_id": str(job.id), "asset_id": str(asset_id)},
+                correlation_id=correlation_id,
+                status=OutboxStatus.PENDING,
+                max_attempts=job.max_attempts,
+                next_attempt_at=datetime.now(UTC),
+            )
+        )
+        return job
+
 
 class JobStateService:
     """One central state-machine for durable job transitions."""

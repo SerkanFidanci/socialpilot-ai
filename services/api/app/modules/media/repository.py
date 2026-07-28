@@ -16,6 +16,7 @@ from app.modules.media.models import (
     MediaTechnicalAnalysis,
     MediaTechnicalMetadata,
     MediaUploadSession,
+    Transcript,
 )
 
 
@@ -95,6 +96,28 @@ class MediaRepository:
             MediaDerivative.asset_id == asset_id,
         )
         return list((await self._session.scalars(statement)).all())
+
+    async def get_derivative(
+        self, business_id: UUID, asset_id: UUID, kind: str, *, lock: bool = False
+    ) -> MediaDerivative | None:
+        statement = select(MediaDerivative).where(
+            MediaDerivative.business_id == business_id,
+            MediaDerivative.asset_id == asset_id,
+            MediaDerivative.kind == kind,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(MediaDerivative | None, await self._session.scalar(statement))
+
+    async def get_transcript(
+        self, business_id: UUID, asset_id: UUID, *, lock: bool = False
+    ) -> Transcript | None:
+        statement = select(Transcript).where(
+            Transcript.business_id == business_id, Transcript.asset_id == asset_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(Transcript | None, await self._session.scalar(statement))
 
     def add(
         self, value: MediaAsset | MediaUploadSession | MediaIngestInspection | MediaMalwareScan

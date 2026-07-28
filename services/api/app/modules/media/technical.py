@@ -41,6 +41,7 @@ from app.modules.operations.models import (
     OutboxStatus,
 )
 from app.modules.operations.repository import OperationsRepository
+from app.modules.operations.service import OperationsService
 
 
 @dataclass(frozen=True)
@@ -466,6 +467,11 @@ class TechnicalAnalysisService:
                 attempt.status = JobAttemptStatus.SUCCEEDED
                 attempt.finished_at = datetime.now(UTC)
             job.status, job.finished_at = JobStatus.SUCCEEDED, datetime.now(UTC)
+            await OperationsService(self._session, self._settings).record_scene_speech_analysis(
+                business_id=business_id,
+                asset_id=asset.id,
+                correlation_id=job.correlation_id,
+            )
             self._session.add(
                 OutboxEvent(
                     business_id=business_id,

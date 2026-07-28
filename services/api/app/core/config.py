@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     media_max_height: int = Field(default=2_160, ge=1, le=16_384)
     media_max_total_pixels: int = Field(default=8_294_400, ge=1, le=268_435_456)
     media_max_derivative_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
+    scene_min_duration_ms: int = Field(default=500, ge=1, le=60_000)
+    scene_max_count: int = Field(default=500, ge=1, le=10_000)
+    audio_extraction_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    media_max_extracted_audio_bytes: int = Field(default=52_428_800, ge=1, le=2_147_483_647)
+    asr_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    transcript_max_segment_count: int = Field(default=2_000, ge=1, le=20_000)
+    transcript_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
     media_allowed_mime_types: tuple[str, ...] = (

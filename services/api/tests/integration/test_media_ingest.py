@@ -21,6 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import Settings
 from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.infrastructure.media.fake_ingest import FakeMalwareScanner, FakeMediaMaterializer
+from app.infrastructure.media.fake_scene_speech import (
+    FakeAudioExtractor,
+    FakeSceneDetector,
+    FakeSpeechToText,
+)
 from app.infrastructure.storage.fake import FakeMultipartStorage
 from app.main import create_app
 from app.modules.media.ingest import MediaIngestService
@@ -31,9 +36,13 @@ from app.modules.media.models import (
     MediaAssetStatus,
     MediaDerivative,
     MediaMalwareScan,
+    MediaScene,
     MediaTechnicalMetadata,
+    Transcript,
+    TranscriptStatus,
 )
 from app.modules.media.repository import MediaRepository
+from app.modules.media.scene_speech import SceneSpeechAnalysisService
 from app.modules.media.storage import StoredObjectMetadata
 from app.modules.media.technical import (
     FFmpegDerivativeAdapter,
@@ -191,6 +200,26 @@ async def process_technical_next(
                 storage,
             )
             return await service.process_next(workdir=workdir)
+    finally:
+        await engine.dispose()
+
+
+async def process_scene_speech_next(
+    *, materializer: FakeMediaMaterializer, storage: FakeMultipartStorage, workdir: Path
+) -> BackgroundJob | None:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as session:
+            return await SceneSpeechAnalysisService(
+                session,
+                config(),
+                materializer,
+                FakeSceneDetector(),
+                FakeAudioExtractor(),
+                FakeSpeechToText(),
+                storage,
+            ).process_next(workdir=workdir)
     finally:
         await engine.dispose()
 
@@ -371,6 +400,37 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
             )
             assert persisted_metadata.byte_size == derivative.byte_size
             assert storage.persisted_file_for_testing(derivative.storage_object_key).is_file()
+
+        proxy = next(item for item in derivatives if item.kind == "proxy")
+        materializer.register_for_testing(
+            object_key=proxy.storage_object_key,
+            fixture_path=storage.persisted_file_for_testing(proxy.storage_object_key),
+        )
+        scene_job = asyncio.run(
+            process_scene_speech_next(materializer=materializer, storage=storage, workdir=tmp_path)
+        )
+        assert scene_job is not None and scene_job.status == JobStatus.SUCCEEDED
+
+        async def no_speech_result() -> tuple[TranscriptStatus | None, int]:
+            scene_engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with AsyncSession(scene_engine) as session:
+                    transcript = await session.scalar(
+                        select(Transcript).where(Transcript.asset_id == asset["id"])
+                    )
+                    scene_count = int(
+                        await session.scalar(
+                            select(text("count(*)"))
+                            .select_from(MediaScene)
+                            .where(MediaScene.asset_id == asset["id"])
+                        )
+                        or 0
+                    )
+                    return transcript.status if transcript else None, scene_count
+            finally:
+                await scene_engine.dispose()
+
+        assert asyncio.run(no_speech_result()) == (TranscriptStatus.NO_SPEECH, 1)
 
         async def cross_tenant_records_are_hidden() -> None:
             engine = create_async_engine(os.environ["DATABASE_URL"])

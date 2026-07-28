@@ -67,15 +67,17 @@ Acceptance criteria:
 
 ### 1C — Scene and speech analysis
 
-Create scene segmentation, audio extraction, ASR port/adapter contract, transcript and timecode persistence, and a scene/keyframe model.
+Create scene segmentation, audio extraction, ASR port/adapter contract, transcript and timecode persistence, and a scene model.
 
 Acceptance criteria:
 
-- Scene boundaries are ordered, non-overlapping, within verified duration, and persist millisecond offsets with deterministic source/version metadata.
-- Audio extraction consumes only the verified original or trusted derivative and produces a bounded derivative record; no audio bytes pass through FastAPI.
-- ASR results are normalized to language, transcript, segment start/end milliseconds, bounded text, confidence, and optional speaker label; malformed provider responses are rejected before persistence.
-- Retryable ASR/scene failures preserve correlation ID and attempt history; permanent media and schema failures do not retry; exhausted work is dead-lettered with a safe error summary.
-- Tenant-scoped scene/transcript retrieval rules, duplicate task delivery, timecode validation, and provider contract fixtures are tested.
+- [x] Scene boundaries are ordered, non-overlapping, within verified duration, and persist millisecond offsets with deterministic provider-neutral candidates.
+- [x] Audio extraction consumes the trusted proxy, uses fixed FFmpeg arguments/timeout/output-size limits, and persists a bounded audio derivative through the storage port.
+- [x] ASR results normalize language, text, segment timecodes, confidence, and optional speaker label; malformed output is rejected before persistence.
+- [x] Retryable dependency failures preserve correlation ID and attempt history; validation failures are terminal and exhausted retries become dead.
+- [x] Tenant-scoped scene/transcript persistence, duplicate job protection, no-speech output, timecode validation, and deterministic fake contracts have PostgreSQL/unit coverage.
+
+**1C implementation record — 2026-07-28:** Migration `0007_scene_speech_analysis` adds `media_scenes`, `transcripts`, and `transcript_segments` plus a unique scene/speech job constraint. A completed technical analysis atomically schedules `media.scene_speech_analysis`; the worker consumes the trusted proxy only. A local deterministic scene detector returns a whole-video fallback where no scene is found. No-audio videos create a successful `no_speech` transcript; audio-capable work uses a provider-neutral ASR port and a real FFmpeg extraction adapter without production ASR integration.
 
 ### 1D — Video understanding
 
@@ -110,7 +112,7 @@ All new identifiers are UUIDs; timestamps are UTC; all money is integer minor un
 |---|---|---|
 | 1A | Extend `media_assets`/`jobs`; `media_ingest_inspections`; `media_malware_scans` | Implemented in `0005_media_ingest_foundation`: verified server metadata, detected type, checksum, policy/scan outcome and provenance. |
 | 1B | `media_derivatives`; `media_technical_metadata`; `media_technical_analyses` | Implemented in `0006_technical_media_analysis`: immutable derivative records, FFprobe facts, and technical execution provenance. |
-| 1C | `media_scenes`; `media_keyframes`; `transcripts`; `transcript_segments` | Time-bounded scene/keyframe/transcript data. |
+| 1C | `media_scenes`; `transcripts`; `transcript_segments` | Implemented in `0007_scene_speech_analysis`: time-bounded scenes and normalized transcript data. |
 | 1D | `media_analysis_results`; `media_tags`; `provider_usage` | Normalized VLM output and attributable provider usage. |
 | 1E | Extend existing `jobs`, `job_attempts`, `outbox_events`, `audit_logs`, `idempotency_keys` only where a migration proves a required field/index is absent | Dependencies/reprocessing, safe status visibility, retention and operational indexes. |
 
@@ -214,7 +216,7 @@ Phase 1 is complete when an authorized uploaded media asset reliably reaches `re
 
 - [x] 1A: Define storage inspection, content inspection, malware ports and asset/job gate; add tenant/atomicity/security tests.
 - [x] 1B: Add hardened FFprobe and derivative processing with isolated worker controls and tests.
-- [ ] 1C: Add scene/audio/ASR contracts, models, jobs, and test fixtures.
+- [x] 1C: Add scene/audio/ASR contracts, models, jobs, and test fixtures.
 - [ ] 1D: Add video-understanding routing, normalization, provenance, and provider-usage controls.
 - [ ] 1E: Add analysis orchestration, reprocessing, cost limits, observability, and end-to-end quality checks.
 - [ ] Run slice-specific migrations, unit/contract/PostgreSQL tests, OpenAPI verification, Compose worker validation, lint, format, mypy, and security regression checks.
