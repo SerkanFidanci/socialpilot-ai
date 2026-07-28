@@ -85,6 +85,15 @@ Acceptance criteria:
 
 Define the `VideoUnderstandingPort`, route capabilities by policy, persist normalized scene descriptions/tags/classifications, and record provider usage without provider payload leakage.
 
+**1D-A1 implementation record — 2026-07-29:** Migration `0009_video_understanding`
+adds the tenant-scoped `media_scene_understandings` record with a
+`(business_id, scene_id)` uniqueness constraint and tenant-first asset lookup index.
+The current slice defines provider-neutral frame/request/result DTOs, deterministic
+test fakes, strict transcript overlap context, and bounded safe output
+normalization. It intentionally does not yet create a job, outbox event, worker
+claim, provider route decision, persistence service, or provider-usage record;
+those remain in the next 1D slice.
+
 Acceptance criteria:
 
 - Requests use an adapter-controlled short-lived resource reference for the approved proxy or selected scene, never a client URL or the original provider credential.
@@ -117,7 +126,7 @@ All new identifiers are UUIDs; timestamps are UTC; all money is integer minor un
 | 1A | Extend `media_assets`/`jobs`; `media_ingest_inspections`; `media_malware_scans` | Implemented in `0005_media_ingest_foundation`: verified server metadata, detected type, checksum, policy/scan outcome and provenance. |
 | 1B | `media_derivatives`; `media_technical_metadata`; `media_technical_analyses` | Implemented in `0006_technical_media_analysis`: immutable derivative records, FFprobe facts, and technical execution provenance. |
 | 1C | `media_scenes`; `transcripts`; `transcript_segments` | Implemented in `0007_scene_speech_analysis`: time-bounded scenes and normalized transcript data. |
-| 1D | `media_analysis_results`; `media_tags`; `provider_usage` | Normalized VLM output and attributable provider usage. |
+| 1D | `media_scene_understandings`; later `provider_usage` and any separately justified tag/result projections | `0009_video_understanding` establishes normalized tenant-scoped scene output; routing, job/outbox composition, persistence flow, and attributable usage remain pending. |
 | 1E | Extend existing `jobs`, `job_attempts`, `outbox_events`, `audit_logs`, `idempotency_keys` only where a migration proves a required field/index is absent | Dependencies/reprocessing, safe status visibility, retention and operational indexes. |
 
 `media_processing_runs` is the analysis-run aggregate; it gives reprocessing a distinct provenance boundary rather than overwriting an earlier result. Unique constraints and indexes must be tenant-first and include the applicable asset/run/capability identity. No migration is created by this planning task.

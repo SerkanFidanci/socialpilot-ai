@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -64,6 +65,13 @@ class MediaDerivativeStatus(StrEnum):
 class TranscriptStatus(StrEnum):
     COMPLETED = "completed"
     NO_SPEECH = "no_speech"
+    FAILED = "failed"
+    DEAD = "dead"
+
+
+class SceneUnderstandingStatus(StrEnum):
+    PENDING = "pending"
+    COMPLETED = "completed"
     FAILED = "failed"
     DEAD = "dead"
 
@@ -393,3 +401,55 @@ class TranscriptSegment(Base):
     text: Mapped[str] = mapped_column(String(4_000), nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
     speaker_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class MediaSceneUnderstanding(Base):
+    __tablename__ = "media_scene_understandings"
+    __table_args__ = (
+        UniqueConstraint("business_id", "scene_id", name="uq_scene_understanding_scene"),
+        Index("ix_scene_understandings_business_asset", "business_id", "asset_id"),
+        Index("ix_scene_understandings_asset", "asset_id"),
+    )
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_assets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scene_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("media_scenes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[SceneUnderstandingStatus] = mapped_column(
+        Enum(
+            SceneUnderstandingStatus,
+            name="scene_understanding_status",
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    visual_description: Mapped[str] = mapped_column(Text, nullable=False)
+    transcript_context: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    labels: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    objects: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    actions: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    visible_text: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    dominant_topics: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    safety_flags: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    quality_signals: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

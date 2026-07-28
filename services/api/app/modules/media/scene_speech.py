@@ -185,7 +185,7 @@ def normalize_transcript(
     previous_end = 0
     normalized: list[TranscriptCandidate] = []
     for segment in result.segments:
-        normalized_text = _normalize_transcript_text(segment.text)
+        normalized_text = normalize_safe_text(segment.text)
         if (
             segment.start_ms < 0
             or segment.end_ms <= segment.start_ms
@@ -212,7 +212,7 @@ def normalize_transcript(
     return normalized_segments
 
 
-def _normalize_transcript_text(value: str) -> str:
+def normalize_safe_text(value: str) -> str:
     """Accept ordinary spaces/newlines while rejecting PostgreSQL-unsafe controls."""
 
     normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
