@@ -49,6 +49,17 @@ class MediaRepository:
             statement = statement.with_for_update()
         return cast(MediaUploadSession | None, await self._session.scalar(statement))
 
+    async def get_upload_session_for_asset(
+        self, business_id: UUID, asset_id: UUID
+    ) -> MediaUploadSession | None:
+        """Return the asset's upload session; `uq_media_upload_session_asset` allows only one."""
+
+        statement = select(MediaUploadSession).where(
+            MediaUploadSession.business_id == business_id,
+            MediaUploadSession.asset_id == asset_id,
+        )
+        return cast(MediaUploadSession | None, await self._session.scalar(statement))
+
     async def get_inspection(
         self, business_id: UUID, asset_id: UUID, *, lock: bool = False
     ) -> MediaIngestInspection | None:

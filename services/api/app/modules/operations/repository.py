@@ -209,6 +209,21 @@ class OperationsRepository:
         )
         return cast(BackgroundJob | None, await self._session.scalar(statement))
 
+    async def list_jobs_for_resource(
+        self, business_id: UUID, resource_id: UUID
+    ) -> list[BackgroundJob]:
+        """Return every durable job for one tenant-scoped resource, oldest request first."""
+
+        statement = (
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.business_id == business_id,
+                BackgroundJob.resource_id == resource_id,
+            )
+            .order_by(BackgroundJob.requested_at, BackgroundJob.id)
+        )
+        return list((await self._session.scalars(statement)).all())
+
     async def get_attempt_for_update(self, job_id: UUID, attempt_number: int) -> JobAttempt | None:
         statement = (
             select(JobAttempt)

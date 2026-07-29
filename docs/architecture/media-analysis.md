@@ -80,6 +80,38 @@ transcript text, provider text, object keys, or signed URLs. An impossible
 combination (no analyzed scenes, or more analyzed than total) raises
 `VIDEO_UNDERSTANDING_COVERAGE_INVALID` instead of emitting a misleading event.
 
+## Client processing summary
+
+`GET /v1/businesses/{business_id}/media/{asset_id}/processing-summary` returns the whole
+pipeline in one tenant-scoped read so a client screen needs no per-stage fan-out. The
+route delegates to `ProcessingSummaryService`, which authorizes through the media module
+(`MEDIA_READ`) and reads only durable records — it runs no provider work and writes
+nothing.
+
+`current_step` is derived in strict pipeline order — `uploading`, `uploaded`,
+`security_check`, `technical_analysis`, `scene_speech_analysis`, `video_understanding`,
+`completed`, or `failed` — from asset/ingest status, technical status, transcript and
+scene presence, and the video-understanding job outcome.
+
+`terminal_failure_code` is set only for states no retry can leave: a rejected or
+quarantined asset, a rejected or `dead` ingest, a blocking scan verdict, a `dead` stage
+record, or a `dead` job. A `failed` job keeps a due `next_attempt_at`, so it is reported
+as still in progress rather than terminal.
+
+Coverage is recomputed from the persisted service-authoritative `analysis_mode` of each
+scene understanding rather than read from the completion outbox event, so a read API does
+not depend on transport state. If any stored mode cannot be parsed, coverage is omitted
+instead of guessed. Results are returned in scene-index order, because understandings
+written in one transaction share a `created_at` and would otherwise be ordered by a
+random UUID tie-break.
+
+The response carries no `storage_object_key`, `storage_upload_id`, `storage_etag`, signed
+URL, or credential, and it exposes only the service-authoritative quality signals rather
+than the raw provider dictionary. Transcript and provider text are returned to the
+authorized caller but never logged. Collections are bounded by
+`PROCESSING_SUMMARY_MAX_ITEMS` with explicit `*_truncated` flags; cursor pagination is a
+later concern.
+
 ## Technical-analysis contract
 
 `MediaProbePort` exposes verified container/stream facts: duration, container, codec, width, height, normalized rotation/aspect ratio, frame-rate numerator/denominator, video/audio stream presence, audio sample rate/channels, and bounded safe diagnostics. Original FFprobe output is diagnostic-only and must never become an API response or an audit payload.

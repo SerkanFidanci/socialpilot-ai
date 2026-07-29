@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     celery_beat_outbox_interval_seconds: int = Field(default=10, ge=1, le=3_600)
     celery_beat_media_drain_interval_seconds: int = Field(default=30, ge=1, le=3_600)
     celery_beat_recovery_interval_seconds: int = Field(default=60, ge=1, le=3_600)
+    # Bounded page size for the aggregate processing summary until cursor pagination lands.
+    processing_summary_max_items: int = Field(default=500, ge=1, le=2_000)
     media_max_bytes: int = Field(default=104_857_600, gt=0, le=2_147_483_647)
     media_max_parts: int = Field(default=100, ge=1, le=1_000)
     media_upload_session_ttl_seconds: int = Field(default=900, ge=60, le=3_600)

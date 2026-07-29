@@ -189,6 +189,49 @@
         "title": "CompletedPartRequest",
         "type": "object"
       },
+      "CoverageResponse": {
+        "properties": {
+          "analyzed_scene_count": {
+            "title": "Analyzed Scene Count",
+            "type": "integer"
+          },
+          "coverage": {
+            "title": "Coverage",
+            "type": "string"
+          },
+          "frame_backed_scene_count": {
+            "title": "Frame Backed Scene Count",
+            "type": "integer"
+          },
+          "no_context_scene_count": {
+            "title": "No Context Scene Count",
+            "type": "integer"
+          },
+          "skipped_scene_count": {
+            "title": "Skipped Scene Count",
+            "type": "integer"
+          },
+          "total_scene_count": {
+            "title": "Total Scene Count",
+            "type": "integer"
+          },
+          "transcript_only_scene_count": {
+            "title": "Transcript Only Scene Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_scene_count",
+          "analyzed_scene_count",
+          "skipped_scene_count",
+          "coverage",
+          "frame_backed_scene_count",
+          "transcript_only_scene_count",
+          "no_context_scene_count"
+        ],
+        "title": "CoverageResponse",
+        "type": "object"
+      },
       "CreateBusinessRequest": {
         "additionalProperties": false,
         "properties": {
@@ -281,6 +324,18 @@
         "title": "IngestStatus",
         "type": "string"
       },
+      "JobStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "dead"
+        ],
+        "title": "JobStatus",
+        "type": "string"
+      },
       "LiveHealthResponse": {
         "description": "Response for process-only liveness.",
         "properties": {
@@ -301,6 +356,16 @@
         ],
         "title": "LiveHealthResponse",
         "type": "object"
+      },
+      "MalwareScanStatus": {
+        "enum": [
+          "clean",
+          "infected",
+          "unavailable",
+          "indeterminate"
+        ],
+        "title": "MalwareScanStatus",
+        "type": "string"
       },
       "MeResponse": {
         "properties": {
@@ -484,6 +549,164 @@
         "title": "ProblemDetails",
         "type": "object"
       },
+      "ProcessingStep": {
+        "description": "The client-visible pipeline position, ordered as the screens present it.",
+        "enum": [
+          "uploading",
+          "uploaded",
+          "security_check",
+          "technical_analysis",
+          "scene_speech_analysis",
+          "video_understanding",
+          "completed",
+          "failed"
+        ],
+        "title": "ProcessingStep",
+        "type": "string"
+      },
+      "ProcessingSummaryResponse": {
+        "properties": {
+          "asset": {
+            "$ref": "#/components/schemas/AssetResponse"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_step": {
+            "$ref": "#/components/schemas/ProcessingStep"
+          },
+          "detected_content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected Content Type"
+          },
+          "ingest": {
+            "$ref": "#/components/schemas/StageResponse"
+          },
+          "malware_scan_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MalwareScanStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scene_speech": {
+            "$ref": "#/components/schemas/StageResponse"
+          },
+          "scenes": {
+            "items": {
+              "$ref": "#/components/schemas/SceneResponse"
+            },
+            "title": "Scenes",
+            "type": "array"
+          },
+          "scenes_truncated": {
+            "title": "Scenes Truncated",
+            "type": "boolean"
+          },
+          "technical": {
+            "$ref": "#/components/schemas/StageResponse"
+          },
+          "technical_metadata": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TechnicalMetadataResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Failure Code"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TranscriptResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transcript_segments": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegmentResponse"
+            },
+            "title": "Transcript Segments",
+            "type": "array"
+          },
+          "transcript_segments_truncated": {
+            "title": "Transcript Segments Truncated",
+            "type": "boolean"
+          },
+          "understandings": {
+            "items": {
+              "$ref": "#/components/schemas/UnderstandingResponse"
+            },
+            "title": "Understandings",
+            "type": "array"
+          },
+          "understandings_truncated": {
+            "title": "Understandings Truncated",
+            "type": "boolean"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/UploadSummaryResponse"
+          },
+          "video_understanding": {
+            "$ref": "#/components/schemas/StageResponse"
+          }
+        },
+        "required": [
+          "asset",
+          "upload",
+          "detected_content_type",
+          "malware_scan_status",
+          "ingest",
+          "technical",
+          "technical_metadata",
+          "scene_speech",
+          "video_understanding",
+          "scenes",
+          "scenes_truncated",
+          "transcript",
+          "transcript_segments",
+          "transcript_segments_truncated",
+          "understandings",
+          "understandings_truncated",
+          "coverage",
+          "current_step",
+          "terminal_failure_code"
+        ],
+        "title": "ProcessingSummaryResponse",
+        "type": "object"
+      },
       "ReadyHealthResponse": {
         "description": "Response for safe dependency readiness information.",
         "properties": {
@@ -506,6 +729,45 @@
           "dependencies"
         ],
         "title": "ReadyHealthResponse",
+        "type": "object"
+      },
+      "SceneResponse": {
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "scene_index": {
+            "title": "Scene Index",
+            "type": "integer"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "scene_index",
+          "start_ms",
+          "end_ms",
+          "duration_ms",
+          "confidence"
+        ],
+        "title": "SceneResponse",
         "type": "object"
       },
       "SessionResponse": {
@@ -544,6 +806,441 @@
           "parts"
         ],
         "title": "SessionResponse",
+        "type": "object"
+      },
+      "StageResponse": {
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "job_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "safe_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safe Error Code"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "safe_error_code",
+          "job_status",
+          "attempt_count",
+          "max_attempts",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "StageResponse",
+        "type": "object"
+      },
+      "TechnicalMetadataResponse": {
+        "properties": {
+          "audio_channel_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Channel Count"
+          },
+          "audio_codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Codec"
+          },
+          "audio_sample_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Sample Rate"
+          },
+          "bit_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bit Rate"
+          },
+          "container_format": {
+            "title": "Container Format",
+            "type": "string"
+          },
+          "display_aspect_ratio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Aspect Ratio"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "file_size": {
+            "title": "File Size",
+            "type": "integer"
+          },
+          "frame_rate_denominator": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Rate Denominator"
+          },
+          "frame_rate_numerator": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Rate Numerator"
+          },
+          "has_audio": {
+            "title": "Has Audio",
+            "type": "boolean"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "rotation_degrees": {
+            "title": "Rotation Degrees",
+            "type": "integer"
+          },
+          "stream_count": {
+            "title": "Stream Count",
+            "type": "integer"
+          },
+          "video_codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Codec"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "container_format",
+          "duration_ms",
+          "file_size",
+          "video_codec",
+          "width",
+          "height",
+          "display_aspect_ratio",
+          "frame_rate_numerator",
+          "frame_rate_denominator",
+          "bit_rate",
+          "rotation_degrees",
+          "has_audio",
+          "audio_codec",
+          "audio_sample_rate",
+          "audio_channel_count",
+          "stream_count"
+        ],
+        "title": "TechnicalMetadataResponse",
+        "type": "object"
+      },
+      "TranscriptResponse": {
+        "properties": {
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "full_text": {
+            "title": "Full Text",
+            "type": "string"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "language",
+          "duration_ms",
+          "full_text",
+          "provider",
+          "status"
+        ],
+        "title": "TranscriptResponse",
+        "type": "object"
+      },
+      "TranscriptSegmentResponse": {
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "segment_index": {
+            "title": "Segment Index",
+            "type": "integer"
+          },
+          "speaker_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Label"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "segment_index",
+          "start_ms",
+          "end_ms",
+          "text",
+          "confidence",
+          "speaker_label"
+        ],
+        "title": "TranscriptSegmentResponse",
+        "type": "object"
+      },
+      "UnderstandingResponse": {
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "analysis_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Mode"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "dominant_topics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dominant Topics",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "model_name": {
+            "title": "Model Name",
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Objects",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "safety_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Safety Flags",
+            "type": "array"
+          },
+          "scene_id": {
+            "format": "uuid",
+            "title": "Scene Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "transcript_context": {
+            "title": "Transcript Context",
+            "type": "string"
+          },
+          "visible_text": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Visible Text",
+            "type": "array"
+          },
+          "visual_description": {
+            "title": "Visual Description",
+            "type": "string"
+          },
+          "visual_input_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Input Available"
+          }
+        },
+        "required": [
+          "id",
+          "scene_id",
+          "status",
+          "provider",
+          "model_name",
+          "summary",
+          "visual_description",
+          "transcript_context",
+          "confidence",
+          "labels",
+          "objects",
+          "actions",
+          "visible_text",
+          "dominant_topics",
+          "safety_flags",
+          "analysis_mode",
+          "visual_input_available"
+        ],
+        "title": "UnderstandingResponse",
         "type": "object"
       },
       "UpdateBusinessRequest": {
@@ -625,6 +1322,64 @@
         ],
         "title": "UploadSessionStatus",
         "type": "string"
+      },
+      "UploadSummaryResponse": {
+        "description": "Upload session state only; the storage upload identifier is never exposed.",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "expected_part_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Part Count"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadSessionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "expected_part_count",
+          "expires_at",
+          "completed_at"
+        ],
+        "title": "UploadSummaryResponse",
+        "type": "object"
       },
       "UserStatus": {
         "enum": [
@@ -1909,6 +2664,125 @@
           }
         ],
         "summary": "Asset",
+        "tags": [
+          "media"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/media/{asset_id}/processing-summary": {
+      "get": {
+        "description": "Return one tenant-scoped read of the whole analysis pipeline for a client screen.",
+        "operationId": "processing_summary_v1_businesses__business_id__media__asset_id__processing_summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Processing Summary",
         "tags": [
           "media"
         ]
