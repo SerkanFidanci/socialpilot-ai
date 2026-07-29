@@ -32,6 +32,10 @@
 
 - [Local Development](runbooks/local-development.md)
 
+## Applications
+
+- [Mobile Analysis Demo](../apps/mobile/README.md)
+
 ## Generated Contracts
 
 - [OpenAPI Schema](generated/openapi.json)
