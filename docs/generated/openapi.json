@@ -270,7 +270,13 @@
       },
       "IngestStatus": {
         "enum": [
-          "pending"
+          "pending",
+          "validating",
+          "scanning",
+          "ready_for_analysis",
+          "rejected",
+          "failed",
+          "dead"
         ],
         "title": "IngestStatus",
         "type": "string"
@@ -334,7 +340,9 @@
       "MediaAssetStatus": {
         "enum": [
           "uploading",
-          "uploaded"
+          "uploaded",
+          "rejected",
+          "quarantined"
         ],
         "title": "MediaAssetStatus",
         "type": "string"

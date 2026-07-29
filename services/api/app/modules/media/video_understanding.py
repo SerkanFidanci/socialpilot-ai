@@ -1,17 +1,18 @@
 """Provider-neutral video-understanding contracts and pure safety rules.
 
-This module intentionally contains no persistence, job, or FFmpeg orchestration.
-Those responsibilities belong to the next Phase 1D slice.
+This module intentionally contains no persistence, job, or FFmpeg orchestration;
+`video_understanding_service` owns those responsibilities.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from app.core.config import Settings
@@ -36,6 +37,85 @@ class FrameExtractionTransientError(RuntimeError):
 
 type JsonPrimitive = str | int | float | bool | None
 type JsonValue = JsonPrimitive | list[JsonValue] | dict[str, JsonValue]
+
+SERVICE_AUTHORITATIVE_QUALITY_SIGNALS: frozenset[str] = frozenset(
+    {
+        "visual_input_available",
+        "analysis_mode",
+        "coverage",
+        "total_scene_count",
+        "analyzed_scene_count",
+        "skipped_scene_count",
+        "frame_backed_scene_count",
+        "transcript_only_scene_count",
+        "no_context_scene_count",
+    }
+)
+"""Quality-signal keys only this service may assert; provider copies are discarded."""
+
+
+class SceneAnalysisMode(StrEnum):
+    """Service-decided analysis mode; a provider can neither select nor report it."""
+
+    VISUAL = "visual"
+    VISUAL_AND_TRANSCRIPT = "visual_and_transcript"
+    TRANSCRIPT_ONLY = "transcript_only"
+    NO_CONTEXT = "no_context"
+
+    @classmethod
+    def decide(cls, *, has_frames: bool, has_transcript_context: bool) -> SceneAnalysisMode:
+        if has_frames:
+            return cls.VISUAL_AND_TRANSCRIPT if has_transcript_context else cls.VISUAL
+        return cls.TRANSCRIPT_ONLY if has_transcript_context else cls.NO_CONTEXT
+
+    @property
+    def visual_input_available(self) -> bool:
+        return self in {SceneAnalysisMode.VISUAL, SceneAnalysisMode.VISUAL_AND_TRANSCRIPT}
+
+
+@dataclass(frozen=True)
+class SceneCoverageReport:
+    """Server-calculated completion coverage; carries counts only, never analysis text."""
+
+    total_scene_count: int
+    analyzed_scene_count: int
+    skipped_scene_count: int
+    coverage: Literal["full", "partial"]
+    frame_backed_scene_count: int
+    transcript_only_scene_count: int
+    no_context_scene_count: int
+
+    def as_event_payload(self) -> dict[str, JsonValue]:
+        return {
+            "total_scene_count": self.total_scene_count,
+            "analyzed_scene_count": self.analyzed_scene_count,
+            "skipped_scene_count": self.skipped_scene_count,
+            "coverage": self.coverage,
+            "frame_backed_scene_count": self.frame_backed_scene_count,
+            "transcript_only_scene_count": self.transcript_only_scene_count,
+            "no_context_scene_count": self.no_context_scene_count,
+        }
+
+
+def build_scene_coverage_report(
+    *, total_scene_count: int, modes: Sequence[SceneAnalysisMode]
+) -> SceneCoverageReport:
+    """Derive coverage from service-decided modes so provider output cannot influence it."""
+
+    analyzed_scene_count = len(modes)
+    if analyzed_scene_count < 1 or total_scene_count < analyzed_scene_count:
+        raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_COVERAGE_INVALID")
+    return SceneCoverageReport(
+        total_scene_count=total_scene_count,
+        analyzed_scene_count=analyzed_scene_count,
+        skipped_scene_count=total_scene_count - analyzed_scene_count,
+        coverage="full" if analyzed_scene_count == total_scene_count else "partial",
+        frame_backed_scene_count=sum(mode.visual_input_available for mode in modes),
+        transcript_only_scene_count=sum(
+            mode is SceneAnalysisMode.TRANSCRIPT_ONLY for mode in modes
+        ),
+        no_context_scene_count=sum(mode is SceneAnalysisMode.NO_CONTEXT for mode in modes),
+    )
 
 
 @dataclass(frozen=True)
@@ -233,6 +313,24 @@ def normalize_result(
     )
 
 
+def apply_service_analysis_signals(
+    result: VideoUnderstandingResult, *, mode: SceneAnalysisMode, settings: Settings
+) -> VideoUnderstandingResult:
+    """Stamp the authoritative mode and cap confidence when no visual input was used.
+
+    Call this only on a `normalize_result` output, which has already discarded any
+    provider-supplied copy of these keys.
+    """
+
+    signals: dict[str, JsonValue] = dict(result.quality_signals or {})
+    signals["visual_input_available"] = mode.visual_input_available
+    signals["analysis_mode"] = mode.value
+    confidence = result.confidence
+    if not mode.visual_input_available:
+        confidence = min(confidence, settings.video_understanding_nonvisual_max_confidence)
+    return replace(result, confidence=confidence, quality_signals=signals)
+
+
 def _required_string(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("provider field is not a string")
@@ -278,11 +376,22 @@ def _normalize_string_list(
 def _normalize_quality_signals(
     value: dict[str, JsonValue], settings: Settings
 ) -> dict[str, JsonValue]:
+    """Discard service-authoritative keys so a provider cannot assert coverage or visual input.
+
+    Filtering happens after key normalization, so a provider cannot smuggle a reserved
+    key past the check by encoding it differently.
+    """
+
     normalized = _normalize_json_value(value)
     if not isinstance(normalized, dict):  # Defensive guard for the recursive normalizer.
         raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_INVALID")
-    _validate_json_limits(normalized, settings)
-    return normalized
+    retained = {
+        key: item
+        for key, item in normalized.items()
+        if key not in SERVICE_AUTHORITATIVE_QUALITY_SIGNALS
+    }
+    _validate_json_limits(retained, settings)
+    return retained
 
 
 def _normalize_json_value(value: JsonValue) -> JsonValue:

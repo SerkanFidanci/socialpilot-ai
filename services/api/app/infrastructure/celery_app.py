@@ -25,6 +25,34 @@ def create_celery_app(settings: Settings) -> Celery:
         task_soft_time_limit=settings.celery_task_soft_time_limit_seconds,
         worker_prefetch_multiplier=1,
         task_acks_late=True,
+        # Pin the Celery 6 default explicitly so worker startup logs no deprecation warning.
+        broker_connection_retry_on_startup=True,
+        beat_schedule={
+            "dispatch-outbox": {
+                "task": "operations.outbox.dispatch",
+                "schedule": settings.celery_beat_outbox_interval_seconds,
+            },
+            "drain-ingest": {
+                "task": "media.ingest.drain",
+                "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
+            "drain-technical": {
+                "task": "media.technical_analysis.drain",
+                "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
+            "drain-scene-speech": {
+                "task": "media.scene_speech_analysis.drain",
+                "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
+            "drain-video-understanding": {
+                "task": "media.video_understanding.drain",
+                "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
+            "recover-stale-jobs": {
+                "task": "operations.recovery.drain",
+                "schedule": settings.celery_beat_recovery_interval_seconds,
+            },
+        },
     )
     return application
 

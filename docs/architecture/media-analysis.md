@@ -24,9 +24,9 @@ The current video-understanding slice creates `media.video_understanding` and
 its requested outbox event in the same scene/speech-completion transaction. A
 tenant-scoped service locks one due job, verifies the READY proxy, scenes, and
 completed or `no_speech` transcript, then writes every scene understanding and
-the completion event atomically. Frame extraction and VLM invocation are still
-deterministic fake ports at this stage; real FFmpeg extraction, provider route
-selection, and Celery worker composition are deferred. The durable job timeout
+the completion event atomically. VLM invocation is still a deterministic fake
+port at this stage and provider route selection remains deferred; real FFmpeg
+frame extraction and Celery worker composition are wired. The durable job timeout
 is separately configured and cannot be less than the combined frame/provider
 step timeouts. Frame extraction materializes the tenant-scoped READY proxy into
 a per-job temporary directory, invokes only the fixed absolute FFmpeg/FFprobe
@@ -41,10 +41,44 @@ provider timeout and persistence margin. On asset-budget exhaustion later scenes
 use an empty frame tuple for transcript-only or safe no-context analysis; this
 is not a retry condition.
 
-When visual-frame budget is exhausted, the service—not the provider—writes the
-authoritative `visual_input_available=false` and `analysis_mode` quality signals.
-Transcript-only and no-context results receive a deterministic confidence cap, so
-provider output cannot represent them as full visual analysis.
+### Service-authoritative quality signals
+
+The service, never the provider, decides how a scene was analyzed. For each scene
+it derives a `SceneAnalysisMode` from its own inputs — whether frames were
+extracted and whether transcript context exists — yielding `visual`,
+`visual_and_transcript`, `transcript_only`, or `no_context`. That mode is what
+stamps `visual_input_available` and `analysis_mode`, and a non-visual mode applies
+a deterministic confidence cap so provider output cannot represent a frameless
+result as full visual analysis.
+
+Provider output is untrusted data. `normalize_result` discards any provider-supplied
+copy of a service-authoritative quality-signal key
+(`SERVICE_AUTHORITATIVE_QUALITY_SIGNALS`: `visual_input_available`, `analysis_mode`,
+and every coverage key) before the DTO reaches the domain model, consistent with how
+unknown provider fields are discarded. Filtering happens after key normalization, so
+a reserved key cannot be smuggled through alternate encoding. A provider may still
+report its own diagnostic signals, such as `frame_count`.
+
+### Completion coverage
+
+The `media.video_understanding.completed` event carries server-calculated coverage
+derived from the recorded per-scene modes, not from the returned quality-signal
+dictionary — so provider output cannot influence a single count:
+
+| Field | Meaning |
+| --- | --- |
+| `total_scene_count` | every persisted scene for the asset |
+| `analyzed_scene_count` | scenes inside the supported scope that were analyzed |
+| `skipped_scene_count` | `total - analyzed`, from deterministic scope capping |
+| `coverage` | `full` when analyzed equals total, otherwise `partial` |
+| `frame_backed_scene_count` | scenes analyzed with real visual frames |
+| `transcript_only_scene_count` | frameless scenes with transcript context |
+| `no_context_scene_count` | frameless scenes without transcript context |
+
+The payload holds integer counts and the coverage label only. It never includes
+transcript text, provider text, object keys, or signed URLs. An impossible
+combination (no analyzed scenes, or more analyzed than total) raises
+`VIDEO_UNDERSTANDING_COVERAGE_INVALID` instead of emitting a misleading event.
 
 ## Technical-analysis contract
 

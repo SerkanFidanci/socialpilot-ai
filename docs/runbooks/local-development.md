@@ -33,10 +33,40 @@ python -m ruff format --check .
 python -m mypy .
 ```
 
-With local Compose services running, execute the container suite (including the opt-in Alembic integration test):
+With local Compose services running, execute the container suite (including the opt-in PostgreSQL and Redis integration tests):
+
+```powershell
+docker compose stop celery-worker celery-beat
+```
 
 ```powershell
 docker compose exec -T -e RUN_INTEGRATION_TESTS=1 api pytest
+```
+
+Stop `celery-worker` and `celery-beat` first. Integration tests share the development database, and beat-scheduled drains run every few seconds, so a live worker would claim the fixtures' jobs and dispatch their outbox events before the assertions run. A dedicated test database is a Phase 1E concern.
+
+## Run workers and beat
+
+Both live in the `worker` Compose profile, so plain `docker compose up -d` leaves them out:
+
+```powershell
+docker compose --profile worker up -d
+```
+
+Beat is a separate read-only service, never a worker `-B` flag, and development assumes exactly one beat replica. Confirm the worker registered every task and that beat is ticking:
+
+```powershell
+docker compose exec -T celery-worker celery -A app.infrastructure.celery_app inspect registered
+```
+
+```powershell
+docker compose logs --tail=40 celery-beat
+```
+
+Worker and beat containers bake their source into the image, so rebuild them after changing `services/api`:
+
+```powershell
+docker compose --profile worker up -d --build celery-worker celery-beat
 ```
 
 ## Run migrations

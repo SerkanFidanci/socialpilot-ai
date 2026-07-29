@@ -126,9 +126,42 @@ failure transactions require the same `RUNNING` job, attempt number, and
 **1D worker composition record — 2026-07-29:** Celery now runs bounded durable
 drain tasks through a process-local composition context. PostgreSQL remains the
 only job truth and each drain iteration uses a fresh session; task payloads carry
-no trusted tenant/job identity. Beat and a concrete outbox-to-Celery publisher
-remain deferred. Framesless analysis writes service-authoritative quality signals
-and a capped non-visual confidence.
+no trusted tenant/job identity. Frameless analysis writes service-authoritative
+quality signals and a capped non-visual confidence.
+
+**1D Celery orchestration record — 2026-07-30:** The Celery orchestration slice is
+complete.
+
+- *Completion coverage.* `media.video_understanding.completed` exposes
+  `total_scene_count`, `analyzed_scene_count`, `skipped_scene_count`,
+  `frame_backed_scene_count`, `transcript_only_scene_count`,
+  `no_context_scene_count`, and `full`/`partial` coverage. Counts are derived from
+  the service-decided per-scene `SceneAnalysisMode`, not from returned
+  quality signals, and the payload carries integer counts only — no transcript,
+  provider text, object key, or signed URL.
+- *Provider authority.* `SERVICE_AUTHORITATIVE_QUALITY_SIGNALS` names the keys only
+  the service may assert. `normalize_result` discards any provider copy after key
+  normalization, so a provider cannot claim visual input or coverage.
+- *Outbox publisher.* `CeleryOutboxPublisher` maps the four `*.requested` events to
+  their drain tasks and sends no message arguments at all. Completion events are an
+  explicit notification-only allow-list; any unregistered event type is
+  dead-lettered rather than silently dropped. Without that allow-list every
+  successful analysis completion would have dead-lettered.
+- *Dispatch.* An event becomes `published` only after enqueue succeeds. Broker
+  outages are transient and leave the event unpublished for bounded retry; other
+  handoff failures are permanent and are not retried.
+- *Beat.* A separate read-only `celery-beat` Compose service — never a worker `-B`
+  flag — schedules outbox dispatch, one fallback drain per media step, and stale-job
+  recovery. Development assumes a single beat replica; production HA/leader election
+  is deferred to Phase 1E.
+- *Event loop.* Each worker process owns one event loop created with its engine and
+  reused by every task, because a pooled asyncpg connection cannot cross loops.
+  Shutdown disposes the engine, shuts down async generators, and closes the loop.
+
+Integration tests share the development database, so `celery-worker` and
+`celery-beat` must be stopped while `pytest` runs with `RUN_INTEGRATION_TESTS=1`;
+otherwise beat-scheduled drains claim the fixtures' jobs. A dedicated test database
+is a Phase 1E concern.
 
 Acceptance criteria:
 

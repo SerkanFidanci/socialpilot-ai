@@ -11,10 +11,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, async_engine_from_config
 
 from app.core.config import get_settings
-from app.modules.businesses import models as business_models
-from app.modules.identity.models import Base
-from app.modules.media import models as media_models
-from app.modules.operations import models as operations_models
+from app.infrastructure.database.metadata import MODEL_MODULES, metadata
 
 config = context.config
 
@@ -22,8 +19,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
-target_metadata = Base.metadata
-model_modules = (business_models, media_models, operations_models)
+target_metadata = metadata
+model_modules = MODEL_MODULES
 
 
 def run_migrations_offline() -> None:

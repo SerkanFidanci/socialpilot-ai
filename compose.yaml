@@ -105,6 +105,33 @@ services:
       - /tmp:rw,noexec,nosuid,size=512m
     restart: unless-stopped
 
+  # Beat only emits schedule ticks; it never executes work and holds no worker adapters.
+  # Development assumes exactly ONE beat replica: the schedule file is local to the
+  # container, so a second replica would double every tick. The drain tasks are
+  # idempotent PostgreSQL claims, so duplicate ticks stay safe, but production still
+  # needs single-instance ownership or leader election (deferred to Phase 1E).
+  celery-beat:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment: *application_environment
+    command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    profiles: ["worker"]
+    scale: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [backend]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    restart: unless-stopped
+
 networks:
   edge:
   backend:

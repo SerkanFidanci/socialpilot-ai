@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
@@ -32,11 +32,14 @@ from app.modules.media.video_understanding import (
     FrameExtractionPort,
     FrameExtractionTransientError,
     FrameReference,
+    SceneAnalysisMode,
     VideoUnderstandingPermanentError,
     VideoUnderstandingPort,
     VideoUnderstandingRequest,
     VideoUnderstandingResult,
     VideoUnderstandingTransientError,
+    apply_service_analysis_signals,
+    build_scene_coverage_report,
     build_transcript_context,
     normalize_result,
 )
@@ -50,6 +53,16 @@ from app.modules.operations.models import (
 )
 from app.modules.operations.repository import OperationsRepository
 from app.modules.operations.service import OperationsService
+
+
+@dataclass(frozen=True)
+class SceneAnalysisOutcome:
+    """One analyzed scene plus the service-decided mode that coverage is derived from."""
+
+    scene: MediaScene
+    result: VideoUnderstandingResult
+    transcript_context: str
+    mode: SceneAnalysisMode
 
 
 class VideoUnderstandingSchedulingService:
@@ -169,7 +182,7 @@ class VideoUnderstandingService:
                 proxy_path = await self._materializer.materialize(
                     object_key=proxy_object_key, workdir=temporary_path
                 )
-                results: list[tuple[MediaScene, VideoUnderstandingResult, str]] = []
+                results: list[SceneAnalysisOutcome] = []
                 remaining_frames = self._settings.video_understanding_max_frames_per_asset
                 for scene in scenes:
                     context = build_transcript_context(
@@ -207,31 +220,20 @@ class VideoUnderstandingService:
                         ),
                         timeout_seconds=self._settings.video_understanding_timeout_seconds,
                     )
-                    normalized = normalize_result(result, self._settings)
-                    quality_signals = dict(normalized.quality_signals or {})
-                    if frames:
-                        quality_signals.update(
-                            {
-                                "visual_input_available": True,
-                                "analysis_mode": "visual_and_transcript" if context else "visual",
-                            }
-                        )
-                    else:
-                        quality_signals.update(
-                            {
-                                "visual_input_available": False,
-                                "analysis_mode": "transcript_only" if context else "no_context",
-                            }
-                        )
-                        normalized = replace(
-                            normalized,
-                            confidence=min(
-                                normalized.confidence,
-                                self._settings.video_understanding_nonvisual_max_confidence,
-                            ),
-                        )
+                    mode = SceneAnalysisMode.decide(
+                        has_frames=bool(frames), has_transcript_context=bool(context)
+                    )
                     results.append(
-                        (scene, replace(normalized, quality_signals=quality_signals), context)
+                        SceneAnalysisOutcome(
+                            scene=scene,
+                            result=apply_service_analysis_signals(
+                                normalize_result(result, self._settings),
+                                mode=mode,
+                                settings=self._settings,
+                            ),
+                            transcript_context=context,
+                            mode=mode,
+                        )
                     )
             return await self._persist_results(
                 business_id=business_id,
@@ -332,7 +334,7 @@ class VideoUnderstandingService:
         *,
         business_id: UUID,
         job_id: UUID,
-        results: tuple[tuple[MediaScene, VideoUnderstandingResult, str], ...],
+        results: tuple[SceneAnalysisOutcome, ...],
         expected_attempt_number: int,
     ) -> BackgroundJob:
         async with self._session.begin():
@@ -348,28 +350,29 @@ class VideoUnderstandingService:
                 return job
             if not results:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
-            expected_scenes = (await self._media.list_scenes(business_id, job.resource_id))[
-                : self._settings.video_understanding_supported_scene_count
-            ]
-            if [scene.id for scene in expected_scenes] != [scene.id for scene, _, _ in results]:
+            all_scenes = await self._media.list_scenes(business_id, job.resource_id)
+            expected_scenes = all_scenes[: self._settings.video_understanding_supported_scene_count]
+            analyzed_scene_ids = [outcome.scene.id for outcome in results]
+            if [scene.id for scene in expected_scenes] != analyzed_scene_ids:
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_RESOURCE_STATE_INVALID")
             existing = await self._media.list_scene_understandings(business_id, job.resource_id)
             if existing:
-                if {value.scene_id for value in existing} == {scene.id for scene, _, _ in results}:
+                if {value.scene_id for value in existing} == set(analyzed_scene_ids):
                     return await self._mark_succeeded(job, expected_attempt_number)
                 raise VideoUnderstandingPermanentError("VIDEO_UNDERSTANDING_DUPLICATE_CONFLICT")
-            for scene, result, context in results:
+            for outcome in results:
+                result = outcome.result
                 self._media.add(
                     MediaSceneUnderstanding(
                         business_id=business_id,
                         asset_id=job.resource_id,
-                        scene_id=scene.id,
+                        scene_id=outcome.scene.id,
                         status=SceneUnderstandingStatus.COMPLETED,
                         provider=result.provider,
                         model_name=result.model_name,
                         summary=result.summary,
                         visual_description=result.visual_description,
-                        transcript_context=context,
+                        transcript_context=outcome.transcript_context,
                         confidence=result.confidence,
                         labels=list(result.labels),
                         objects=list(result.objects),
@@ -382,13 +385,21 @@ class VideoUnderstandingService:
                 )
             await self._session.flush()
             await self._mark_succeeded(job, expected_attempt_number)
+            coverage = build_scene_coverage_report(
+                total_scene_count=len(all_scenes),
+                modes=[outcome.mode for outcome in results],
+            )
             self._operations.add(
                 OutboxEvent(
                     business_id=business_id,
                     event_type="media.video_understanding.completed",
                     aggregate_type="media_asset",
                     aggregate_id=job.resource_id,
-                    payload={"job_id": str(job.id), "asset_id": str(job.resource_id)},
+                    payload={
+                        "job_id": str(job.id),
+                        "asset_id": str(job.resource_id),
+                        **coverage.as_event_payload(),
+                    },
                     correlation_id=job.correlation_id,
                     status=OutboxStatus.PENDING,
                     max_attempts=job.max_attempts,

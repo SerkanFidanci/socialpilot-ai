@@ -17,12 +17,16 @@ from app.infrastructure.media.fake_video_understanding import (
 from app.modules.media.models import MediaSceneUnderstanding, SceneUnderstandingStatus
 from app.modules.media.scene_speech import TranscriptCandidate
 from app.modules.media.video_understanding import (
+    SERVICE_AUTHORITATIVE_QUALITY_SIGNALS,
     FrameExtractionPermanentError,
     FrameReference,
+    SceneAnalysisMode,
     VideoUnderstandingPermanentError,
     VideoUnderstandingRequest,
     VideoUnderstandingResult,
     VideoUnderstandingTransientError,
+    apply_service_analysis_signals,
+    build_scene_coverage_report,
     build_transcript_context,
     normalize_provider_output,
     normalize_result,
@@ -295,3 +299,110 @@ def test_normalization_discards_unknown_fields_and_normalizes_valid_output() -> 
     assert result.visible_text == ("sign text",)
     assert result.quality_signals == {"frames": 2, "note": "normalized\nvalue"}
     assert not hasattr(result, "raw_provider_response")
+
+
+@pytest.mark.parametrize("key", sorted(SERVICE_AUTHORITATIVE_QUALITY_SIGNALS))
+def test_provider_cannot_assert_service_authoritative_quality_signals(key: str) -> None:
+    """A provider claiming coverage or visual input must not reach the domain model."""
+
+    result = normalize_result(
+        valid_result(quality_signals={key: "provider claim", "frame_count": 1}), settings()
+    )
+    assert result.quality_signals == {"frame_count": 1}
+
+
+def test_reserved_keys_are_discarded_even_when_encoded_differently() -> None:
+    result = normalize_result(
+        valid_result(quality_signals={" analysis_mode ": "visual", "note": "kept"}), settings()
+    )
+    assert result.quality_signals == {"note": "kept"}
+
+
+@pytest.mark.parametrize(
+    ("has_frames", "has_context", "expected"),
+    [
+        (True, True, SceneAnalysisMode.VISUAL_AND_TRANSCRIPT),
+        (True, False, SceneAnalysisMode.VISUAL),
+        (False, True, SceneAnalysisMode.TRANSCRIPT_ONLY),
+        (False, False, SceneAnalysisMode.NO_CONTEXT),
+    ],
+)
+def test_analysis_mode_is_decided_from_service_inputs(
+    has_frames: bool, has_context: bool, expected: SceneAnalysisMode
+) -> None:
+    mode = SceneAnalysisMode.decide(has_frames=has_frames, has_transcript_context=has_context)
+    assert mode is expected
+    assert mode.visual_input_available is has_frames
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_confidence"),
+    [
+        (SceneAnalysisMode.VISUAL_AND_TRANSCRIPT, 0.9),
+        (SceneAnalysisMode.VISUAL, 0.9),
+        (SceneAnalysisMode.TRANSCRIPT_ONLY, 0.5),
+        (SceneAnalysisMode.NO_CONTEXT, 0.5),
+    ],
+)
+def test_service_signals_stamp_mode_and_cap_non_visual_confidence(
+    mode: SceneAnalysisMode, expected_confidence: float
+) -> None:
+    resolved = settings()
+    stamped = apply_service_analysis_signals(
+        normalize_result(valid_result(quality_signals={"frame_count": 3}), resolved),
+        mode=mode,
+        settings=resolved,
+    )
+    assert stamped.confidence == expected_confidence
+    assert stamped.quality_signals == {
+        "frame_count": 3,
+        "visual_input_available": mode.visual_input_available,
+        "analysis_mode": mode.value,
+    }
+
+
+def test_coverage_report_is_full_only_when_every_scene_was_analyzed() -> None:
+    modes = [SceneAnalysisMode.VISUAL, SceneAnalysisMode.TRANSCRIPT_ONLY]
+    full = build_scene_coverage_report(total_scene_count=2, modes=modes)
+    assert full.as_event_payload() == {
+        "total_scene_count": 2,
+        "analyzed_scene_count": 2,
+        "skipped_scene_count": 0,
+        "coverage": "full",
+        "frame_backed_scene_count": 1,
+        "transcript_only_scene_count": 1,
+        "no_context_scene_count": 0,
+    }
+    partial = build_scene_coverage_report(
+        total_scene_count=5,
+        modes=[*modes, SceneAnalysisMode.NO_CONTEXT, SceneAnalysisMode.VISUAL_AND_TRANSCRIPT],
+    )
+    assert partial.as_event_payload() == {
+        "total_scene_count": 5,
+        "analyzed_scene_count": 4,
+        "skipped_scene_count": 1,
+        "coverage": "partial",
+        "frame_backed_scene_count": 2,
+        "transcript_only_scene_count": 1,
+        "no_context_scene_count": 1,
+    }
+
+
+def test_coverage_payload_carries_only_integer_counts_and_a_coverage_label() -> None:
+    payload = build_scene_coverage_report(
+        total_scene_count=1, modes=[SceneAnalysisMode.NO_CONTEXT]
+    ).as_event_payload()
+    assert payload.pop("coverage") in {"full", "partial"}
+    assert all(isinstance(value, int) for value in payload.values())
+
+
+@pytest.mark.parametrize(
+    ("total", "modes"), [(0, []), (1, []), (1, [SceneAnalysisMode.VISUAL] * 2)]
+)
+def test_coverage_report_rejects_impossible_scene_counts(
+    total: int, modes: list[SceneAnalysisMode]
+) -> None:
+    with pytest.raises(
+        VideoUnderstandingPermanentError, match="VIDEO_UNDERSTANDING_COVERAGE_INVALID"
+    ):
+        build_scene_coverage_report(total_scene_count=total, modes=modes)

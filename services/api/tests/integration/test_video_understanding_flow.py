@@ -383,6 +383,41 @@ def test_scene_speech_records_are_preserved_when_vlm_scope_is_capped() -> None:
             )
             transcript = await MediaRepository(session).get_transcript(business_id, asset_id)
             assert transcript is not None
+        async with session_factory() as worker:
+            service = VideoUnderstandingService(
+                worker,
+                resolved,
+                FakeFrameExtractionAdapter(resolved),
+                FakeVideoUnderstandingAdapter(resolved),
+                FakeMediaMaterializer(allow_missing_for_testing=True),
+            )
+            claimed = await service.claim_next()
+            assert claimed is not None
+            assert (
+                await service.process_claimed(
+                    business_id=business_id,
+                    job_id=claimed.id,
+                    attempt_number=claimed.attempt_count,
+                )
+            ).status == JobStatus.SUCCEEDED
+        async with session_factory() as session:
+            event = await session.scalar(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == "media.video_understanding.completed"
+                )
+            )
+            assert event is not None
+            assert event.payload == {
+                "job_id": str(job.id),
+                "asset_id": str(asset_id),
+                "total_scene_count": 6,
+                "analyzed_scene_count": 5,
+                "skipped_scene_count": 1,
+                "coverage": "partial",
+                "frame_backed_scene_count": 0,
+                "transcript_only_scene_count": 2,
+                "no_context_scene_count": 3,
+            }
 
     asyncio.run(run())
 

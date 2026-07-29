@@ -27,7 +27,12 @@ class Database:
             pool_pre_ping=True,
             pool_size=settings.database_pool_size,
             max_overflow=settings.database_max_overflow,
-            connect_args={"timeout": settings.database_connect_timeout_seconds},
+            connect_args={
+                "timeout": settings.database_connect_timeout_seconds,
+                # Disable asyncpg's per-connection statement cache so a pooled connection
+                # stays valid behind a transaction-pooling proxy and across schema changes.
+                "prepared_statement_cache_size": 0,
+            },
         )
         self.session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self.engine,

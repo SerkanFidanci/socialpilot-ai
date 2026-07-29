@@ -52,9 +52,9 @@ Its requested and completed outbox events are transactionally paired with the
 job creation and normalized result writes respectively. The existing stale-job
 recovery handles this job type through its common `running` job contract,
 including finalizing the open attempt with `JOB_TIMEOUT` and choosing retry or
-dead-letter from the durable attempt budget. Celery hard-timeout alignment and
-the composition root are intentionally deferred; no beat/reaper wiring is
-introduced by this slice.
+dead-letter from the durable attempt budget. The Celery composition root, beat
+schedule, and outbox publisher are now wired; see "Celery worker composition"
+below.
 
 Frame-extraction timeout or executable availability is classified as a
 retryable video-understanding failure. Invalid source paths, invalid JPEG
@@ -85,6 +85,71 @@ Celery messages only wake a bounded database drain; they do not carry trusted
 tenant or job identity. Each worker process creates one private composition
 context and SQLAlchemy engine after fork, then opens a new session per iteration.
 The drain tasks use PostgreSQL `SKIP LOCKED` claims and stop on an empty queue or
-their configured batch limit. Beat scheduling and a concrete outbox publisher are
-not part of this slice; the outbox-dispatch task returns `not_configured` without
-changing any event state.
+their configured batch limit.
+
+### Worker event-loop ownership
+
+An asyncpg connection is bound to the event loop that opened it, so a pooled
+connection cannot be reused from a different loop. Each worker process therefore
+owns exactly one event loop, created together with its engine in
+`build_worker_context` and reused by every task through `WorkerContext.run`. A
+per-task `asyncio.run` would hand pooled connections to a foreign loop and fail
+with "attached to a different loop" on the second task in the same process.
+
+`WorkerContext.run` refuses to execute on a closed loop or from inside an already
+running loop, so a misuse surfaces as an explicit `WORKER_EVENT_LOOP_CLOSED` or
+`WORKER_EVENT_LOOP_REENTRANT` error rather than a confusing driver error. Every
+drain iteration opens and closes its own session, so no session or connection
+outlives a task. `worker_process_init` replaces any inherited context, and
+`worker_process_shutdown` disposes the engine, shuts down async generators, and
+closes the loop exactly once.
+
+### Outbox publisher and event routing
+
+`CeleryOutboxPublisher` is the concrete publisher for the transactional outbox.
+It maps each `*.requested` event to its drain task and calls `send_task` with no
+arguments at all, so no object key, signed URL, tenant identity, credential, or
+media byte reaches the broker. The dispatcher marks a row `published` only after
+the enqueue succeeds; a broker outage (`kombu` `OperationalError`, `OSError`,
+`TimeoutError`) is a transient failure that leaves the event unpublished for
+bounded retry, and any other handoff failure is permanent and is not retried.
+
+| Event type | Transport effect |
+| --- | --- |
+| `media.ingest.requested` | wake `media.ingest.drain` |
+| `media.technical_analysis.requested` | wake `media.technical_analysis.drain` |
+| `media.scene_speech.requested` | wake `media.scene_speech_analysis.drain` |
+| `media.video_understanding.requested` | wake `media.video_understanding.drain` |
+| `media.technical_analysis.completed` | notification only; no message |
+| `media.scene_speech.completed` | notification only; no message |
+| `media.video_understanding.completed` | notification only; no message |
+| anything else | `OUTBOX_EVENT_TYPE_UNSUPPORTED`, never published |
+
+Each pipeline step creates its successor job inside its own completion
+transaction, so the completion events currently drive no work. They are recorded
+as delivered to an empty subscriber set rather than dead-lettered, which would
+otherwise flag every successful analysis as an operational failure. Routing is an
+explicit allow-list: an unregistered event type is dead-lettered instead of
+silently discarded, so adding an event without registering it fails loudly.
+
+### Beat schedule
+
+Beat provides the safety net for lost or unsent wake-up messages; correctness
+never depends on it, because every task re-derives its work from PostgreSQL.
+
+| Schedule entry | Task | Interval setting |
+| --- | --- | --- |
+| `dispatch-outbox` | `operations.outbox.dispatch` | `CELERY_BEAT_OUTBOX_INTERVAL_SECONDS` |
+| `drain-ingest` | `media.ingest.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `drain-technical` | `media.technical_analysis.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `drain-scene-speech` | `media.scene_speech_analysis.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `drain-video-understanding` | `media.video_understanding.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `recover-stale-jobs` | `operations.recovery.drain` | `CELERY_BEAT_RECOVERY_INTERVAL_SECONDS` |
+
+Beat runs as a separate read-only `celery-beat` Compose service rather than a
+worker `-B` flag, so scheduling never shares a process with media execution and
+cannot be duplicated by worker concurrency. Development assumes exactly one beat
+replica: the schedule file lives in the container's `tmpfs`, so a second replica
+would double every tick. Duplicate ticks remain safe because the drain tasks are
+idempotent `SKIP LOCKED` claims, but production still needs single-instance
+ownership or leader election, deferred to Phase 1E.

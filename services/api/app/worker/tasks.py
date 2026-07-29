@@ -3,8 +3,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +19,6 @@ from app.worker.composition import (
     shutdown_worker_process,
     start_worker_process,
 )
-
-
-def _run(coroutine: Coroutine[Any, Any, dict[str, object]]) -> dict[str, object]:
-    """Run a task coroutine synchronously; Celery task threads own no event loop."""
-
-    return asyncio.run(coroutine)
 
 
 async def _drain(
@@ -57,48 +50,51 @@ async def _recover(context: WorkerContext) -> dict[str, object]:
     return {"status": "recovered", "processed": len(jobs)}
 
 
+async def _dispatch_outbox(context: WorkerContext) -> dict[str, object]:
+    processed = 0
+    for _ in range(context.settings.worker_drain_batch_size):
+        async with context.database.session_factory() as session:
+            event = await context.outbox_dispatcher(session).dispatch_one()
+        if event is None:
+            break
+        processed += 1
+    return {"status": "dispatched", "processed": processed}
+
+
 @celery_app.task(name="media.ingest.drain")
 def drain_media_ingest() -> dict[str, object]:
-    return _run(
-        _drain(get_worker_context(), get_worker_context().ingest_service, needs_workdir=False)
-    )
+    context = get_worker_context()
+    return context.run(_drain(context, context.ingest_service, needs_workdir=False))
 
 
 @celery_app.task(name="media.technical_analysis.drain")
 def drain_technical_analysis() -> dict[str, object]:
-    return _run(
-        _drain(get_worker_context(), get_worker_context().technical_service, needs_workdir=True)
-    )
+    context = get_worker_context()
+    return context.run(_drain(context, context.technical_service, needs_workdir=True))
 
 
 @celery_app.task(name="media.scene_speech_analysis.drain")
 def drain_scene_speech_analysis() -> dict[str, object]:
-    return _run(
-        _drain(get_worker_context(), get_worker_context().scene_speech_service, needs_workdir=True)
-    )
+    context = get_worker_context()
+    return context.run(_drain(context, context.scene_speech_service, needs_workdir=True))
 
 
 @celery_app.task(name="media.video_understanding.drain")
 def drain_video_understanding() -> dict[str, object]:
-    return _run(
-        _drain(
-            get_worker_context(),
-            get_worker_context().video_understanding_service,
-            needs_workdir=True,
-        )
-    )
+    context = get_worker_context()
+    return context.run(_drain(context, context.video_understanding_service, needs_workdir=True))
 
 
 @celery_app.task(name="operations.recovery.drain")
 def recover_stale_jobs() -> dict[str, object]:
-    return _run(_recover(get_worker_context()))
+    context = get_worker_context()
+    return context.run(_recover(context))
 
 
 @celery_app.task(name="operations.outbox.dispatch")
 def dispatch_outbox() -> dict[str, object]:
-    """Keep durable events untouched until a concrete publisher is configured."""
-
-    return {"status": "not_configured", "processed": 0}
+    context = get_worker_context()
+    return context.run(_dispatch_outbox(context))
 
 
 @worker_process_init.connect
