@@ -109,7 +109,10 @@ docs/reviews/README.md                               (sonuç raporu adlandırmas
   + `--execute`). Konteynerde çalıştırıldı: 3 mp4 gerçekten üretildi.
 - **`scripts/run_benchmark.py`** — tek komut; varsayılan fake, credential/DB/ağ gerektirmez.
   `--runs`, `--cost-cap-minor`, `--out`, `--markdown-out`. Tavan aşımında exit 2.
-- **`Makefile`** — yalnızca `benchmark` hedefi (W07'nin kaynak-limiti/yedek hedeflerine dokunulmadı).
+- **`Makefile`** — yalnızca `benchmark` hedefi + `.PHONY` girişi (W07'nin kaynak-limiti/yedek
+  hedeflerine dokunulmadı). **W07 de `Makefile`'a dokunuyor → merge sırasında `Makefile`
+  çakışması beklenir; PM çözer** (her iki taraf da yalnızca kendi hedefini ekliyor, semantik
+  çakışma yok).
 - **`docs/architecture/ai-provider-routing.md`** — benchmark bölümü. **`docs/reviews/README.md`** —
   sonuç raporu adlandırması.
 - **18 birim testi** (`tests/unit/test_benchmark.py`): her metrik ground truth'a karşı sayı olarak
@@ -123,7 +126,8 @@ docs/reviews/README.md                               (sonuç raporu adlandırmas
   ADR-007 alanlarını birebir yansıtan nötr `ProviderUsageRecord` dataclass'ı tanımladım; paralel maliyet
   modeli kurmadım. Kalıcılık geldiğinde bu kayıt benimsenir. **Belge/kod çelişkisi:** ADR-007 metni
   düzeltilmeli (bu WO ADR dosyasına dokunmaz — sahiplik). Sahip olduğum `ai-provider-routing.md`'ye not
-  düştüm.
+  düştüm. **PM kararı (2026-07-30):** bulgu kabul edildi, bloke edici değil; `provider_usage`
+  kalıcılığı **W04'ün migration slotuna** alındı, `ProviderUsageRecord` şekli bırakıldı.
 - **5 kabiliyetten yalnızca 2'si kodda var** (`asr`, `video_understanding`). `text_strategy`/
   `script_generation`, `structured_timeline`, `tts` Phase 2 — henüz yok. Harness kendi kabiliyet
   registry'si + fake sağlayıcıları + ground truth'uyla beşini de ölçer; ölçüm domain'e sızmaz.
@@ -159,7 +163,9 @@ Compose izolasyonu: `COMPOSE_PROJECT_NAME=sp-w08` + host portları çakışmayı
 | KK9 prompt sürümü + route kaydı; belirsiz sonuç üretilemiyor | ✅ usage kaydı + provenance reddi testi |
 | KK10 non-determinizm: N koşu + dağılım | ✅ `--runs`, dağılım, test |
 
-**Karar:** teslim edilebilir. Bağımsız düşmanca doğrulama (test eden oturum) aşağıda.
+**Karar:** teslim edilebilir. **Merge PM'de** (dal olduğu gibi bırakıldı; `Makefile` W07
+çakışması + ADR numaralandırma PM'de). Bağımsız düşmanca doğrulama istenirse test eden oturum
+aşağıyı doldurur.
 
 ## Doğrulama
 
