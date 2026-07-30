@@ -2,7 +2,7 @@ PYTHON ?= python
 API_DIR := services/api
 COMPOSE ?= docker compose
 
-.PHONY: lint format-check typecheck test-backend verify migrate migrate-down compose-config compose-up compose-ps generate-docs check-openapi
+.PHONY: lint format-check typecheck test-backend verify migrate migrate-down compose-config compose-up compose-ps generate-docs check-openapi benchmark
 
 lint:
 	cd $(API_DIR) && $(PYTHON) -m ruff check app tests migrations scripts
@@ -26,6 +26,12 @@ generate-docs:
 # Fails when either generated artifact is stale relative to the code.
 check-openapi: generate-docs
 	git diff --exit-code -- docs/generated/openapi.json docs/api/endpoints.md
+
+# Provider benchmark (W08). Default: fake providers, no credentials, no DB — safe in CI.
+# Pass BENCHMARK_ARGS to add a cost cap or write output, e.g.
+#   make benchmark BENCHMARK_ARGS="--runs 5 --cost-cap-minor 40 --out results.json"
+benchmark:
+	cd $(API_DIR) && $(PYTHON) -m scripts.run_benchmark $(BENCHMARK_ARGS)
 
 migrate:
 	cd $(API_DIR) && $(PYTHON) -m alembic upgrade head

@@ -91,9 +91,75 @@ docs/reviews/README.md                               (sonuç raporu adlandırmas
 10. Non-determinizm ele alınmış: N koşu + dağılım, ya da neden tek koşunun yeterli olduğunun gerekçesi.
 11. `make verify` yeşil, Alembic head değişmemiş.
 
-## Rapor
+## Rapor — 2026-07-30 · yürüten oturum (Opus 4.8)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/1h-provider-benchmark` · **Durum:** tamamlandı
+
+### Yapılanlar
+
+- **Harness paketi `app/benchmark/`** (domain-dışı): `model.py` (Capability, `ProviderUsageRecord`,
+  `CostLedger`, hata sınıfları, sonuç dataclass'ları), `metrics.py` (saf metrik fonksiyonları),
+  `golden.py` (fixture yükleme + provenance zorunluluğu), `providers.py` (fake sağlayıcılar +
+  descriptor'lar + registry), `runner.py` (orkestrasyon + kabiliyet başına puanlama), `report.py`
+  (JSON + insan-okunur tablo). Paket `CLAUDE.md`'siyle.
+- **Golden set** `tests/fixtures/golden/`: 8 örnek (`samples/*.json`) + `SOURCES.md`. Her örnekte
+  makine-okunur ground truth + `fake_output` + üretim `spec`'i. **Depoda binary yok.** PRD §40.5'in
+  11 niteliğinin tamamı örneklerde kapsanıyor (test bunu doğruluyor).
+- **`scripts/make_golden_media.py`** — FFmpeg ile deterministik üretim (saf `build_ffmpeg_command`
+  + `--execute`). Konteynerde çalıştırıldı: 3 mp4 gerçekten üretildi.
+- **`scripts/run_benchmark.py`** — tek komut; varsayılan fake, credential/DB/ağ gerektirmez.
+  `--runs`, `--cost-cap-minor`, `--out`, `--markdown-out`. Tavan aşımında exit 2.
+- **`Makefile`** — yalnızca `benchmark` hedefi (W07'nin kaynak-limiti/yedek hedeflerine dokunulmadı).
+- **`docs/architecture/ai-provider-routing.md`** — benchmark bölümü. **`docs/reviews/README.md`** —
+  sonuç raporu adlandırması.
+- **18 birim testi** (`tests/unit/test_benchmark.py`): her metrik ground truth'a karşı sayı olarak
+  doğrulanıyor; tavan, provenance reddi, veri minimizasyonu, dağılım, CLI çıkış kodları.
+
+### Kapsam dışı bıraktıklarım ve nedeni (PM'e bırakılan)
+
+- **`provider_usage` tablosu kodda YOK.** ADR-007 ve `ai-provider-routing.md` sanki kalıcı bir
+  `provider_usage` varmış gibi yazıyor; kabul kriteri 5 de "provider_usage üzerinden kaydet" diyor.
+  Ama `services/` altında böyle bir tablo/model/migration yok ve W08'in migration slotu yok. **Çözüm:**
+  ADR-007 alanlarını birebir yansıtan nötr `ProviderUsageRecord` dataclass'ı tanımladım; paralel maliyet
+  modeli kurmadım. Kalıcılık geldiğinde bu kayıt benimsenir. **Belge/kod çelişkisi:** ADR-007 metni
+  düzeltilmeli (bu WO ADR dosyasına dokunmaz — sahiplik). Sahip olduğum `ai-provider-routing.md`'ye not
+  düştüm.
+- **5 kabiliyetten yalnızca 2'si kodda var** (`asr`, `video_understanding`). `text_strategy`/
+  `script_generation`, `structured_timeline`, `tts` Phase 2 — henüz yok. Harness kendi kabiliyet
+  registry'si + fake sağlayıcıları + ground truth'uyla beşini de ölçer; ölçüm domain'e sızmaz.
+- **Konum sapması:** iş emri `app/modules/media/benchmark.py` diyordu; onun yerine `app/benchmark/`
+  paketi. Gerekçe: (a) WO "ölçüm domain'e sızmaz" diyor, (b) `modules/media/`'ye dosya eklemek
+  `modules/media/CLAUDE.md`'yi güncellemeyi gerektirir, o da **W03'e ait ve dosya listemde değil.**
+- **`docs/index.md` kod haritasına `app/benchmark` satırı** eklenmeli (W03/PM) — o dosya bende değil.
+- Gerçek sağlayıcı credential'ı / seçim kararı: kapsam dışı (WO gereği). Registry gerçek set için
+  konfigürasyon yüzeyi bırakır, anahtar koymaz.
+
+### Doğrulama
+
+Araç zinciri (konteyner): ruff 0.14.x, mypy (strict), py3.13, gerçek PostgreSQL 16 + MinIO.
+Compose izolasyonu: `COMPOSE_PROJECT_NAME=sp-w08` + host portları çakışmayı önlemek için ayrıldı
+(55433/56380/59010/59011/8001 — varsayılanları paralel bir stack tutuyordu).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | ✅ temiz |
+| `ruff format --check` | ✅ temiz |
+| `mypy .` (strict) | ✅ 115 dosya, sorun yok |
+| `pytest` (RUN_INTEGRATION_TESTS=1, gerçek PG+MinIO) | ✅ **282 passed** (264 + 18 yeni) |
+| `check-openapi` (yeniden üret + diff) | ✅ içerik değişmedi (endpoint eklenmedi) |
+| Alembic head | ✅ değişmedi (`0009`, migration eklenmedi) |
+| KK1 `make benchmark` credential/DB'siz sonuç dosyası | ✅ exit 0, `/tmp/results.json` |
+| KK2 golden set script'le üretiliyor, binary yok, lisans yazılı | ✅ 3 mp4 üretildi, `SOURCES.md` |
+| KK3 makine-okunur ground truth, sayı olarak ölçüm | ✅ testler tam değer assert ediyor |
+| KK4 kabiliyet başına ≥1 metrik tabloda | ✅ 5 kabiliyet |
+| KK5 maliyet+gecikme tek usage kaydıyla, paralel muhasebe yok | ✅ `ProviderUsageRecord` (tablo yok — yukarı bkz) |
+| KK6 maliyet tavanı aşımında durur, test var | ✅ exit 2, video puanlanmadı, test |
+| KK7 veri bölgesi + yüz/ses uygunluk sütunları | ✅ |
+| KK8 sağlayıcıya orijinal değil proxy gider, test var | ✅ `require_minimized_input` + test |
+| KK9 prompt sürümü + route kaydı; belirsiz sonuç üretilemiyor | ✅ usage kaydı + provenance reddi testi |
+| KK10 non-determinizm: N koşu + dağılım | ✅ `--runs`, dağılım, test |
+
+**Karar:** teslim edilebilir. Bağımsız düşmanca doğrulama (test eden oturum) aşağıda.
 
 ## Doğrulama
 

@@ -1,0 +1,60 @@
+{
+  "id": "dark_noisy_street_tr",
+  "kind": "media",
+  "qualities": ["horizontal", "dark", "noisy", "shaky", "turkish_speech"],
+  "media": {
+    "generator": "ffmpeg_lavfi",
+    "orientation": "horizontal",
+    "duration_ms": 5000,
+    "width": 1280,
+    "height": 720,
+    "spec": {
+      "video": "color=c=0x101010:size=1280x720:rate=30:duration=5",
+      "overlays": ["camera_shake", "low_light"],
+      "audio": "operator_supplied_or_silence",
+      "audio_noise": "anoisesrc=color=pink:amplitude=0.3"
+    },
+    "operator_supplied": null
+  },
+  "capabilities": {
+    "asr": {
+      "prompt_version": "asr@2026-07-30.1",
+      "route_revision": "route-asr-r1",
+      "ground_truth": {
+        "language": "tr",
+        "brand_terms": ["Gece Lezzetleri"],
+        "segments": [
+          {"start_ms": 300, "end_ms": 2400, "text": "Gece Lezzetleri sokak lezzetini eve getiriyor"},
+          {"start_ms": 2400, "end_ms": 4600, "text": "siparis icin profildeki baglantiya dokunun"}
+        ]
+      },
+      "fake_output": {
+        "provider": "fake-asr",
+        "language": "tr",
+        "segments": [
+          {"start_ms": 500, "end_ms": 2400, "text": "gece lezzetler sokak lezzetini eve getiriyor", "confidence": 0.7},
+          {"start_ms": 2400, "end_ms": 4600, "text": "siparis icin profildeki baglantiya bakin", "confidence": 0.65}
+        ]
+      }
+    },
+    "video_understanding": {
+      "prompt_version": "video_understanding@2026-07-30.1",
+      "route_revision": "route-vu-r1",
+      "ground_truth": {
+        "scene_labels": ["sokak", "gece", "yemek"],
+        "objects": ["tabak", "araba"],
+        "safety_flags": []
+      },
+      "fake_output": {
+        "provider": "fake-vlm",
+        "model_name": "deterministic-1",
+        "summary": "Karanlik sokak sahnesi, titrek cekim.",
+        "visual_description": "gecersiz",
+        "confidence": 2.0,
+        "labels": ["sokak", "gece"],
+        "objects": ["tabak"],
+        "safety_flags": []
+      }
+    }
+  }
+}
