@@ -107,7 +107,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W07](handoffs/W07-single-server-resilience.md) | **Tek sunucu dayanıklılığı** — kaynak limitleri + scratch guard + sunucu dışına yedek + geri yükleme provası | **tamamlandı** (`c199b86`) · merge edildi · ADR-013 | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark koşum takımı** | **tamamlandı** · merge edildi · `provider_usage` bulgusu W04 slotuna alındı | merge edildi, dal silindi | Opus 5 / high | — |
 | [W04](handoffs/W04-brand-catalog.md) | **Marka profili + ürün/hizmet kataloğu** — Phase 2'nin ön koşulu (AI fiyat/tarih uyduramaz, doğrulanmış kayıt gerekiyor) | **şimdi** | `slice/1f-brand-catalog` | Opus 5 / high | **SENDE** (`0010`) |
-| [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **şimdi** (W04 ile paralel) | `slice/0i-telemetry` | Opus 4.8 / medium | — |
+| [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **tamamlandı** · `make verify` yeşil (327 test, Docker `sp-w05`) · merge + ADR numaralandırma bekliyor | `slice/0i-telemetry` | Opus 4.8 / medium | — |
 | W06 | PostgreSQL 18 + Valkey imaj geçişi | W05 sonrası (`compose.yaml`) | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
 | W10 | **Şema borcu:** `provider_usage` tablosu · `storage_upload_id` genişletmesi · fotoğraf analiz enum'u | W04 slotu boşalınca | `slice/0m-schema-debt` | Opus 4.8 / medium | sıradaki slot |
 

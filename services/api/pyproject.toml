@@ -19,6 +19,19 @@ dependencies = [
     # Storage client: the S3-compatible adapter signs SigV4 requests over httpx rather than
     # adding a synchronous vendor SDK to an async request path.
     "httpx>=0.28",
+    # OpenTelemetry (W05, ADR-XXX). Trace + metric, default-OFF: the SDK is only wired to an
+    # exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set, so importing these adds no runtime cost
+    # on the single server (ADR-013) when telemetry is disabled. The OTLP exporter uses the
+    # http/protobuf transport deliberately, to avoid pulling grpcio into the image. The `api`
+    # package and instrumentations track the same OTel release line; uv.lock pins the exact set.
+    "opentelemetry-api>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "opentelemetry-instrumentation-celery>=0.65b0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-redis>=0.65b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
+    "opentelemetry-sdk>=1.44.0",
     "pydantic-settings>=2.14",
     # redis-py's usable ceiling is governed by celery/kombu; the resolver picks the highest
     # compatible release and pins it in uv.lock, so no explicit upper cap is needed here.

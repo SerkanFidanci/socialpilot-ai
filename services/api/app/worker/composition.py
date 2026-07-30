@@ -12,6 +12,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.telemetry import (
+    TelemetryHandle,
+    instrument_database,
+    setup_worker_telemetry,
+)
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.celery_publisher import CeleryOutboxPublisher
 from app.infrastructure.database.metadata import verify_mapping_is_complete
@@ -121,6 +126,7 @@ class WorkerContext:
 
 
 _context: WorkerContext | None = None
+_telemetry: TelemetryHandle | None = None
 
 
 def _running_loop() -> asyncio.AbstractEventLoop | None:
@@ -175,10 +181,14 @@ _WORKER_NICE_INCREMENT = 10
 def start_worker_process() -> None:
     """Initialize after Celery forks, avoiding inherited async-engine pools."""
 
-    global _context
+    global _context, _telemetry
     shutdown_worker_process()
     _lower_worker_cpu_priority()
     _context = build_worker_context(get_settings())
+    # Wire telemetry in the forked worker process (default OFF). CeleryInstrumentor must patch
+    # inside the worker, and the SQLAlchemy engine only exists now. No-op when disabled.
+    _telemetry = setup_worker_telemetry(_context.settings)
+    instrument_database(_telemetry, _context.database)
     # Sweep scratch orphaned by a previous worker generation killed mid-job (OOM, SIGKILL)
     # before this process starts draining, so a single server does not accumulate dead
     # scratch across restarts.
@@ -205,7 +215,10 @@ def _lower_worker_cpu_priority() -> None:
 def shutdown_worker_process() -> None:
     """Release the process-local pool, async generators, and event loop exactly once."""
 
-    global _context
+    global _context, _telemetry
+    if _telemetry is not None:
+        _telemetry.shutdown()
+        _telemetry = None
     context, _context = _context, None
     if context is None:
         return

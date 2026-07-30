@@ -92,9 +92,96 @@ docs/adr/ADR-XXX-<telemetri-temeli>.md      (yeni)
 
 Numarayı **sen seçmiyorsun.** `ADR-XXX-<konu>.md` adıyla yaz, başlıkta da `ADR-XXX` bırak, raporda bildir. PM merge sırasında numaralandırır.
 
-## Rapor
+## Rapor — 2026-07-30 · W05 yürütücü oturum (Opus 4.8)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/0i-telemetry` (base: `374c02b` = `main` `7b9fd35` + W04/W05 WO doküman commit'i)
+**Commit'ler:** _(bu commit)_ · **Durum:** tamamlandı
+
+### Yapılanlar
+
+- **`app/core/telemetry.py` (yeni)** — tüm OTel kurulumu, kapatma ve redaksiyon tek modülde.
+  Varsayılan KAPALI: `OTEL_EXPORTER_OTLP_ENDPOINT` boşken kurulum fonksiyonları `None` döner —
+  exporter kurulmaz, `BatchSpanProcessor`/`PeriodicExportingMetricReader` thread'i başlamaz,
+  global provider kurulmaz, OTel API no-op'ta kalır.
+- **Trace auto-instrumentation:** FastAPI (`main.py`), SQLAlchemy (async motorun `sync_engine`'i,
+  lifespan + worker init'te), httpx, redis (her iki süreç), Celery (worker, fork sonrası).
+  Uçtan uca `mobile→API→DB→queue→worker→provider→storage` zinciri hedefleniyor.
+- **Correlation ↔ trace:** `logging.py`'a `add_trace_context` processor'ı eklendi — her log
+  satırına `trace_id`/`span_id` (hex) düşüyor, mevcut `correlation_id` ve `X-Correlation-ID`
+  davranışı bozulmadı. Ters yön: correlation id server span'ine attribute olarak konuyor.
+- **Metric:** `http.server.duration` (API latency + `http.status_code` label'ı → hata oranı),
+  `http.client.request.duration` (sağlayıcı/depo istemci latency'si), `job.duration` (Celery
+  `task_prerun/postrun` sinyalleriyle, label = task adı + durum), `queue.depth` (broker `LLEN`
+  observable gauge). Ölçüm noktaları: job süresi worker composition'daki sinyal bağlantısı,
+  kuyruk derinliği gauge callback'i — ikisi de domain'e dokunmadan `telemetry.py`'da.
+- **Redaksiyon (iki katman):** (1) httpx kancaları span kaydederken URL'in query/fragment/
+  userinfo'sunu düşürür → imzalı URL span'de bir an durmaz; (2) `_RedactingSpanExporter`
+  export yolundaki garanti ağı — secret-adlı attribute `[REDACTED]`, URL-değerli attribute
+  `scheme://host/path`; temizleyemediği span'i gönder**mez, düşürür.** Sentinel imzalı presigned
+  URL + token testleriyle kanıtlandı (W01 deseni).
+- **Dokümantasyon:** `docs/architecture/observability.md` (yeni) — ne toplanıyor, **ne
+  toplanmıyor ve neden**, açma/kapama, redaksiyon garantileri, sonraki modülün metrik ekleme
+  adımı. `docs/adr/ADR-XXX-opentelemetry-observability-foundation.md` (yeni).
+- **Bağımlılıklar (uv):** `opentelemetry-{api,sdk}`, `-exporter-otlp-proto-http` (grpc değil —
+  `grpcio`'yu imaja sokmamak için), `-instrumentation-{fastapi,sqlalchemy,httpx,redis,celery}`.
+  `uv add` ile eklendi, sürümler kurulum anında PyPI'dan doğrulandı, `uv.lock` güncellendi.
+  Lock farkı **yalnızca ek** — mevcut hiçbir paketin sürümü değişmedi (redis 8.1.0 zaten
+  lock'taydı, sqlalchemy/fastapi aynı).
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **API→worker aynı trace (kabul kriteri 4): bilinçli olarak KURULMADI, nedeni raporlandı.**
+  İşler transactional outbox + Celery Beat-zamanlı drain ile seçiliyor (ADR-005; worker
+  invariant "payload ID'sine güvenilmez"). Doğrudan enqueue kenarı yok → taşınacak trace bağlamı
+  da yok. Celery instrumentation beat→drain→DB zincirini bağlar ama trace beat tick'inde başlar.
+  Tam zincir için `traceparent`'ın dayanıklı iş satırında taşınması gerekir → **şema değişikliği
+  (migration), bu slice'ın kapsamı dışı** (migration slotu yok). ADR ve observability.md'de takip
+  işi olarak kayıtlı.
+- **Collector / Grafana / dashboard / alert:** kapsam dışı (WO). Exporter bir uca konuşur.
+- **`compose.yaml` OTLP servisi/değişkenleri (W06), `.env.example` OTEL_* (W01):** sahibi ben
+  değilim; değişkenler `observability.md`'de belgelendi, ilgili WO'lara bırakıldı.
+
+### Doğrulama
+
+Araç zinciri (Docker `sp-w05` konteyneri): **python 3.13.14 · mypy 2.3.0 · ruff 0.16.0**.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` + `ruff format --check` (app tests migrations scripts) | ✅ temiz |
+| `mypy .` (strict) | ✅ 123 dosya, hata yok |
+| `pytest` (RUN_INTEGRATION_TESTS=1, STORAGE_ADAPTER=s3, gerçek PostgreSQL+MinIO) | ✅ **327 passed** (313 + 14 yeni telemetri testi) |
+| `check-openapi` (generate + git diff) | ✅ drift yok (route eklenmedi) |
+| Alembic head | ✅ `0009_video_understanding` tek head, değişmedi |
+| Kapalıyken no-op | ✅ endpoint yoksa handle `None`, thread/exporter yok, uygulama çalışır |
+| Redaksiyon (sentinel presigned URL + token) | ✅ span attribute / exporter payload'da yok |
+| Yüksek kardinalite label kontrolü | ✅ asset/job/upload/correlation/user id label değil |
+| Domain'de telemetri yok | ✅ `app/modules/**` .py taraması + git diff temiz |
+| `app/api/routes/__init__.py` | ✅ değişmedi (W04'ün dosyası) |
+
+Yeni testler: `tests/unit/test_telemetry.py` (14) — kapalı no-op, redact_url/attribute,
+`_RedactingSpanExporter` sentinel, httpx kancası, add_trace_context, enabled server span +
+correlation binding, API latency/error metrikleri, job.duration + queue.depth, düşük kardinalite,
+domain temizliği.
+
+### Açıkça belirtmem gerekenler (PM'e)
+
+1. **ADR numarası bende değil.** `ADR-XXX-opentelemetry-observability-foundation.md` adıyla
+   yazıldı; başlıkta `ADR-XXX`. Ayrıca `ADR-XXX` yer tutucusu şu üç yerde geçiyor, merge'de
+   numaralandırılmalı: `pyproject.toml` OTel yorum bloğu, `config.py` OTel ayar yorumu,
+   `observability.md` başındaki ADR linki. `docs/adr/README.md` ve `docs/index.md`'ye **eklemedim**
+   (W03 tekeli / benim listemde değil).
+2. **Modül `CLAUDE.md` güncellemesi bekliyor (sahibi W03, benim dosya listemde yok → dokunmadım).**
+   Gerekli: `app/core/CLAUDE.md`'ye yeni `telemetry.py` satırı + "log'a trace/span id eklenir"
+   invariantı; `app/worker/CLAUDE.md`'ye composition'ın artık worker'da telemetri kurduğu notu.
+   Protokol gereği durup PM'e bıraktım.
+3. **`.env.example`'a OTEL_* eklenmeli (sahibi W01).** Dört ayar `observability.md`'de belgeli.
+4. **Redis observable-gauge broker okuması best-effort.** Bugün yalnız `default` kuyruğu route
+   ediliyor (§38.2 per-queue split gelmedi); gauge o listeyi okur. Split gelince callback kuyruk
+   kümesine genişler — hâlâ sınırlı label.
+5. **Redaksiyon exporter'ı pinlenmiş SDK'nın `BoundedAttributes._dict` iç deposuna yazıyor**
+   (biten span public mapping üzerinden immutable). `uv.lock` sürümü pinliyor, bir test koruyor;
+   SDK yükseltmesinde bu test kırmızıya döner ve iç yapı doğrulanır — sızıntı yerine düşürme
+   davranışı var.
 
 ## Doğrulama
 
