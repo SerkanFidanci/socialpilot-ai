@@ -121,9 +121,17 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W04](handoffs/W04-brand-catalog.md) | **Marka + katalog** | **kapandı** · merge (`5addf69`) + Codex doğrulaması: 4/5 geçti, **1 yüksek bulgu açık** (integral float parasal alanda kabul ediliyor) → **W12** | dal silindi | Opus 5 / high | `0010` |
 | [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** | **kapandı** · merge (`5addf69`) + Codex doğrulaması: 3/4 geçti (kapalıyken sıfır maliyet, sentinel sızıntısı yok, düşük kardinalite), **trace zinciri worker'a geçmiyor** → **W12** | dal silindi | Opus 4.8 / medium | — |
 | W06 | PostgreSQL 18 + Valkey imaj geçişi **+ compose'a çalıştırılabilir yedek runner'ı** (`pg_dump` taşıyan profil servisi) | **bekletildi** — Phase 2'den sonra | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
-| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** — `provider_usage` tablosu · `storage_upload_id` genişletmesi (kontrol objesini kaldırır) · fotoğraf durumu enum'u · `approver` rolü | **şimdi** | `slice/0m-schema-debt` | Opus 4.8 / medium | **SENDE** (`0011`) |
+| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** | **yürütülüyor** (commit yok ama `0011_schema_debt.py` yazılmış) | `slice/0m-schema-debt` | Opus 4.8 / medium | **`0011`** |
 | [W12](handoffs/W12-verification-followups.md) | **Doğrulama bulgularının kapatılması** — katı parasal tamsayı tipi · trace zincirinin worker'a taşınması | **şimdi** (migration yok, W10/W11 ile paralel) | `slice/0n-verification-followups` | Opus 5 / high | — |
-| [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render + parametrik düzenleme veri modeli | **şimdi** (W10 ile paralel; migration W10'dan sonra `0012`) | `slice/2a-timeline-render` | Opus 5 / high | 2. sırada |
+| [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render | **yürütülüyor** | `slice/2a-timeline-render` | Opus 5 / high | **`0012`**, dalda `down_revision=0010`; **PM merge'de `0011_schema_debt`'e çevirecek** |
+
+### Migration zinciri kararı (2026-07-30)
+
+W11, tablosu olmadan kabul kriterini kanıtlayamayacağı için tıkandı ve W10'un slotunu istedi. **W10 boş değildi:** commit atmamıştı ama worktree'sinde `0011_schema_debt.py` dahil kapsamlı iş vardı — yalnızca `git log`'a bakmak yanıltıcıydı.
+
+**Karar:** W10 `0011`'i tutar. W11 migration'ını `0012` olarak yazar ve **kendi dalında** `down_revision = "0010_brand_catalog"` verir; dalda zincir `0010→0012` olarak geçerlidir ve tüm kabul kriterleri kanıtlanabilir. **PM merge sırasında** `down_revision`'ı `0011_schema_debt`'e çevirip zinciri baştan sona doğrular. İki migration'ın tabloları ayrık (`provider_usage`/media/businesses vs `content_timelines`/`render_outputs`), bu yüzden yeniden zincirleme tek satır ve risksiz.
+
+**Ders:** bir dalın "başlamadığını" `git log` ile ölçme; worktree'de commit'lenmemiş iş olabilir. Slot devri kararlarında **worktree durumuna** bak.
 
 ### Dosya sahipliği (çakışma önleme)
 

@@ -27,6 +27,17 @@ Bu klasör, oturumlar arası iş devri yüzeyidir. Her dosya bir **work order (W
 - **Aynı base'den aynı işi yapma:** WO'yu tetiklemeden önce `STATUS.md`'de durumunun `tetiklenmedi` olduğunu doğrula. `yürütülüyor` ise dokunma.
 - **`main` her zaman çalışan gerçek.** Doğrulaması geçmemiş iş merge edilmez.
 
+## Bir dalın "boş" olduğunu nasıl ölçersin
+
+`git log main..<dal>` boş görünmesi o slice'ın başlamadığı anlamına **gelmez** — oturum commit atmadan saatlerce çalışmış olabilir. 2026-07-30'da W11, W10'un migration slotunu devralmayı önerdi çünkü W10'un dalında commit yoktu; oysa W10'un worktree'sinde `0011_schema_debt.py` dahil kapsamlı commit'lenmemiş iş vardı.
+
+**Slot devri veya çakışma kararı vermeden önce worktree durumuna bak:**
+
+```
+git -C <worktree> status --short
+ls <worktree>/services/api/migrations/versions/
+```
+
 ## Yeni oturum mu, aynı oturum mu
 
 **Varsayılan: her slice için yeni oturum.** Sezgiye ters gelir ("o zaten biliyor") ama üç sebeple doğrudur:
