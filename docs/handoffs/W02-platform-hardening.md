@@ -38,7 +38,12 @@ Her birini **kurulum anında paket deposundan doğrula**, bu dosyadaki sayılara
 - `JAVA_HOME` / JDK ve Android cmdline-tools gereksinimi `docs/runbooks/local-development.md`'ye **adım adım** yazılır (kurulum komutları dahil, Windows).
 - Bu bir CI işi değil; CI'da APK build edilmez. Amaç: bir sonraki mobil oturumun tıkanmaması.
 
-### 5. Otomatik güncelleme
+### 5. W01 ve W03'ten devredilen iki kalem (sahibi sensin)
+
+- **`make generate-docs` `endpoints.md`'yi üretmiyor.** W03 `docs/api/endpoints.md`'yi ve üretecini yazdı ama `Makefile` senin sahipliğinde olduğu için bağlamadı. `generate-docs` hedefine ekle; `check-openapi` davranışı bozulmasın. Üretilen tablo koddan sapamamalı.
+- **Runbook'ta gerçek byte yolu adımı eksik.** `compose.yaml` `STORAGE_ADAPTER: ${STORAGE_ADAPTER:-fake}` kullanıyor; mobil demonun gerçek upload'ı için depo kökünde `.env` içine `STORAGE_ADAPTER=s3` yazıp `docker compose up -d api` gerekiyor. Bunu `docs/runbooks/local-development.md`'ye yaz (W01 raporu, madde 2). Varsayılanı `s3`'e çevirme — mevcut kontrol düzlemi testleri `fake`'e dayanıyor.
+
+### 6. Otomatik güncelleme
 - `renovate.json` (veya `.github/dependabot.yml`) eklenir: haftalık, gruplanmış, lockfile güncelleyen.
 
 ## Kapsam dışı (dokunma)
