@@ -29,9 +29,10 @@ from app.infrastructure.media.fake_video_understanding import (
     FakeFrameExtractionAdapter,
     FakeVideoUnderstandingAdapter,
 )
-from app.infrastructure.storage.fake import FakeMultipartStorage
+from app.infrastructure.storage import create_storage
 from app.modules.media.ingest import MediaIngestService
 from app.modules.media.scene_speech import SceneSpeechAnalysisService
+from app.modules.media.storage import MultipartStoragePort
 from app.modules.media.technical import (
     FFmpegDerivativeAdapter,
     FFprobeAdapter,
@@ -49,7 +50,7 @@ class WorkerContext:
     database: Database
     loop: asyncio.AbstractEventLoop
     outbox_publisher: CeleryOutboxPublisher
-    storage: FakeMultipartStorage
+    storage: MultipartStoragePort
     materializer: FakeMediaMaterializer
     content_inspector: FakeContentInspector
     malware_scanner: FakeMalwareScanner
@@ -142,7 +143,7 @@ def build_worker_context(settings: Settings) -> WorkerContext:
         database=create_database(settings),
         loop=loop,
         outbox_publisher=CeleryOutboxPublisher(celery_app),
-        storage=FakeMultipartStorage(),
+        storage=create_storage(settings),
         materializer=FakeMediaMaterializer(allow_missing_for_testing=True),
         content_inspector=FakeContentInspector(),
         malware_scanner=FakeMalwareScanner(),

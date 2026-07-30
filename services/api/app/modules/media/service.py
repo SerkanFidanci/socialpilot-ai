@@ -24,6 +24,7 @@ from app.modules.media.repository import MediaRepository
 from app.modules.media.storage import (
     CompletedPart,
     MultipartStoragePort,
+    StoragePermanentError,
     StorageUnavailableError,
     UploadPartInstruction,
 )
@@ -35,10 +36,15 @@ from app.modules.operations.service import (
 )
 
 _CHECKSUM = re.compile(r"^[0-9a-f]{64}$")
+# Extension is only a consistency check against the declared MIME type; neither is proof of
+# content. iOS writes HEIF-family photos as `.heic` and QuickTime video as `.mov`.
 _EXTENSIONS = {
     "image/jpeg": {".jpg", ".jpeg"},
     "image/png": {".png"},
+    "image/heic": {".heic", ".heif"},
+    "image/heif": {".heif", ".heic"},
     "video/mp4": {".mp4"},
+    "video/quicktime": {".mov"},
     "audio/mpeg": {".mp3"},
 }
 
@@ -91,10 +97,11 @@ class MediaService:
                 instructions = await self._storage.create_upload(
                     storage_upload_id=upload.storage_upload_id,
                     object_key=asset.storage_object_key,
+                    content_type=content_type,
                     expires_at=expires_at,
                     part_numbers=tuple(range(1, part_count + 1)),
                 )
-            except StorageUnavailableError as error:
+            except (StorageUnavailableError, StoragePermanentError) as error:
                 raise self._storage_error() from error
             await self._session.flush()
             return upload, instructions
@@ -112,7 +119,7 @@ class MediaService:
                     expires_at=upload.expires_at,
                     part_numbers=numbers,
                 )
-            except StorageUnavailableError as error:
+            except (StorageUnavailableError, StoragePermanentError) as error:
                 raise self._storage_error() from error
             return upload, urls
 
@@ -181,6 +188,9 @@ class MediaService:
                 )
             except StorageUnavailableError as error:
                 raise self._storage_error() from error
+            except StoragePermanentError as error:
+                # The provider's stored parts or object contradict the completion request.
+                raise self._checksum_error() from error
             if (
                 metadata.byte_size != asset.byte_size
                 or metadata.content_type.lower() != asset.content_type
@@ -214,7 +224,7 @@ class MediaService:
             upload = await self._active_session(business_id, session_id)
             try:
                 await self._storage.cancel_upload(storage_upload_id=upload.storage_upload_id)
-            except StorageUnavailableError as error:
+            except (StorageUnavailableError, StoragePermanentError) as error:
                 raise self._storage_error() from error
             upload.status, upload.cancelled_at = UploadSessionStatus.CANCELLED, datetime.now(UTC)
 

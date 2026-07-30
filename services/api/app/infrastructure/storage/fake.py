@@ -20,6 +20,7 @@ from app.modules.media.storage import (
 @dataclass
 class _Upload:
     object_key: str
+    content_type: str
     expires_at: datetime
     parts: tuple[int, ...]
     uploaded: dict[int, str] = field(default_factory=dict)
@@ -41,10 +42,13 @@ class FakeMultipartStorage:
         *,
         storage_upload_id: str,
         object_key: str,
+        content_type: str,
         expires_at: datetime,
         part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]:
-        self._uploads[storage_upload_id] = _Upload(object_key, expires_at, part_numbers)
+        self._uploads[storage_upload_id] = _Upload(
+            object_key, content_type, expires_at, part_numbers
+        )
         return await self.create_part_urls(
             storage_upload_id=storage_upload_id, expires_at=expires_at, part_numbers=part_numbers
         )

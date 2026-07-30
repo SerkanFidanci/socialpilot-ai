@@ -12,6 +12,9 @@ dependencies = [
     "asyncpg>=0.29,<0.31",
     "celery>=5.4,<5.5",
     "fastapi>=0.115,<0.116",
+    # Storage client: the S3-compatible adapter signs SigV4 requests over httpx rather than
+    # adding a synchronous vendor SDK to an async request path.
+    "httpx>=0.27,<0.29",
     "pydantic-settings>=2.6,<3.0",
     "redis>=5.2,<6.0",
     "sqlalchemy[asyncio]>=2.0,<2.1",
@@ -21,7 +24,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.27,<0.29",
     "mypy>=1.13,<1.14",
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<0.25",

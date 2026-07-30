@@ -42,9 +42,18 @@ class MultipartStoragePort(Protocol):
         *,
         storage_upload_id: str,
         object_key: str,
+        content_type: str,
         expires_at: datetime,
         part_numbers: tuple[int, ...],
-    ) -> tuple[UploadPartInstruction, ...]: ...
+    ) -> tuple[UploadPartInstruction, ...]:
+        """Open a multipart upload.
+
+        ``content_type`` is the server-validated declaration recorded on the asset. A real
+        provider must stamp it on the object at creation time, because completion compares
+        the stored content type against the asset instead of trusting the client again.
+        """
+        ...
+
     async def create_part_urls(
         self, *, storage_upload_id: str, expires_at: datetime, part_numbers: tuple[int, ...]
     ) -> tuple[UploadPartInstruction, ...]: ...

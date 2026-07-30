@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_S3_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$")
 PCM_WAV_HEADER_BYTES = 44
 PCM_AUDIO_SAMPLE_RATE_HZ = 16_000
 PCM_AUDIO_CHANNELS = 1
@@ -105,13 +108,35 @@ class Settings(BaseSettings):
     video_understanding_max_attempts: int = Field(default=3, ge=1, le=10)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
+    # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
+    # mobile-first product must admit them at the upload boundary. Admission is not
+    # analysis: only video/mp4 currently enters the technical pipeline.
     media_allowed_mime_types: tuple[str, ...] = (
         "image/jpeg",
         "image/png",
+        "image/heic",
+        "image/heif",
         "video/mp4",
+        "video/quicktime",
         "audio/mpeg",
     )
     identity_adapter: Literal["local"] = "local"
+    storage_adapter: Literal["fake", "s3"] = "fake"
+    # Server-side endpoint the API and workers call. Presigned part URLs are signed for
+    # S3_PRESIGN_ENDPOINT_URL instead, because SigV4 binds the signature to the host the
+    # client will actually contact (a phone cannot resolve a Compose service name).
+    s3_endpoint_url: str = Field(default="", max_length=512)
+    s3_presign_endpoint_url: str = Field(default="", max_length=512)
+    s3_region: str = Field(default="us-east-1", min_length=1, max_length=64)
+    s3_bucket: str = Field(default="", max_length=63)
+    s3_access_key_id: SecretStr = SecretStr("")
+    s3_secret_access_key: SecretStr = SecretStr("")
+    s3_force_path_style: bool = True
+    s3_request_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    # Verification streams the finalized object once to observe its SHA-256, so it needs a
+    # longer ceiling than a metadata call.
+    s3_verification_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    s3_presign_ttl_seconds: int = Field(default=900, ge=60, le=604_800)
     local_identity_signing_key: SecretStr = Field(
         default=SecretStr("development-local-identity-key-not-for-production"),
         min_length=32,
@@ -155,6 +180,34 @@ class Settings(BaseSettings):
         if not value.startswith("/") or "\x00" in value:
             raise ValueError("WORKER_TEMP_ROOT must be an absolute path")
         return value
+
+    @field_validator("s3_endpoint_url", "s3_presign_endpoint_url")
+    @classmethod
+    def validate_s3_endpoint(cls, value: str) -> str:
+        """Accept an origin only; a path or query would corrupt every signed request."""
+
+        candidate = value.strip().rstrip("/")
+        if not candidate:
+            return ""
+        parsed = urlsplit(candidate)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+        ):
+            raise ValueError("S3 endpoint URLs must be an http(s) origin without a path")
+        return candidate
+
+    @field_validator("s3_bucket")
+    @classmethod
+    def validate_s3_bucket(cls, value: str) -> str:
+        candidate = value.strip()
+        if candidate and not _S3_BUCKET.fullmatch(candidate):
+            raise ValueError("S3_BUCKET must be a DNS-compatible bucket name")
+        return candidate
 
     @model_validator(mode="after")
     def normalize_legacy_media_dimensions(self) -> Settings:
@@ -285,9 +338,43 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def reject_local_identity_adapter_in_production(self) -> Settings:
-        if self.app_env == "production" and self.identity_adapter == "local":
-            raise ValueError("the local identity adapter is not allowed in production")
+    def reject_non_production_adapters(self) -> Settings:
+        """Name every development-only adapter at once instead of one restart at a time."""
+
+        if self.app_env != "production":
+            return self
+        rejected = [
+            description
+            for description, selected in (
+                ("the local identity adapter", self.identity_adapter == "local"),
+                ("the fake storage adapter", self.storage_adapter == "fake"),
+            )
+            if selected
+        ]
+        if rejected:
+            raise ValueError(f"{', '.join(rejected)} is not allowed in production")
+        return self
+
+    @model_validator(mode="after")
+    def require_complete_s3_configuration(self) -> Settings:
+        """Fail at startup rather than on the first upload of a misconfigured deployment."""
+
+        if self.storage_adapter != "s3":
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("S3_ENDPOINT_URL", self.s3_endpoint_url),
+                ("S3_BUCKET", self.s3_bucket),
+                ("S3_ACCESS_KEY_ID", self.s3_access_key_id.get_secret_value()),
+                ("S3_SECRET_ACCESS_KEY", self.s3_secret_access_key.get_secret_value()),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"the s3 storage adapter requires {', '.join(missing)}")
+        if not self.s3_presign_endpoint_url:
+            self.s3_presign_endpoint_url = self.s3_endpoint_url
         return self
 
 
