@@ -23,6 +23,7 @@
 - MinIO servisi Compose'a eklenir; yalnızca `backend` ağında, host'a yalnızca geliştirme için publish edilir.
 - Entegrasyon testi: gerçek MinIO'ya çok parçalı gerçek PUT → complete → asset `uploaded` + ingest job kuyruğa girer.
 - **MIME allowlist düzeltmesi:** `media_allowed_mime_types` şu an yalnızca `image/jpeg, image/png, video/mp4, audio/mpeg`. iOS'un varsayılan çıktıları **HEIC/HEIF fotoğraf** ve **`.mov`/HEVC video (`video/quicktime`)** — mobil öncelikli üründe ana akış bu haliyle kırık. `image/heic`, `image/heif`, `video/quicktime` eklenir; her yeni tür için ffprobe/inspection tarafındaki varsayımlar gözden geçirilir.
+- **Tekrar üretilebilir dev seed:** `services/api/scripts/seed_dev.py`. Gerekçe: 2026-07-30'da Docker sıfırlandı ve elle oluşturulmuş "Demo Isletme" + analiz edilmiş asset kalıcı olarak kayboldu — seed script'i olmadığı için yeniden üretilemedi. Script idempotent olmalı (iki kez çalışınca çift kayıt yaratmaz), yalnızca `development` ortamında çalışmalı, üretimde çalıştırılmayı reddetmeli, ve gerçek üretim credential'ı istememeli. Kapsam: bir işletme + üye, bir `ready` medya asset'i, sahneler, transcript + segmentler, scene understandings — yani processing-summary ekranının dolu görüneceği asgari veri.
 
 ## Kapsam dışı (dokunma)
 
@@ -44,8 +45,9 @@ services/api/app/core/config.py                          (storage + MIME ayarlar
 services/api/pyproject.toml                              (yalnızca storage istemcisi bağımlılığı)
 compose.yaml                                             (minio servisi)
 .env.example
+services/api/scripts/seed_dev.py                         (yeni)
 services/api/tests/integration/test_media_uploads*.py
-services/api/tests/unit/ (fake adapter sözleşme testleri)
+services/api/tests/unit/ (fake adapter sözleşme testleri, seed idempotency testi)
 docs/architecture/media-upload.md                        (adapter bölümü)
 docs/adr/ADR-008-<s3-uyumlu-storage-adapter>.md          (yeni ADR)
 ```
@@ -64,6 +66,7 @@ docs/adr/ADR-008-<s3-uyumlu-storage-adapter>.md          (yeni ADR)
 8. `make verify` yeşil. Alembic head değişmemiş: `0009_video_understanding`.
 9. ADR-008 yazıldı (indekslere **eklenmedi** — W03'ün sahipliğinde, raporda bildirildi).
 10. `pyproject.toml`'daki tek değişiklik storage istemcisi bağımlılığı; sürüm tazeleme yapılmadı.
+11. `seed_dev.py` sıfırdan bir veritabanında çalışıp processing-summary ekranını dolduruyor; iki kez çalıştırıldığında çift kayıt yaratmıyor; `production` ortamında reddediyor. Çalıştırma komutu raporda yazılı.
 
 ## Bilinmesi gerekenler
 

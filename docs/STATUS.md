@@ -40,6 +40,20 @@ Phase 2 içerik üretimi · Phase 3 abonelik/entitlement · Phase 4 yayınlama �
 | B1 | `FakeMultipartStorage` byte kabul etmiyor; part URL'leri kasıtlı olarak erişilemez `fake-storage.invalid` host'una gidiyor, `complete_upload` yalnızca in-process test hook'uyla çalışıyor | Gerçek PUT çalışmıyor → mobil demo 3. adımı ve Phase 1 çıkış kriteri kapanamıyor | **W01** — MinIO/S3 adapter |
 | B2 | `JAVA_HOME` yok, Android cmdline-tools eksik | APK build edilemiyor (Dart kodunun derlendiği `flutter test` ile doğrulanmış) | **W02** ortam adımı |
 
+## Geliştirme ortamı
+
+**2026-07-30 olayı:** Docker tamamen sıfırlandı — container, volume ve image kalmadı. **Depoda hiçbir kayıp yok**; kaybolan yalnızca tek kullanımlık dev altyapısıydı. Kurtarma tamamen otomatik:
+
+```
+docker compose up -d --build
+docker compose exec -T api python -m alembic upgrade head
+docker compose --profile worker up -d        # worker gerekiyorsa
+```
+
+Şema 9 migration'dan (`0001`→`0009`) birebir yeniden üretiliyor.
+
+**Ortaya çıkan açık:** elle oluşturulmuş "Demo Isletme" + analiz edilmiş asset seed'i **yeniden üretilemedi** — seed script'i yoktu. `services/api/scripts/seed_dev.py` **W01** kapsamına eklendi. Kural: dev ortamında elle veri oluşturan hiçbir akış script'siz bırakılmaz.
+
 ## Karar bekleyenler
 
 | # | Karar | Ne zaman gerekli | PM önerisi |
