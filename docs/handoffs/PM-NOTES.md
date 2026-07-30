@@ -97,6 +97,10 @@ Kullanıcı "en mantıklısı ve en doğrusuyla devam et her zaman" dedi. Bunun 
 4. **Codex doğrulaması** `main` üzerinde: W07'nin yedek/geri yükleme döngüsü ve scratch guard'ı, W08'in ground-truth metrik hesabı ve maliyet tavanı. Bunlar iddia edilen ama bağımsız sınanmamış yüzeyler.
 5. **Phase 2 kapısı öncesi:** K3 ve K4 cevaplanmalı; durable execution (DBOS/Temporal) ve LiteLLM değerlendirmesi; `RenderPort` ADR'ı (K5'in gereği).
 
+## Oturum yeniden kullanımı
+
+Kural [README.md](README.md)'de. PM için özeti: **slice başına yeni oturum**, aynı oturum yalnızca aynı slice'ın düzeltme turu için. Ve **worktree'yi merge'de değil, doğrulama da bittiğinde sil** — bugün W07/W08'in worktree'lerini Codex bitmeden sildim, o yüzden bulguların düzeltmesi taze oturumla yapılacak.
+
 ## Öğrenilen dersler (tekrarlanmasın)
 
 1. **Çift iş.** İki oturum `258439d` base'inden aynı slice'ı yaptı; `c43ccad` silinmek zorunda kaldı. Panzehir: WO'da "dokunulacak dosyalar" ilanı + [STATUS.md](../STATUS.md) dosya sahipliği tablosu + tetiklemeden önce durumun `tetiklenmedi` olduğunu doğrulama.

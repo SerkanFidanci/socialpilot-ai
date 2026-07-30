@@ -27,6 +27,20 @@ Bu klasör, oturumlar arası iş devri yüzeyidir. Her dosya bir **work order (W
 - **Aynı base'den aynı işi yapma:** WO'yu tetiklemeden önce `STATUS.md`'de durumunun `tetiklenmedi` olduğunu doğrula. `yürütülüyor` ise dokunma.
 - **`main` her zaman çalışan gerçek.** Doğrulaması geçmemiş iş merge edilmez.
 
+## Yeni oturum mu, aynı oturum mu
+
+**Varsayılan: her slice için yeni oturum.** Sezgiye ters gelir ("o zaten biliyor") ama üç sebeple doğrudur:
+
+1. **Yeniden kullanım daha pahalı.** Bir oturumun her turu birikmiş transcript'in tamamını yeniden gönderir; transcript tek yönlü büyür. Taze bir oturumun doküman okuma maliyeti ise sabit ve küçük (router'daki görev tipine göre 2–6k token). Kapanmış bir slice'ın oturumunda yeni iş başlatmak, taze oturum + doküman okumasından belirgin şekilde pahalıdır.
+2. **Bayat dünya.** Yeniden kullanılan oturum kendi eski worktree'sinde, eski commit'te oturur. 2026-07-30'da bu iki kez ısırdı: W03 `c13636b`'den çalıştığı için ADR-008'i kaçırdı; W09 eski araç zincirinde yazıldığı için W02 ile birleşimi kırmızı çıktı.
+3. **Sıkıştırma eşit kaybetmez.** Uzun oturum sıkıştırıldığında geriye bildiğini sanan ama hafızası delik bir oturum kalır. Dokümanı okuyan taze oturum yerçekimini yeniden okur.
+
+Zaten sıcak bilgi bilinçli olarak dokümana taşındı (modül `CLAUDE.md`'leri, `STATUS.md`, router — W03'ün işi). Dokümanlaşmış bilgi oturum hafızasından daha iyidir: paylaşılır, doğrulanabilir, sıkıştırmadan sağ çıkar.
+
+**Aynı oturumu sürdür** yalnızca **aynı slice'ın devamı** için: tester bulgusunu düzeltmek, PM geri bildirimini uygulamak, merge öncesi küçük tamamlama. Orada oturum kendi diff'ini biliyor ve yeniden okutmak israftır.
+
+**Bunun operasyonel sonucu:** bir WO'nun worktree'si **merge edildiğinde değil, tamamen kapandığında** (merge **ve** bağımsız doğrulama bittiğinde) silinir. Aksi halde tester bulgusu geldiğinde geri dönecek sıcak oturum kalmaz. 2026-07-30'da W07 ve W08'in worktree'leri Codex doğrulaması bitmeden silindi — o bulguların düzeltmesi taze oturumla, `main`'den yeni dalla yapılacak.
+
 ## Doğrulama ortamı (zorunlu)
 
 `docker compose` proje adını worktree'den **türetmez**. Sabit bir proje adıyla herhangi bir

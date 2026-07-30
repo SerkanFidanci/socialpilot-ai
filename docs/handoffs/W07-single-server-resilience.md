@@ -142,4 +142,15 @@ Araç zinciri: Python 3.13.2 / mypy 2.3.0 / ruff 0.16.0 (uv.lock) — host'ta `u
 
 ## Doğrulama
 
-_(test eden oturum doldurur — özellikle: yedeği gerçekten geri yükleyip head ve satır sayılarını bağımsız doğrula; kaynak limitlerini yük altında sına)_
+### Doğrulama — 2026-07-30 · Codex test oturumu
+
+Araç zinciri: Docker 25.0.3 (build `4debf41`) · Docker Compose 2.24.6-desktop.1 · izole `COMPOSE_PROJECT_NAME=sp-codex` stack · Python 3.13.14 · pytest 9.1.1 · ruff 0.16.0 · mypy 2.3.0 · PostgreSQL istemcileri `pg_dump`/`psql` 16.14 · FFmpeg 7.1.5. API imajındaki `openssl` ile şifreleme kullanıldı.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Gerçek geri yükleme geçti: `pg_dump 16.14` ile kaynakta `businesses=1`, `media_assets=1`, `jobs=4` içeren dump alındı; W07’nin şifreleme + SigV4 upload yolu ile MinIO’ya yazılan ciphertext indirildi, decrypt/gunzip sonrası boş `socialpilot_restorecheck` DB’sine `psql 16.14` ile yüklendi. Geri yüklenen `alembic_version=0009_video_understanding` ve üç satır sayısı kaynakla birebir eşleşti (`1/1/4`). | — | İzole stack’te gerçek PostgreSQL + MinIO; yedek anahtarı `qa-w07/...sql.gz.enc` | kabul edildi |
+| 2 | Scratch bütçe aşımı gürültülü fail ediyor: worker tmpfs’inde 385 MiB artık dosya (soft bütçe 402,653,184 byte) varken gerçek `media.technical_analysis.drain` Celery işi `FAILURE` ve `WORKER_SCRATCH_BUDGET_EXCEEDED` döndü. | — | `celery-worker` içinde `dd ... count=385`; API’den `send_task('media.technical_analysis.drain')` | kabul edildi |
+| 3 | Worker’ın 2 CPU kotasını iki `yes > /dev/null` stres süreciyle doldururken API içinden `/health/ready` 10/10 kez `200` döndü; ölçülen süreler 2.11–15.44 ms idi. | — | `celery-worker` içinde 25 sn iki CPU-hog; API konteynerinden ardışık 10 readiness isteği | kabul edildi |
+| 4 | Hedefli W07 testleri de yeşil: scratch, backup, restore ve benchmark ilgili birim testlerinden 49/49 geçti. API slim imajında `pg_dump`/`psql` bulunmadığı için tam restore CLI’si değil, gerçek dump ve W07’nin object-store/decrypt yardımcılarıyla dış DB-client restore provası koşuldu; bu runbook’taki DB-komşusu runner ön koşuluyla uyumlu. | düşük | `pytest tests/unit/test_worker_scratch.py tests/unit/test_backup_db.py tests/unit/test_restore_check.py tests/unit/test_benchmark.py` | kabul edildi |
+
+**Karar:** teslim edilebilir.

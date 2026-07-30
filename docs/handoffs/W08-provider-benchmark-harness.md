@@ -169,4 +169,14 @@ aşağıyı doldurur.
 
 ## Doğrulama
 
-_(test eden oturum doldurur — özellikle: ground truth'a karşı hesaplanan metriği bağımsız doğrula ve maliyet tavanını gerçekten aşmayı dene)_
+### Doğrulama — 2026-07-30 · Codex test oturumu
+
+Araç zinciri: Docker 25.0.3 (build `4debf41`) · Docker Compose 2.24.6-desktop.1 · izole `COMPOSE_PROJECT_NAME=sp-codex` stack · Python 3.13.14 · pytest 9.1.1 · ruff 0.16.0 · mypy 2.3.0.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Ground truth’a karşı bağımsız stdlib hesapları harness JSON’u ile tam eşleşti: ASR WER `0.14090909090909093`, timestamp drift `31.25 ms`, video scene-label Jaccard `0.8055555555555555`. Hesaplama golden JSON’lardan yapıldı; harness metrik fonksiyonları çağrılmadı. | — | `python -m scripts.run_benchmark --runs 1 --out /tmp/w08-results.json`; fixture’ları ayrı Levenshtein/drift/Jaccard betiğiyle karşılaştırma | kabul edildi |
+| 2 | Maliyet tavanı gerçek koşuyu çağrıdan önce durduruyor: `--cost-cap-minor 10` normal 19 minor-unit koşuyu 10’da kesti; CLI’nin gerçek çıkış kodu `2`; sonuçta 7 usage kaydı var ve `video_understanding` için hiç usage/capability kaydı yok. | — | `python -m scripts.run_benchmark --cost-cap-minor 10` → `benchmark_exit=2`; JSON’da `halted=true`, `total_cost_minor=10`, `video_usage_calls=0` | kabul edildi |
+| 3 | Harness’in hedefli birim paketi (W07 yüzeyleriyle birlikte) 49/49 geçti; credential, ağ veya üretim sağlayıcısı kullanılmadı. | — | `pytest tests/unit/test_worker_scratch.py tests/unit/test_backup_db.py tests/unit/test_restore_check.py tests/unit/test_benchmark.py` | kabul edildi |
+
+**Karar:** teslim edilebilir.
