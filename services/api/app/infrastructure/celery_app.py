@@ -48,6 +48,10 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "media.video_understanding.drain",
                 "schedule": settings.celery_beat_media_drain_interval_seconds,
             },
+            "drain-content-render": {
+                "task": "content.render.drain",
+                "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
             "recover-stale-jobs": {
                 "task": "operations.recovery.drain",
                 "schedule": settings.celery_beat_recovery_interval_seconds,

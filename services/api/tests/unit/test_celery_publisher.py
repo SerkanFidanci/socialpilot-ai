@@ -48,6 +48,7 @@ async def test_publisher_maps_requested_events_to_empty_wake_up_messages() -> No
         ("media.technical_analysis.requested", "media.technical_analysis.drain"),
         ("media.scene_speech.requested", "media.scene_speech_analysis.drain"),
         ("media.video_understanding.requested", "media.video_understanding.drain"),
+        ("content.render.requested", "content.render.drain"),
     ):
         await publisher.publish(event(event_type))
         assert sent[-1] == (task_name, (), {})
@@ -150,6 +151,7 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
         "drain-technical": "media.technical_analysis.drain",
         "drain-scene-speech": "media.scene_speech_analysis.drain",
         "drain-video-understanding": "media.video_understanding.drain",
+        "drain-content-render": "content.render.drain",
         "recover-stale-jobs": "operations.recovery.drain",
     }
     assert schedule["dispatch-outbox"]["schedule"] == 11

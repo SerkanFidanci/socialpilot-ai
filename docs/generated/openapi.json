@@ -21,6 +21,17 @@
         "title": "AddMemberRequest",
         "type": "object"
       },
+      "AiDisclosureState": {
+        "description": "Whether a render's output contains AI-generated or AI-modified material.\n\nMeta has required AI disclosure on FB/IG advertising since July 2026 and treats undeclared\nAI content as grounds for rejecting an ad — a platform policy, so it binds in Türkiye too\n(99-external-platform-facts.md). The field therefore exists from the first render rather\nthan arriving with the first model call: a record written today as `none` is trustworthy,\nwhile a column back-filled later is not.",
+        "enum": [
+          "none",
+          "ai_generated",
+          "ai_modified",
+          "unknown"
+        ],
+        "title": "AiDisclosureState",
+        "type": "string"
+      },
       "AssetResponse": {
         "properties": {
           "business_id": {
@@ -1348,6 +1359,30 @@
         "title": "PartsRequest",
         "type": "object"
       },
+      "PatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "operations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Operations",
+            "type": "array"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RenderProfile"
+          }
+        },
+        "required": [
+          "profile",
+          "operations"
+        ],
+        "title": "PatchRequest",
+        "type": "object"
+      },
       "PricePayload": {
         "additionalProperties": false,
         "description": "Money crosses the wire as an integer count of minor units, never as a decimal.\n\n`MinorUnits` is strict on purpose: a JSON float is rejected even when its value is integral,\nso a client that computes an amount in floating point fails on its first request instead of\non the one value that does not round cleanly (see `core/money.py`).",
@@ -1935,6 +1970,16 @@
         "title": "ProductStatus",
         "type": "string"
       },
+      "ProvenanceState": {
+        "description": "What happened to the output's C2PA provenance manifest during rendering.\n\nA C2PA manifest does not survive re-encoding, and every output of this pipeline is\nre-encoded. An adapter that strips provenance reports `stripped_pending_reattach`, which\nleaves a queryable set of outputs awaiting a signing step. Writing and signing the manifest\nis a separate job (it needs a certificate) and is out of this slice; the hook is not.",
+        "enum": [
+          "absent",
+          "stripped_pending_reattach",
+          "attached"
+        ],
+        "title": "ProvenanceState",
+        "type": "string"
+      },
       "ReadyHealthResponse": {
         "description": "Response for safe dependency readiness information.",
         "properties": {
@@ -1958,6 +2003,242 @@
         ],
         "title": "ReadyHealthResponse",
         "type": "object"
+      },
+      "RenderProfile": {
+        "description": "PRD §19.2's target profiles, verbatim.",
+        "enum": [
+          "instagram_reels_1080x1920",
+          "instagram_story_1080x1920",
+          "instagram_feed_1080x1350",
+          "instagram_square_1080x1080",
+          "x_video_1280x720",
+          "x_vertical_1080x1920",
+          "preview_540x960"
+        ],
+        "title": "RenderProfile",
+        "type": "string"
+      },
+      "RenderRequestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/RenderProfile"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "RenderRequestBody",
+        "type": "object"
+      },
+      "RenderResponse": {
+        "properties": {
+          "ai_disclosure_state": {
+            "$ref": "#/components/schemas/AiDisclosureState"
+          },
+          "audio_codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Codec"
+          },
+          "business_id": {
+            "format": "uuid",
+            "title": "Business Id",
+            "type": "string"
+          },
+          "byte_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byte Size"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "consumes_entitlement": {
+            "title": "Consumes Entitlement",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "master_object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Master Object Key"
+          },
+          "preview_object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Object Key"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RenderProfile"
+          },
+          "provenance_state": {
+            "$ref": "#/components/schemas/ProvenanceState"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RenderStatus"
+          },
+          "thumbnail_object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Object Key"
+          },
+          "timeline_id": {
+            "format": "uuid",
+            "title": "Timeline Id",
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/RenderTrigger"
+          },
+          "video_codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Codec"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "id",
+          "business_id",
+          "timeline_id",
+          "profile",
+          "status",
+          "trigger",
+          "consumes_entitlement",
+          "ai_disclosure_state",
+          "provenance_state",
+          "master_object_key",
+          "preview_object_key",
+          "thumbnail_object_key",
+          "duration_ms",
+          "width",
+          "height",
+          "video_codec",
+          "audio_codec",
+          "byte_size",
+          "failure_code",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "RenderResponse",
+        "type": "object"
+      },
+      "RenderStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "title": "RenderStatus",
+        "type": "string"
+      },
+      "RenderTrigger": {
+        "description": "Why a render ran — the fact entitlement accounting keys off.\n\n`initial` is the first render of a timeline lineage and is the one that will consume a\ngeneration right when slice 2E wires the ledger. `revision` is a re-render after a\nparametric patch: no provider was called and no new content was generated, so it draws on\nthe revision quota instead (plan §2, PRD §12.8). Recording the reason at render time rather\nthan inferring it later is what keeps that rule auditable.",
+        "enum": [
+          "initial",
+          "revision"
+        ],
+        "title": "RenderTrigger",
+        "type": "string"
       },
       "SceneResponse": {
         "properties": {
@@ -2273,6 +2554,81 @@
           "stream_count"
         ],
         "title": "TechnicalMetadataResponse",
+        "type": "object"
+      },
+      "TimelineRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RenderProfile"
+          }
+        },
+        "required": [
+          "profile",
+          "document"
+        ],
+        "title": "TimelineRequest",
+        "type": "object"
+      },
+      "TimelineResponse": {
+        "properties": {
+          "business_id": {
+            "format": "uuid",
+            "title": "Business Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "root_id": {
+            "format": "uuid",
+            "title": "Root Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "business_id",
+          "root_id",
+          "parent_id",
+          "revision",
+          "document",
+          "created_at"
+        ],
+        "title": "TimelineResponse",
         "type": "object"
       },
       "TranscriptResponse": {
@@ -3902,6 +4258,666 @@
         "summary": "Create Campaign Offer",
         "tags": [
           "brands"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/renders/{render_id}": {
+      "get": {
+        "operationId": "get_render_v1_businesses__business_id__content_renders__render_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "render_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Render Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Render",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/timelines": {
+      "post": {
+        "operationId": "create_timeline_v1_businesses__business_id__content_timelines_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Timeline",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/timelines/{timeline_id}": {
+      "get": {
+        "operationId": "get_timeline_v1_businesses__business_id__content_timelines__timeline_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "timeline_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Timeline Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Timeline",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/timelines/{timeline_id}/patch": {
+      "post": {
+        "description": "Apply a parametric patch, producing a new revision rather than editing in place.",
+        "operationId": "patch_timeline_v1_businesses__business_id__content_timelines__timeline_id__patch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "timeline_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Timeline Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Timeline",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/timelines/{timeline_id}/renders": {
+      "post": {
+        "description": "Validate and enqueue a render. The response is the record, not the video.",
+        "operationId": "request_render_v1_businesses__business_id__content_timelines__timeline_id__renders_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "timeline_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Timeline Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Render",
+        "tags": [
+          "content"
         ]
       }
     },

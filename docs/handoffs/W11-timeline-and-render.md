@@ -108,9 +108,115 @@ docs/adr/ADR-XXX-render-port.md                     (yeni)
 
 Numarayı **sen seçmiyorsun.** İki dosyayı da `ADR-XXX-<konu>.md` adıyla yaz, başlıklarda `ADR-XXX` bırak, raporda bildir. PM merge sırasında numaralandırır.
 
-## Rapor
+## Rapor — 2026-07-30 · yürüten oturum (Opus 4.8)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/2a-timeline-render` (base `main` @ `e2f3860`) · **Durum:** tamamlandı
+
+### Yapılanlar
+
+- **`modules/content/` yeni modülü.** `timeline.py` (§18.2 kapalı şema, parse + serialize),
+  `validation.py` (§18.3 saf kurallar + satır kaydırma), `patch.py` (K4 kapalı operasyon kümesi),
+  `render.py` (`RenderPort`, `RenderCapabilities`, `RenderPlan`, §19.2 profilleri, disclosure ve
+  provenance durumları), `models.py`, `repository.py`, `service.py`, `render_service.py`,
+  `policy.py`, `domain.py`, `CLAUDE.md` (38 satır).
+- **`RenderPort` + FFmpeg adapter.** `infrastructure/render/{__init__,ffmpeg,fake}.py`.
+  `create_render` fabrikası `create_storage` desenini izliyor, `production`'da `fake` reddediliyor.
+- **AI'sız gerçek render.** Analiz edilmiş asset'in iki gerçek kesitinden Türkçe overlay +
+  logo + yakılmış altyazılı 1080x1920 MP4 + `preview_540x960` + thumbnail. Çıktı MinIO'ya
+  yazılıyor, geri çekilip `ffprobe` ile doğrulanıyor.
+- **Migration `0012_content_timeline_render`** — `content_timelines` (revizyon başına satır) +
+  `render_outputs`. **Aşağıdaki zincir notuna bakın.**
+- **API:** `POST/GET .../content/timelines`, `.../patch`, `POST .../renders`, `GET .../renders/{id}`.
+  OpenAPI + `endpoints.md` yeniden üretildi.
+- **Worker:** `content.render.drain` task'ı, `WorkerContext.content_render_service`, beat kaydı.
+- İki ADR (`ADR-XXX-render-port.md`, `ADR-XXX-parametric-editing-model.md`),
+  `docs/architecture/content-render.md`.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Hiçbir AI çağrısı yok** (WO gereği). `ContentRenderService` yapıcısında model portu yok;
+  bir test imza kümesini kilitliyor. Altyazılar mevcut `transcript_segments` satırlarının kesite
+  izdüşümü — sağlayıcı çağrısı değil, saklanmış veri.
+- **`fade` geçişi ve voiceover/music ses kaynakları** adapter kabiliyetinde bildirilmiyor (2C+).
+  Doğrulama bunları dokümante kodla reddediyor — yarı yolda çöken job yerine temiz ret.
+- **Gerçek C2PA manifest yazımı** yok; kanca `provenance_state = stripped_pending_reattach`
+  olarak bırakıldı (sertifika gerektiriyor).
+- **Marka fontu yok** — DejaVu ile çalışıyor. Lisans kararı gerekiyor; ayarlar (`RENDER_FONT_FILE`,
+  `RENDER_FONT_FAMILY`) yerinde, karar verildiğinde konfigürasyon değişikliği.
+- **Tek video track** (`max_video_tracks=1`). Kompozisyon gerektiğinde kabiliyet artar, port değişmez.
+- `docs/index.md` ve `docs/adr/README.md`'ye dokunulmadı (W03 tekeli) — ADR'lar indekse eklenmedi.
+
+### Doğrulama
+
+Araç zinciri: **Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0**, `COMPOSE_PROJECT_NAME=sp-w11`
+izole stack (gerçek PostgreSQL + MinIO + FFmpeg 7.1.5).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` + `ruff format --check` (app/tests/migrations/scripts) | **yeşil** |
+| `mypy .` (strict) | **yeşil** — 155 dosya |
+| `pytest` (integration dahil) | **yeşil** — **463 test** (öncesi 392, +71) |
+| `check-openapi` (kontrat drift) | **yeşil** — yeniden üretildi, 5 endpoint eklendi |
+| migration `upgrade head → downgrade base → upgrade head` | **yeşil**, tek head |
+
+| # | Kabul kriteri | Sonuç |
+|---|---|---|
+| 1 | Migration up/down/up, tek head | ✅ `0012_content_timeline_render (head)` |
+| 2 | Gerçek render, ffprobe doğrulaması, `render_outputs`, ön izleme, AI çağrısı yok | ✅ `test_real_render_of_two_scenes_with_turkish_overlay_and_logo` — 1080x1920 h264+aac, ~5 sn, preview 540x960 |
+| 3 | Türkçe metin doğru render | ✅ `test_turkish_glyphs_resolve_against_the_bundled_font` — exit 0 **ve** glif uyarısı yok |
+| 4 | §18.3 reddi (süre, safe-area, yasak kelime, duplicate) render başlamadan | ✅ `test_validation_rejects_before_any_render_is_scheduled` — ayrıca 0 render kaydı, 0 job |
+| 5 | `verified_field` uydurulamıyor | ✅ parse hatası (`TIMELINE_VERIFIED_FIELD_NOT_LITERAL`) + `TIMELINE_VERIFIED_FIELD_NOT_FOUND` |
+| 6 | Yalnızca 9'lu ızgara çapası; ham koordinat reddi | ✅ `TIMELINE_UNKNOWN_FIELD` |
+| 7 | Patch → yeniden doğrula → yeniden render, yeni hak tüketmiyor | ✅ `trigger=revision`, `consumes_entitlement=false`; revizyon 1 hâlâ okunabilir |
+| 8 | Tek adapter; domain'de `ffmpeg`/`subprocess` yok | ✅ tokenize eden test + `app.infrastructure` import yasağı; fabrika `production`'da `fake`'i reddediyor |
+| 9 | Worker izolasyonu: timeout, kısmi çıktı, scratch guard, dead-letter | ✅ `test_content_render_worker.py` (9 test) |
+| 10 | Disclosure + provenance alanları, bu slice `none`/boş | ✅ `ai_disclosure_state=none`, `provenance_state=stripped_pending_reattach`, `provenance_manifest_key=NULL` |
+| 11 | Tenant izolasyonu | ✅ başka tenant'ın asset'i `TIMELINE_ASSET_NOT_ACCESSIBLE`; başka işletme `404` |
+| 12 | İmzalı URL / credential sızmıyor | ✅ yanıt gövdesi object key taşıyor; audit ve yanıtta imza materyali yok; FFmpeg stderr hiç okunmuyor |
+| 13 | `make verify` yeşil, test sayısı azalmıyor, drift yok | ✅ 392 → 463 |
+| 14 | İki ADR (`ADR-XXX`), `content` `CLAUDE.md` ≤40 satır | ✅ 38 satır |
+
+### Açıkça belirtmem gerekenler
+
+1. **Migration zinciri — PM merge'de düzeltmeli.** W10 merge edilmemişti (Alembic head `0010`),
+   ama W10 worktree'sinde `0011_schema_debt.py` zaten oluşturulmuş. Kullanıcı kararıyla `0011`
+   alınmadı: dosya `0012_content_timeline_render` olarak yazıldı ve **dalında**
+   `down_revision = "0010_brand_catalog"`. **Merge sırasında `down_revision`
+   `0011_schema_debt`'e çevrilmeli.** Tablolar ayrık (W10: `provider_usage`/media/businesses —
+   W11: `content_timelines`/`render_outputs`), zincir notu migration dosyasının docstring'inde de var.
+
+2. **İlan edilen listenin dışında 4 dosyaya dokundum.** Hepsi yeni bir modül/job tipi için
+   yapısal olarak zorunluydu ve mevcut guard testleri bunları zaten talep ediyordu:
+   - `app/infrastructure/database/metadata.py` — yeni modül modellerinin kaydı (1 import + 1 satır).
+   - `app/infrastructure/celery_publisher.py` — `content.render.requested` → `content.render.drain`
+     (1 satır). `test_every_emitted_outbox_event_type_is_classified` sınıflandırılmamış event'i reddediyor.
+   - `app/infrastructure/celery_app.py` — beat kaydı (4 satır).
+     `test_beat_schedule_wakes_every_drain_task_the_publisher_can_route` bunu talep ediyor.
+   - `tests/unit/test_celery_publisher.py` — yukarıdaki iki eklemenin beklentileri (2 satır).
+     (`tests/` zaten ilan listemde.)
+   Hiçbiri W10'un kapsamıyla çakışmıyor. Sahiplik tablosuna girmeleri gerekip gerekmediği PM kararı.
+
+3. **Render job'ının claim sorgusu `modules/content/repository.py`'de**, `modules/operations/`'da
+   değil — o dosyalar ilan listemde yok. `job_type` düz `String(128)` olduğu için şema
+   değişikliği gerekmedi. Sorgu media drain'lerinin SKIP LOCKED şeklinin aynısı.
+   **PM'e öneri:** ileride `claim_next_job(job_type)` olarak `OperationsRepository`'ye
+   yükseltilebilir; şu an üç yerde tekrar eden bir desen.
+
+4. **§18.3 hata kodları PRD §30 kataloğuna eklenmedi.**
+   `docs/product/requirements/90b-api-error-contracts.md` W03 tekelinde. Kodların tam listesi
+   [content-render.md](../architecture/content-render.md)'de ve modül `CLAUDE.md`'sinde;
+   katalog güncellemesi PM kuyruğunda.
+
+5. **Safe-area marjları bizim ürün kararımız, platform verisi değil.** `render.py`'de bu
+   açıkça yazılı. Instagram'ın yayımladığı bir geometri olarak sunulmadı — öyle sunmak bu
+   deponun hafızadan yapmasına izin verilmeyen bir iddia olurdu.
+
+6. **Metin artık satır kaydırılıyor (en fazla 3 satır).** Tek satır varsayımı gerçek Türkçe
+   içerikle ilk denemede çöktü. Kaydırma tanımı doğrulama ile renderer arasında tek yerde
+   (`validation.wrap_text`); doğrulamanın ölçtüğü blok ile çizilen blok ayrışamaz.
+
+7. **`.env.w11`** worktree'ye eklendi (izole port bloğu: API 8031, PG 55531, Redis 56531,
+   MinIO 59031/59032). `.gitignore`'a girmesi ya da silinmesi PM kararı — commit'e dahil edilmedi.
 
 ## Doğrulama
 

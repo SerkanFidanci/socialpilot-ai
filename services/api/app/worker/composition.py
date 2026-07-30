@@ -35,7 +35,10 @@ from app.infrastructure.media.fake_video_understanding import (
     FakeFrameExtractionAdapter,
     FakeVideoUnderstandingAdapter,
 )
+from app.infrastructure.render import create_render
 from app.infrastructure.storage import create_storage
+from app.modules.content.render import RenderPort
+from app.modules.content.render_service import ContentRenderService
 from app.modules.media.ingest import MediaIngestService
 from app.modules.media.scene_speech import SceneSpeechAnalysisService
 from app.modules.media.storage import MultipartStoragePort
@@ -60,6 +63,7 @@ class WorkerContext:
     outbox_publisher: CeleryOutboxPublisher
     storage: MultipartStoragePort
     materializer: MediaMaterializerPort
+    render: RenderPort
     content_inspector: FakeContentInspector
     malware_scanner: FakeMalwareScanner
     scene_detector: FakeSceneDetector
@@ -118,6 +122,11 @@ class WorkerContext:
             self.materializer,
         )
 
+    def content_render_service(self, session: AsyncSession) -> ContentRenderService:
+        return ContentRenderService(
+            session, self.settings, self.materializer, self.render, self.storage
+        )
+
     def recovery_service(self, session: AsyncSession) -> JobRecoveryService:
         return JobRecoveryService(session, self.settings)
 
@@ -154,6 +163,7 @@ def build_worker_context(settings: Settings) -> WorkerContext:
         outbox_publisher=CeleryOutboxPublisher(celery_app),
         storage=create_storage(settings),
         materializer=create_materializer(settings),
+        render=create_render(settings),
         content_inspector=FakeContentInspector(),
         malware_scanner=FakeMalwareScanner(),
         scene_detector=FakeSceneDetector(),

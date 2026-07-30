@@ -3,7 +3,7 @@
 <!-- ÜRETİLMİŞ DOSYA — elle düzenlenmez. Kaynak: docs/generated/openapi.json
      Üreten: services/api/scripts/generate_endpoints_doc.py (`make generate-docs`) -->
 
-**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **24 endpoint**
+**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **29 endpoint**
 
 > Bu dosya [`../generated/openapi.json`](../generated/openapi.json) yerine okunur:
 > aynı kontrat, ~%98 daha az token. Şema/alan detayı gerekiyorsa tek endpoint'i
@@ -54,6 +54,16 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 | `GET` | `/v1/businesses/{business_id}/members` | List Members | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `POST` | `/v1/businesses/{business_id}/members` | Add Member | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `201` |
 | `PATCH` | `/v1/businesses/{business_id}/members/{member_id}` | Update Member | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
+
+## content
+
+| Metot | Yol | Amaç | Yetki | Idempotency | Başarı |
+|---|---|---|---|---|---|
+| `GET` | `/v1/businesses/{business_id}/content/renders/{render_id}` | Get Render | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/timelines` | Create Timeline | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
+| `GET` | `/v1/businesses/{business_id}/content/timelines/{timeline_id}` | Get Timeline | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/timelines/{timeline_id}/patch` | Apply a parametric patch, producing a new revision rather than editing in place | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
+| `POST` | `/v1/businesses/{business_id}/content/timelines/{timeline_id}/renders` | Validate and enqueue a render. The response is the record, not the video | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `202` |
 
 ## identity — kimlik
 

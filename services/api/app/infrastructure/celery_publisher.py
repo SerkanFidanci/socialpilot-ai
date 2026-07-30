@@ -15,6 +15,7 @@ DRAIN_TASK_BY_EVENT: dict[str, str] = {
     "media.technical_analysis.requested": "media.technical_analysis.drain",
     "media.scene_speech.requested": "media.scene_speech_analysis.drain",
     "media.video_understanding.requested": "media.video_understanding.drain",
+    "content.render.requested": "content.render.drain",
 }
 """Requested events whose only transport effect is waking the matching drain task."""
 
