@@ -47,3 +47,100 @@
 ## Yığın sürüm gerçekleri (2026-07-30)
 
 Python 3.14 kararlı (3.15 → 1 Eki 2026) · FastAPI ~0.13x · uvicorn 0.51 · Alembic 1.18.5 · Celery 5.6.2 (**native asyncio yok** — köprü veya `celery-aio-pool` gerekir) · SQLAlchemy 2.0 kararlı, 2.1 beta · Pydantic 2.13 · PostgreSQL 18 (`uuidv7()`, yeni I/O altyapısı) · Redis 8 AGPL / Valkey 9.1 BSD · pgvector 0.8.x · FFmpeg 8.0 (dahili Whisper filtresi) · Flutter 3.44 · Next.js 16 · `uv` fiili standart paket yöneticisi · OpenTofu greenfield IaC için düşük riskli varsayılan.
+
+---
+
+## PRD §49 — 27 Temmuz 2026 tarihli referans listesi (tarihsel kayıt)
+
+> Aşağıdaki blok `product-requirements.md` §49'dan **birebir** taşındı. Doğrulama tarihi **27 Temmuz 2026**'dır, yani bu dosyanın 6 ay kuralına göre **güvenilmez** sayılır: yalnızca kaynak listesi olarak kullanılır.
+> Güncel gerçekler yukarıdaki tablolardır; çelişki halinde yukarısı geçerlidir.
+
+# 49. Resmî platform notları ve referanslar
+
+Bu bölüm 27 Temmuz 2026 tarihinde kontrol edilen resmî kaynakları içerir. Entegrasyon geliştirilirken yeniden doğrulanmalıdır.
+
+## Meta / Instagram
+
+- Meta Marketing API:  
+  https://developers.facebook.com/documentation/ads-commerce/marketing-api
+- Instagram Platform:  
+  https://developers.facebook.com/documentation/instagram-platform
+- Content Publishing:  
+  https://developers.facebook.com/documentation/instagram-platform/content-publishing
+
+## Google Ads
+
+- Google Ads API:  
+  https://developers.google.com/google-ads/api
+- OAuth:  
+  https://developers.google.com/google-ads/api/docs/oauth/overview
+- Developer Token:  
+  https://developers.google.com/google-ads/api/docs/api-policy/developer-token
+- Create campaigns:  
+  https://developers.google.com/google-ads/api/docs/campaigns/create-campaigns
+- Test accounts:  
+  https://developers.google.com/google-ads/api/docs/best-practices/test-accounts
+
+## X
+
+- X Ads API:  
+  https://docs.x.com/x-ads-api/introduction
+- Getting started:  
+  https://docs.x.com/x-ads-api/getting-started/step-by-step-guide
+- Authentication:  
+  https://docs.x.com/x-ads-api/fundamentals/making-authenticated-requests
+- Campaign management:  
+  https://docs.x.com/x-ads-api/campaign-management
+- Sandbox:  
+  https://docs.x.com/x-ads-api/fundamentals/sandbox
+
+## n8n
+
+- Scaling/queue mode:  
+  https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/enable-queue-mode
+- Binary data:  
+  https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/handle-binary-data
+- External storage:  
+  https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/use-external-storage
+
+## Apple ve Google Play abonelik
+
+- Apple auto-renewable subscriptions:  
+  https://developer.apple.com/app-store/subscriptions/
+- StoreKit In-App Purchase:  
+  https://developer.apple.com/documentation/storekit/in-app-purchase
+- App Review Guidelines:  
+  https://developer.apple.com/app-store/review/guidelines/
+- Google Play subscriptions:  
+  https://developer.android.com/google/play/billing/subscriptions
+- Play Billing integration:  
+  https://developer.android.com/google/play/billing/integrate
+- Google Play payments policy:  
+  https://support.google.com/googleplay/android-developer/answer/10281818
+
+## AI sağlayıcıları
+
+- Alibaba Model Studio/Qwen Vision OpenAI-compatible API:  
+  https://help.aliyun.com/en/model-studio/qwen-vl-compatible-with-openai
+- Alibaba video understanding:  
+  https://help.aliyun.com/en/model-studio/media-video-understanding
+- DeepSeek API:  
+  https://api-docs.deepseek.com/
+- DeepSeek pricing:  
+  https://api-docs.deepseek.com/quick_start/pricing/
+- MiniMax API overview:  
+  https://platform.minimaxi.com/docs/api-reference/api-overview
+- Volcengine model list/Seedance:  
+  https://www.volcengine.com/docs/82379/1330310
+
+## KVKK
+
+- Kişisel verilerin işlenmesi:  
+  https://www.kvkk.gov.tr/Icerik/2048/Kisisel-Verilerin-Islenmesi
+- Özel nitelikli kişisel veriler:  
+  https://www.kvkk.gov.tr/Icerik/2051/Ozel-Nitelikli-Kisisel-Veriler
+- Yurt dışına aktarım:  
+  https://www.kvkk.gov.tr/Icerik/2053/Yurtdisina-Aktarim
+- Standart sözleşmeler:  
+  https://www.kvkk.gov.tr/Icerik/7929/Standart-Sozlesmeler
+
