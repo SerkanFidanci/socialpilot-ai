@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | `3cafc12` — W01→W12 merge edildi (yalnız W06 bekliyor). **W13 `slice/2b-script-generation`'da hazır, merge edilmedi:** `main` worktree'sinde Codex'in commit'lenmemiş W10/W11/W12 doğrulama yazımı var, altından ref oynatılmaz |
-| Alembic head | dalda `0013_script_generation`, `main`'de `0012_content_timeline_render` (her ikisi tek head; zincir 0001→0013 sıfırdan doğrulandı) |
-| Backend doğrulama | dalda **591 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 169 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 (`main`: 497) |
+| `main` | `2e4c59a` — W01→W13 tamamı merge edildi (yalnız W06 bekliyor), origin ile senkron |
+| Alembic head | `0013_script_generation` (tek head; zincir 0001→0013, merge sonrası up/down/up doğrulandı) |
+| Backend doğrulama | **591 pytest** (gerçek PostgreSQL + MinIO, merge sonrası `main`'de) · lint + format + mypy strict 169 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -73,6 +73,17 @@ docker compose --profile worker up -d        # worker gerekiyorsa
 
 | K6 | **iOS medya formatlarının analizi.** ~~`.mov` sessizce duruyor~~ **video yarısı W09'da çözüldü** (`5ee03d4` merge edildi): `.mov`/`video/quicktime` artık analiz hattına giriyor, codec ffprobe'dan doğrulanıyor, desteklenmeyen codec `rejected`. HEIC/HEIF ingest'te **açıkça reddediliyor** (`INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE`) — sessiz çıkmaz sokak yok. **Kalan (ikinci yarı):** HEIC/HEIF *fotoğraf* analiz hattı (teknik metadata + VLM etiketleme; sahne/ASR yok) tanımlanıp inşa edilmeli — ayrı slice, enum durumu için migration slotu ister | fotoğraf hattı Phase 2'den önce | **Video yarısı uygulandı** (ADR-011). Fotoğraf hattı: bir "fotoğraf hazır/analiz" durumu + VLM etiketleme; landing'de HEIC→JPEG transcode gerekir (platform uyumu). Bu geldiğinde W09'un geçici HEIC reddi kalkar |
 
+### W13 kural onayları (PM, 2026-07-31)
+
+W13'ün yükselttiği kararların tamamı karara bağlandı:
+
+1. **Üretimde fake AI davranışı — ONAYLANDI ve genelleştirildi.** `script_generation` üretimde `Settings` reddi yerine `DisabledScriptGenerationAdapter` + `503 SCRIPT_GENERATION_NOT_CONFIGURED` alıyor; boot çökmüyor. Gerekçe doğru: fake render açıkça yer tutucu dosya yazar, fake senaryo ise **insanın onaylayıp yayınlayabileceği akıcı metin** üretir — sessizce üretime sızması asıl tehlike, ama bir kabiliyet için tüm uygulamayı düşürmek yanlış takas. **Genel kural:** çıktısı insan-onaylanabilir olan AI kabiliyetleri üretimde `disabled` durumuna düşer ve dokümante hata döner; altyapı adapter'ları (storage/identity/materializer/render) `Settings` doğrulamasında reddedilmeye devam eder. 2C (TTS) ve sonrası bu kurala uyar.
+2. **`Permission.CONTENT_GENERATE` — ONAYLANDI.** PRD §4 açık: editor içerik üretir. W11'in timeline'ı `BUSINESS_UPDATE`'e bağlaması tutarsızdı; hizalama **W14 kalem 4**.
+3. **Kampanya bitişi kapsayıcı son gün olarak basılır — ONAYLANDI.** Pencere teknik olarak `[starts_at, ends_at)`; reklam metninde son kapsayıcı an işletme saat diliminde biçimlendirilir. Bir gün fazla vaat etmemek ücretli gönderide doğru taraf.
+4. **Yüzde işareti fiyat sayılır — ONAYLANDI.** Oran ya doğrulanmış indirimdir ya iddiadır; ikisi de modelin yazacağı şey değil.
+
+Ayrıca kayda geçen: `SCRIPT_GENERATION_MAX_COST_MINOR=0` güvenli varsayılanı doğru (gerçek sağlayıcı bütçe açıkça verilmeden çalışamaz); telefon tespiti marka iletişim kaydı gelince slot+kalıp birlikte eklenir.
+
 ### K5 — Dağıtım ve maliyet modeli
 
 **Kısıt (kullanıcı, 2026-07-30):** kendi altyapısına ağır sabit maliyet istemiyor; ürün bir SaaS aracı olacak, kullanıcılardan ücret alınacak, kendi makinesi yüklenmeyecek.
@@ -117,7 +128,8 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W10](handoffs/W10-schema-debt.md) | **Şema borcu** (4 kalem) | **tamamlandı** · merge (`0a44f22`) · `0011` | dal silindi | Opus 4.8 / medium | kullanıldı |
 | [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
 
-| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi: `script_generation` portu (fake), katı JSON şema, **doğrulanmış alan bindirmesi** (model fiyat/tarih yazamaz, kod yerleştirir), prompt versiyonlama | **tamamlandı** (`e44e3cb`) · `make verify` yeşil (591 test) · **merge bekliyor** — Codex `main` worktree'sinde çalışırken ref oynatılmadı | `slice/2b-script-generation` (dal + worktree duruyor) | Opus 5 / high | kullanıldı (`0013`) |
+| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi, doğrulanmış alan bindirmesi | **tamamlandı** · merge (`2e4c59a`) · `0013` · **Codex doğrulaması bekliyor** | dal + worktree duruyor (doğrulama bitene kadar) | Opus 5 / high | kullanıldı |
+| [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** — presigned URL log sızıntısı (YÜKSEK) · patch idempotency gövde fingerprint'i · `0011` downgrade koruması · izin hizalaması · doküman borçları | **şimdi** | `slice/0p-verification-followups-2` | Opus 5 / high | — (yalnızca `0011` downgrade'ine koruma) |
 
 ### Dosya sahipliği (çakışma önleme)
 

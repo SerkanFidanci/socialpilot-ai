@@ -113,6 +113,14 @@ Kural [README.md](README.md)'de. PM için özeti: **slice başına yeni oturum**
 - ~~Phase 2 kapısı~~ **AÇILDI.** Plan yazıldı, K4 karara bağlandı, K3 çerçevelemesi düzeltildi. 2A kapandı (`258ddc3`, ADR-015/016). 2B iş emri: [W13](W13-script-generation.md) — kalbi doğrulanmış alan bindirmesi: model fiyat/tarih yazamaz, deterministik kalıp tespitiyle yakalanır, kod yerleştirir. Sıradaki 2C (TTS) → 2D (QC) → 2E (yaşam döngüsü + entitlement) → 2F (onay + revizyon) → 2G (planlayıcı); her biri öncekinin merge'inden sonra yazılır.
 - **Eski not:** Artık teknik önkoşullar hazır (marka/katalog verisi, gözlemlenebilirlik, benchmark aracı, gerçek medya hattı). Girmeden önce: **K3** ve **K4** cevaplanmalı, `RenderPort` ADR'ı yazılmalı (K5 gereği), durable execution (DBOS/Temporal) ve LiteLLM değerlendirilmeli.
 
+## W13 sonrası kuyruk (2026-07-31)
+
+- **W14 — şimdi:** Codex bulguları (presigned URL log sızıntısı YÜKSEK — W01'in sentinel testi kütüphane logger'larını taramıyordu, ders: sızıntı testleri **tüm handler çıktısını** kapsamalı; patch fingerprint; 0011 downgrade koruması) + izin hizalaması + doküman borçları.
+- **Codex → W13 doğrulaması** paralel koşabilir (W14 `W13-*.md`'ye dokunmuyor).
+- **2C (TTS) iş emri** W14 merge'inden sonra yazılır; üretim davranışı W13 kural onayı 1'deki genel kurala uyacak.
+- `forbidden_matcher` birleştirmesi (Türkçe İ/I katlaması timeline tarafına) → **2D (QC) slice'ına** not düşüldü.
+- D3 dağıtım kapısı eklendi: üretim kimlik adapter'ı (Firebase/OIDC) yok.
+
 ## Öğrenilen dersler (tekrarlanmasın)
 
 1. **Çift iş.** İki oturum `258439d` base'inden aynı slice'ı yaptı; `c43ccad` silinmek zorunda kaldı. Panzehir: WO'da "dokunulacak dosyalar" ilanı + [STATUS.md](../STATUS.md) dosya sahipliği tablosu + tetiklemeden önce durumun `tetiklenmedi` olduğunu doğrulama.
