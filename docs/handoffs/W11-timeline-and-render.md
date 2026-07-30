@@ -218,6 +218,22 @@ izole stack (gerçek PostgreSQL + MinIO + FFmpeg 7.1.5).
 7. **`.env.w11`** worktree'ye eklendi (izole port bloğu: API 8031, PG 55531, Redis 56531,
    MinIO 59031/59032). `.gitignore`'a girmesi ya da silinmesi PM kararı — commit'e dahil edilmedi.
 
-## Doğrulama
+## Doğrulama — 2026-07-31 · Codex test oturumu
 
-_(test eden oturum doldurur — özellikle: kaynak süresini aşan kesit, safe-area sınırı, `verified_field` yerine serbest metin sokma denemesi, başka tenant'ın asset'i, patch sonrası doğrulamanın atlanması)_
+Worktree kökünde, `COMPOSE_PROJECT_NAME=sp-codex` ile gerçek PostgreSQL + MinIO + FFmpeg
+yolunda sınandı. Araç zinciri: Docker 25.0.3 · Docker Compose v2.24.6-desktop.1 · Python
+3.13.14 · PostgreSQL 16.14 · pytest 9.1.1 · ruff 0.16.0 · mypy 2.3.0.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---:|---|---|---|---|
+| 1 | Gerçek iki-sahne render, Türkçe glif, preview/thumbnail, tenant izolasyonu ve worker doğrulama katmanı başarılı. Kaynak süresini aşan kesit, safe-area dışı metin, yasak kelime, duplicate clip ve uydurma `verified_field` render/job oluşturmadan reddedildi. Patch ile 150 karakterlik safe-area ihlali de `422 TIMELINE_VALIDATION_FAILED` döndü. | — | 65 birim + 6 gerçek FFmpeg/MinIO entegrasyon testi; ayrıca ham patch isteği. | geçti |
+| 2 | **Patch idempotency fingerprint’i gövdeyi kapsamıyor.** Aynı `Idempotency-Key` ile tek operasyonlu önce `ilk metin`, sonra farklı `ikinci farkli metin` patch’i gönderildiğinde ikinci istek `409 IDEMPOTENCY_CONFLICT` yerine `201` ve ilk revizyonu döndürüyor. Servis fingerprint’te yalnız `operations` sayısını saklıyor. | orta | Gerçek timeline’a aynı anahtar, aynı operasyon sayısı ve farklı metinle iki POST. | açık |
+| 3 | **Presigned URL log’a sızıyor.** Gerçek MinIO multipart akışında HTTP istemci `INFO` kaydı tam imzalı URL’yi (`X-Amz-Credential` ve imza query parametreleriyle) stdout’a yazdı. Bu, W11 kabul kriteri 12’nin log yüzeyini ihlal eder; span redaksiyonu bunu kapatmaz. | yüksek | Gerçek multipart upload/complete sırasında uygulama HTTP istemci loglarını incele. | açık |
+| 4 | Domain→RenderPort sınırı, production’da fake adapter reddi, scratch guard/timeout/dead-letter, disclosure=`none` ve provenance kancası testlerde korundu. | — | `test_render_port.py` + `test_content_render_worker.py`. | geçti |
+
+Odaklı W11 birim katmanı **65 passed**, gerçek render entegrasyonu **6 passed**. `ruff check`,
+`ruff format --check` ve `mypy .` temiz; Alembic head `0012_content_timeline_render`.
+Tam backend `pytest -q` 300 saniyede sonuç üretmeden zaman aşımına uğradı; bu nedenle
+tam-regresyon/`make verify` kanıtı yoktur (Windows hostunda `make` de kurulu değildir).
+
+**Karar:** düzeltme gerekiyor — idempotency çakışması algılanmıyor ve imzalı URL loglanıyor.

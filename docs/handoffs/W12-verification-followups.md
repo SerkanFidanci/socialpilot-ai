@@ -239,6 +239,23 @@ sentinel presigned URL/token testleri geçiyor · (8) `85-orchestration-events.m
    kontrat değişikliği olarak kayda geçsin.
 5. **`discount_percent` bilinçli olarak kapsam dışı** — gerekçe yukarıda; PM isterse tek satır.
 
-## Doğrulama
+## Doğrulama — 2026-07-31 · Codex test oturumu
 
-_(test eden oturum doldurur — özellikle: integral float'ın başka bir yoldan sızması, traceparent enjeksiyonuyla trace kirletme, telemetri kapalıyken zarf yazımının yan etkisi)_
+Worktree kökünde, `COMPOSE_PROJECT_NAME=sp-codex` ile gerçek PostgreSQL + MinIO üzerinde
+sınandı. Araç zinciri: Docker 25.0.3 · Docker Compose v2.24.6-desktop.1 · Python 3.13.14 ·
+Pydantic 2.13.4 · PostgreSQL 16.14 · pytest 9.1.1 · ruff 0.16.0 · mypy 2.3.0.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---:|---|---|---|---|
+| 1 | Katı `MinorUnits` sınırı hem API keşif testinde hem gerçek marka/kampanya uçlarında integral float, kesirli float, string, bool, null, negatif ve üst-sınır aşımını reddediyor; JSON int kabul ediliyor. Başka bir para alanı kaçmadı. | — | `test_money.py` ve gerçek PostgreSQL entegrasyonu. | geçti |
+| 2 | Telemetri açıkken outbox zarfındaki W3C taşıyıcı API `/complete` server span’inin trace ID’sini dispatch publisher’a koruyarak taşıdı. Zarf yalnız `job_id`, `asset_id`, `traceparent` alanlarını içerdi; baggage/signed URL/token taşınmadı. | — | `test_worker_continues_the_trace_of_the_request_that_wrote_the_event`. | geçti |
+| 3 | Bozuk/kötü niyetli traceparent varyantları (sıfır ID, yanlış sürüm, uppercase, kesik ve string-dışı dahil) bağlama alınmadı; yeni trace başlatıldı. | — | 8-varyant parametrik telemetry saldırı testi. | geçti |
+| 4 | Telemetri kapalıyken zarf eski iki alanlı biçiminde kaldı; exporter/span/metric yan etkisi oluşmadı. | — | Gerçek outbox entegrasyonu ve no-op telemetry testleri. | geçti |
+
+Odaklı W10/W12 takımı **56 passed**; `ruff check`, `ruff format --check` ve `mypy .` temiz.
+Tam backend `pytest -q` 300 saniyede sonuç üretmeden zaman aşımına uğradı; bu nedenle
+tam-regresyon/`make verify` kanıtı yoktur (Windows hostunda `make` de kurulu değildir).
+
+**Karar:** hedef kabul kriterleri için teslim edilebilir. Not: W11 doğrulamasında saptanan
+HTTP istemci presigned-URL log sızıntısı, W12 zarf/spans sınırının dışında kalan ortak log
+yüzeyidir ve W11’de açık bulgu olarak kaydedilmiştir.

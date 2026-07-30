@@ -173,6 +173,25 @@ PostgreSQL 16 + MinIO (compose, `COMPOSE_PROJECT_NAME=sp-w10`, worktree kökünd
   - `docs/STATUS.md`: yalnız W10 satırı + Alembic head fact'i (git-doc tutarlılığı).
 - **`docs/index.md` / `docs/adr/README.md`:** indekse ekleme yapılmadı (W03 tekeli), bildiriliyor.
 
-## Doğrulama
+## Doğrulama — 2026-07-31 · Codex test oturumu
 
-_(test eden oturum doldurur — özellikle: migration downgrade veri kaybı, kontrol objesi kaldırıldıktan sonra yarım kalmış upload'lar, approver rolünün hiçbir yere sızmadığı)_
+Worktree kökünde, `COMPOSE_PROJECT_NAME=sp-codex` ile gerçek PostgreSQL + Redis + MinIO
+üzerinde sınandı. Araç zinciri: Docker 25.0.3 · Docker Compose v2.24.6-desktop.1 ·
+Python 3.13.14 · PostgreSQL 16.14 · Alembic 1.18.5 · SQLAlchemy 2.0.51 · pytest 9.1.1 ·
+ruff 0.16.0 · mypy 2.3.0.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---:|---|---|---|---|
+| 1 | **Genişletilmiş kolonun geçerli verisi downgrade’i durduruyor.** 288 karakterlik sağlayıcı `UploadId` kaydedildiğinde `alembic downgrade 0010_brand_catalog`, `varchar(128)` için `StringDataRightTruncationError` ile çıkış 1 veriyor. Değer kesilmiyor ve başarısız denemeden sonra korunuyor; ancak gerçek yeni veride kabul kriterindeki up→down→up tamamlanamıyor. Mevcut test yalnızca ≤128 karakterlik geri-dönüş verisini kapsıyor. | orta | Gerçek DB’de 288 karakterlik ID ekle → downgrade → tekrar upgrade head. | açık |
+| 2 | `provider_usage` tenant-kapsamlı olarak yazılıyor; token/prompt/signed URL/raw response için tablo sütunu yok. | — | `test_provider_usage_unit.py` + gerçek DB entegrasyonu. | geçti |
+| 3 | Multipart create/part/complete/cancel gerçek MinIO’da çalıştı; `_control/` katmanına bağımlılık veya obje yazımı görülmedi. Yarım kalmış/cancel edilmiş oturum tekrar tamamlanamıyor. | — | `test_media_uploads_minio.py` gerçek byte yolu. | geçti |
+| 4 | `ready_for_photo_analysis` enum’da, fakat üretim kodunda ulaşılamaz; mevcut HEIC/HEIF reddi korunuyor. | — | Kaynak-tarama birim testi. | geçti |
+| 5 | `approver` enum/politika tablosunda var ve izin kümesi boş; marka/katalog dahil hiçbir mevcut kaynağa sızmadı. | — | Merkezi rol politikası ve marka rol kapsamı testleri. | geçti |
+
+Odaklı W10/W12 takımı **56 passed**; Alembic head `0012_content_timeline_render`.
+`ruff check`, `ruff format --check` ve `mypy .` temiz. Tam backend `pytest -q` 300 saniyede
+sonuç üretmeden zaman aşımına uğradı; bu nedenle tam-regresyon/`make verify` kanıtı yoktur
+(Windows hostunda `make` de kurulu değildir).
+
+**Karar:** düzeltme gerekiyor — downgrade yolu, W10’un kabul ettiği uzun `UploadId` verisinde
+çalışmıyor.
