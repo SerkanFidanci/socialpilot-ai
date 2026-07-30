@@ -71,7 +71,17 @@ docker compose --profile worker up -d        # worker gerekiyorsa
 
 **Şimdi alınacak karar:** `RenderPort` / `TranscodePort` birinci sınıf kabiliyet portu olmalı — AI sağlayıcılarıyla aynı muamele (ADR-004). FFmpeg çağrıları render worker'ının içine gömülürse seçenek kaybedilir. Port arkasında üç dağıtım seçeneği konfigürasyonla değişebilir: yönetilen render servisi (sıfır idle) → sıfıra ölçeklenen burst compute (sıfır idle) → ucuz dedike/spot CPU (hacim eşiği sonrası). PRD §17.2 bunu zaten öngörüyor ("Montaj: FFmpeg | alternatif: Yönetilen render servisi").
 
-**PM önerisi:** MVP'de yönetilen render servisi; timeline JSON'u (§18.2) bu servislerin girdi formatıyla büyük ölçüde örtüşüyor. Hacim eşiği geçince kendi burst worker'ına geçilir.
+**Kullanıcı kararı (2026-07-30):** **tek sunucu**, üzerinde backend + worker + veritabanı; düşük sabit maliyet. Frontend ve medya sunucuda barınmaz.
+
+**Bu karar mimariyle uyumlu — değişiklik gerekmiyor.** Tek sunucuyu mümkün kılan üç mekanizma tasarımda zaten var: (1) medya byte'ları API'den geçmiyor (ADR-002), (2) worker'lar ayrı süreç ve eşzamanlılığı sınırlı (§38.3 backpressure/tenant limiti), (3) `generation_deadline_at` `planned_publish_at`'ten ayrı (§13.1) → zirve yayın saatine değil, gece kuyruğuna dağılıyor.
+
+**Uygulama şekli:** ucuz **dedike** sunucu (bulut VPS değil — FFmpeg gerçek çekirdek ister, vCPU başına 3-5 kat pahalı). Sabit maliyet mertebesi ayda €50-80 (sunucu + R2 + alan adı; sağlayıcıdan teyit edilmeli). Admin paneli sunucuda değil statik hosting'de (bedava, sıfır yük). n8n çıkarılırsa (K2) bir container daha eksilir.
+
+**PM önerisi (render):** MVP'de yönetilen render servisi veya tek sunucuda sınırlı-eşzamanlılıklı FFmpeg; timeline JSON'u (§18.2) yönetilen servislerin girdi formatıyla büyük ölçüde örtüşüyor. Hacim eşiği geçince ikinci bir *yalnızca-worker* makinesi eklenir — mimari değişiklik değil, konfigürasyon.
+
+**Tek sunucu kararının doğurduğu iki kritik eksik (şu an yok):**
+1. **Kaynak limiti yok.** `compose.yaml`'da hiçbir servisin CPU/RAM limiti tanımlı değil. Tek makinede ağır render API'yi açlığa sürükler. Gerekli: worker CPU limiti, FFmpeg süreçlerine düşük öncelik, Postgres'e ayrılmış RAM, render concurrency 1-2, geçici dizin temizliğinin sıkı uygulanması (§19.3).
+2. **Yedekleme yok.** Tek sunucu = tek arıza noktası ve üretim veritabanı git'te olmayacak. Gerekli: sunucu dışına (R2) otomatik günlük `pg_dump` + tercihen WAL arşivi. Pazarlık konusu değil.
 
 **Bağlı açıklar:**
 - **Egress:** Instagram videoyu bizim URL'imizden kendisi çekiyor → her yayın egress. Egress'i sıfır olan object storage (R2 tipi) seçilmeli; PRD zaten listelemiş.
