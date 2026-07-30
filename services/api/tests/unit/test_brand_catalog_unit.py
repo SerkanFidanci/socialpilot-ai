@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from sqlalchemy import BigInteger, Float, Integer, Numeric
@@ -38,12 +39,22 @@ from app.modules.brands.models import (
     CampaignOffer,
     CampaignOfferProduct,
     CampaignOfferStatus,
+    DiscountType,
     ForbiddenClaim,
     Product,
     ProductPrice,
+    ProductStatus,
+    StockStatus,
     TargetAudience,
 )
 from app.modules.brands.policy import BrandAction, permits_action, required_permission
+from app.modules.brands.service import (
+    CampaignOfferInput,
+    PriceInput,
+    ProductInput,
+    _offer_fingerprint,
+    _product_fingerprint,
+)
 from app.modules.businesses.models import BusinessRole
 from app.modules.businesses.policy import Permission
 
@@ -360,3 +371,92 @@ def test_language_color_and_url_normalization() -> None:
     for value in ("javascript:alert(1)", "ftp://example.test", "example.test"):
         with pytest.raises(ProblemException):
             normalize_url(value)
+
+
+def product_input(**overrides: object) -> ProductInput:
+    values: dict[str, object] = {
+        "name": "Mercimek çorbası",
+        "category": "çorba",
+        "description": "Günlük taze",
+        "status": ProductStatus.ACTIVE,
+        "stock_status": StockStatus.AVAILABLE,
+        "valid_locations": ["Kadıköy"],
+        "landing_page_url": "https://example.test/menu",
+        "price": PriceInput(price_minor=14_900, currency="TRY"),
+    }
+    values.update(overrides)
+    return ProductInput(**values)  # type: ignore[arg-type]
+
+
+def offer_input(**overrides: object) -> CampaignOfferInput:
+    values: dict[str, object] = {
+        "name": "Ağustos kampanyası",
+        "status": CampaignOfferStatus.ACTIVE,
+        "approval_status": CampaignApprovalStatus.NOT_REQUIRED,
+        "starts_at": START,
+        "ends_at": END,
+        "discount_type": DiscountType.PERCENTAGE,
+        "discount_percent": 20,
+        "discount_amount_minor": None,
+        "discount_currency": None,
+        "product_ids": [UUID("55555555-5555-4555-8555-555555555555")],
+        "valid_locations": ["Kadıköy"],
+        "stock_limit": 100,
+        "coupon_code": "AGUSTOS20",
+        "legal_text": "Stoklarla sınırlıdır.",
+    }
+    values.update(overrides)
+    return CampaignOfferInput(**values)  # type: ignore[arg-type]
+
+
+def test_every_product_field_takes_part_in_the_idempotency_fingerprint() -> None:
+    """A field left out of the fingerprint is a retry that silently keeps the old value.
+
+    Asserted field by field rather than against a hand-written key list, so adding a field to
+    `ProductInput` without adding it to the fingerprint fails here rather than in production
+    (W14, generalized from the W11 patch finding).
+    """
+
+    baseline = _product_fingerprint(product_input())
+    variants: dict[str, ProductInput] = {
+        "name": product_input(name="Ezogelin çorbası"),
+        "category": product_input(category="ana yemek"),
+        "description": product_input(description="Haftalık"),
+        "status": product_input(status=ProductStatus.ARCHIVED),
+        "stock_status": product_input(stock_status=StockStatus.OUT_OF_STOCK),
+        "valid_locations": product_input(valid_locations=["Beşiktaş"]),
+        "landing_page_url": product_input(landing_page_url="https://example.test/other"),
+        "price": product_input(price=PriceInput(price_minor=15_900, currency="TRY")),
+        "currency": product_input(price=PriceInput(price_minor=14_900, currency="EUR")),
+        "no price": product_input(price=None),
+    }
+    for field, variant in variants.items():
+        assert _product_fingerprint(variant) != baseline, f"{field} escapes the fingerprint"
+    # Casing of the name is the one deliberate equivalence: the catalogue treats these as the
+    # same product, so a retry that recased it is a retry, not a conflict.
+    assert _product_fingerprint(product_input(name="Mercimek Çorbası")) == baseline
+
+
+def test_every_campaign_offer_field_takes_part_in_the_idempotency_fingerprint() -> None:
+    baseline = _offer_fingerprint(offer_input())
+    variants: dict[str, CampaignOfferInput] = {
+        "name": offer_input(name="Eylül kampanyası"),
+        "status": offer_input(status=CampaignOfferStatus.DRAFT),
+        "approval_status": offer_input(approval_status=CampaignApprovalStatus.APPROVED),
+        "starts_at": offer_input(starts_at=START + timedelta(days=1)),
+        "ends_at": offer_input(ends_at=END + timedelta(days=1)),
+        "discount_type": offer_input(
+            discount_type=DiscountType.FIXED_AMOUNT,
+            discount_percent=None,
+            discount_amount_minor=1_000,
+            discount_currency="TRY",
+        ),
+        "discount_percent": offer_input(discount_percent=25),
+        "product_ids": offer_input(product_ids=[UUID("66666666-6666-4666-8666-666666666666")]),
+        "valid_locations": offer_input(valid_locations=["Beşiktaş"]),
+        "stock_limit": offer_input(stock_limit=50),
+        "coupon_code": offer_input(coupon_code="AGUSTOS25"),
+        "legal_text": offer_input(legal_text="Kampanya iptal edilebilir."),
+    }
+    for field, variant in variants.items():
+        assert _offer_fingerprint(variant) != baseline, f"{field} escapes the fingerprint"

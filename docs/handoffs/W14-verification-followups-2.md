@@ -85,9 +85,184 @@ docs/adr/ADR-008-s3-compatible-storage-adapter.md       (downgrade notu)
 5. Doküman borçları kapandı (TIMELINE_* katalogda, CLAUDE.md güncel, .env.example tam).
 6. `make verify` yeşil; test sayısı azalmıyor (şu an **591**); Alembic head değişmedi (`0013_script_generation`); kontrat drift yoksa dokunulmadı, varsa yeniden üretildi.
 
-## Rapor
+## Rapor — 2026-07-31 · yürüten oturum (Opus 5)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/0p-verification-followups-2` (base `main` @ `979f0d6`) · **Durum:** tamamlandı
+
+### Yapılanlar
+
+**Kalem 1 — imza redaksiyonu (YÜKSEK).** Redaksiyon `core/logging.py`'de **süreç genelinde bir
+`logging` record factory** olarak kuruldu (`install_signature_redaction`). Handler filtresi
+değil: filtre yalnızca takıldığı handler'ı korur, oysa mesele kimsenin kaydetmediği bir
+logger'ın — yeni bir HTTP istemcisi, bir sağlayıcı SDK'sı, testin kendi handler'ı — kimse
+hatırlamadan kapsanması. Kayıt **oluşturulurken** temizlendiği için hiçbir handler ham metni
+görmez.
+
+- `redact_signature_material` imza query parametrelerinin **değerini** maskeler
+  (`X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, GCS `Signature`/
+  `GoogleAccessId`, Azure `sig`, `access_token`). Parametre adı, host ve object key kalır —
+  hangi isteğin imzalandığı yararlı yarı, imzanın kendisi tehlikeli yarı.
+- Mesaj **biçimlendirildikten sonra** temizlenir: httpx `'HTTP Request: %s %s …'` çağrısını bir
+  `httpx.URL` **nesnesiyle** yapıyor, `record.args`'ı tek tek taramak sızıntıyı bulmazdı.
+- Traceback ayrı bir yüzey: `record.exc_text` önceden temizlenmiş olarak doldurulur, çünkü
+  `logging.Formatter` `exc_info`'yu kendisi render eder ve bir httpx hata repr'i URL taşır.
+  Yalnızca temizlik bir şey değiştirdiğinde yazılır, böylece kendi `formatException`'ı olan bir
+  formatter sıradan istisnalarda davranışını korur.
+- structlog işlemcisi (`_redact`) artık **string değerleri de** tarıyor — masum bir anahtar
+  altındaki URL ve olay mesajının kendisi de kapsanıyor.
+- Worker `configure_logging` çağırmıyor (handler'lar Celery'nin), bu yüzden
+  `start_worker_process` filtreyi ayrıca kuruyor; testi var.
+
+**Kalem 2 — patch fingerprint'i.** `serialize_patch` (yeni, `patch.py`) ayrıştırılmış
+operasyonları JSON-güvenli kanonik biçime döker; `patch_timeline` parmak izini
+`{timeline_id, profile, operations}`'ın tamamından alıyor. Profil de eklendi: gövdenin
+alanıydı ve karşılaştırmanın dışındaydı. Kanoniklik **ayrıştırılmış** biçimden geliyor, ham
+gövdeden değil — anahtar sırası, atlanan opsiyonel alan ve `reference_id: null` normalleşiyor.
+
+**Kalem 3 — `0011` downgrade.** `downgrade()` artık en başta ön koşulu kontrol ediyor ve
+sığmayan satır varsa **hiçbir şeye dokunmadan** `MIGRATION_0011_DOWNGRADE_BLOCKED` ile duruyor:
+kaç satır sığmıyor, en uzunu kaç karakter, örnek olarak hangi oturum. `UploadId`'nin kendisi
+basılmıyor — sağlayıcı materyali, teşhis materyali değil. Migration docstring'i ve ADR-008'e
+"W14 eki" düşüldü: `0011` yalnızca genişletme öncesi veriyle (ya da boş tabloyla) geri alınabilir.
+
+**Kalem 4 — izin hizalaması.** `content` modülünde **her yazma** `content.generate`: timeline
+yazma, patch, render isteği, senaryo üretimi. Okuma her rolde `business.read`. Çizgi artık
+"içerik üretmek" ile "işletmeyi değiştirmek" arasında; `business.update` yalnızca ikincisi.
+`tenant-isolation.md` rol matrisi gerçekle eşlendi (sütunlar ayrıştırıldı: içerik üretimi,
+medya yükleme, işletme ayarı yazma ayrı ayrı).
+
+**Kalem 5 — doküman borçları.** `error-handling.md`'ye 2A bölümü eklendi: üst düzey kodlar +
+şema (`meta.issue`), patch (`meta.issue`) ve §18.3 doğrulama (`meta.issues[].code`) tabloları,
+ayrıca `render_outputs.failure_code`'a yazılan worker tarafı `RENDER_*` kodları.
+`infrastructure/CLAUDE.md`'ye `storage/s3.py`, `storage/__init__.py`, `render/ffmpeg.py`,
+`render/fake.py`, `render/__init__.py` satırları. `.env.example`'a 13 `SCRIPT_GENERATION_*`
+anahtarı, güvenli varsayılanlarıyla ve gerekçe yorumlarıyla.
+
+### Kalem 2'nin istediği idempotency envanteri
+
+| Uç | Operation | Parmak izi kapsamı (önce) | Sonra |
+|---|---|---|---|
+| `POST …/media/uploads/{id}/complete` | `media.upload.complete` | session + checksum + sıralı parts (number+etag) — **tam** | değişmedi |
+| `POST …/content/timelines` | `content.timeline.create` | `serialize_timeline(document)` + profile — **tam ve kanonik** | değişmedi |
+| `POST …/content/timelines/{id}/patch` | `content.timeline.patch` | timeline_id + **operasyon sayısı** — parmak izi değil | timeline_id + profile + `serialize_patch(operations)` |
+| `POST …/content/timelines/{id}/renders` | `content.render.request` | timeline_id + profile — **tam** | değişmedi |
+| `POST …/scripts` | `content.script.generate` | `ScriptRequest.as_payload()` — **tam** | değişmedi |
+| `POST …/products` | `brands.product.create` | name + status + stock_status + fiyat — **eksik** | tam (aşağıya bak) |
+| `POST …/campaign-offers` | `brands.campaign_offer.create` | name + pencere + indirim + product_ids — **eksik** | tam |
+
+**Ortak yardımcı var ve burada da kullanılıyordu:** `operations.service.request_fingerprint`
+kanonik JSON + SHA-256 yapıyor ve altı çağıranın hepsi onu kullanıyor. Kusur yardımcıda değil,
+**ona ne verildiğindeydi** — patch yolu isteğin özetini veriyordu. Bu yüzden düzeltme yardımcıyı
+değil çağıranları hizalamak oldu.
+
+**Envanterin ortaya çıkardığı iki ek eksik (WO kalem 2 "tespit edilen diğer eksikler de bu
+kalemde düzeltilir" der, düzeltildi):** `_product_fingerprint` `category`, `description`,
+`valid_locations`, `landing_page_url` alanlarını dışarıda bırakıyordu; `_offer_fingerprint`
+`status`, `approval_status`, `valid_locations`, `stock_limit`, `coupon_code`, `legal_text`
+alanlarını. Aynı anahtarla düzeltilmiş bir açıklama ya da değiştirilmiş bir yasal metin gönderen
+istemci `201` ve **ilk kaydı** alıyordu. İkisi de artık girdinin tamamını kapsıyor ve testleri
+alan listesine değil, **alan alan** yazıldı: `ProductInput`/`CampaignOfferInput`'a parmak izine
+eklenmeden alan eklemek testte düşer, üretimde değil.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **httpx/httpcore log seviyesi düşürülmedi.** WO bunu filtrenin *yedeği* olarak öneriyordu;
+  bilerek yapılmadı. Susturulan logger, korumanın sızıntının gerçekten olduğu yolda
+  sınanmasını imkânsız kılardı ve sorunu yalnızca sıradaki kütüphaneye ötelerdi. httpx `INFO`'da
+  bırakıldı; entegrasyon testinin **pozitif kontrolü** (`X-Amz-Signature=[REDACTED]` çıktıda
+  *bulunmalı*) httpx'in imzalı URL'i gerçekten yazdığını ve maskelendiğini kanıtlıyor.
+- **Yeni migration revizyonu yok** (WO gereği); yalnızca `0011`'in `downgrade()` fonksiyonuna
+  koruma. Alembic head `0013_script_generation`, değişmedi.
+- **`forbidden_matcher` birleştirmesi** yapılmadı — WO açıkça 2D'ye bıraktı.
+- `docs/index.md` ve `docs/adr/README.md`'ye dokunulmadı (W03 tekeli): ADR-008'in **W14 eki**
+  indekse eklenmedi, yeni ADR dosyası yok.
+- **`W13-script-generation.md`'ye dokunulmadı** (Codex doğrulaması paralel yazıyor olabilir).
+
+### Doğrulama
+
+Araç zinciri: **Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · PostgreSQL 16 · MinIO · FFmpeg**,
+`COMPOSE_PROJECT_NAME=sp-w14` izole stack (worktree kökünden, `--env-file .env.w14`; API 8041,
+PG 55541, Redis 56541, MinIO 59041/59042). Tüm koşular **konteyner içinde** — host'ta ffmpeg ve
+POSIX yolları yok.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | **yeşil** |
+| `ruff format --check` | **yeşil** — 182 dosya |
+| `mypy .` (strict) | **yeşil** — 170 dosya |
+| `pytest` (`RUN_INTEGRATION_TESTS=1`, gerçek PG + MinIO + FFmpeg) | **yeşil** — **612 passed** (öncesi 591, +21; azalma yok) |
+| `check-openapi` (kontrat drift) | **yeşil** — yeniden üretilip commit'li blob'la karşılaştırıldı, **fark yok** (dokunulmadı) |
+| migration `upgrade head → downgrade base → upgrade head` | **yeşil**, tek head `0013_script_generation` |
+
+| # | Kabul kriteri | Sonuç |
+|---|---|---|
+| 1 | Sızıntı kapandı; tüm handler çıktısı; logger-bağımsız; worker dahil | ✅ `test_no_logger_writes_the_presigned_signature_during_a_real_multipart_upload` (gerçek MinIO create/part/complete, root'a takılan yabancı handler kendi formatter'ıyla, httpx+httpcore DEBUG'a açık) — **pozitif kontrol dahil**: `X-Amz-Signature=[REDACTED]` çıktıda var, sentinel imza yok, maskelenmemiş imza/credential kalıbı yok. Sentetik `some.vendor.sdk.v3` logger'ı, GCS/Azure/`access_token` kalıpları, traceback ve worker süreç init'i ayrı testlerde (`test_logging_redaction.py` 11 test, `test_worker_composition.py` +1) |
+| 2 | Kanonik gövde fingerprint'i, 4 sayılı girdi, envanter | ✅ `test_patch_idempotency_compares_the_whole_request_body` — farklı metin `409 IDEMPOTENCY_CONFLICT`, aynı gövde replay, farklı anahtar yeni revizyon, alan sırası/`null` farkı replay; her adımda revizyon sayısı DB'den doğrulanıyor. Testin bulguyu gerçekten yakaladığı **eski kodla koşularak** kanıtlandı (`201` + ilk revizyon → kırmızı). Kanoniklik ayrıca birim testte (`test_the_canonical_patch_form_separates_equivalent_requests_from_different_ones`), envanter yukarıda |
+| 3 | Uzun veride açık hata, veri bozulmadı, kısa veride tam; ADR-008 notu | ✅ `test_downgrade_refuses_in_the_open_when_an_upload_id_cannot_fit` — 288 karakterlik ID'de `MIGRATION_0011_DOWNGRADE_BLOCKED` (satır sayısı + uzunluk + oturum id'si), `StringDataRightTruncationError` **çıktıda yok**, kolon hâlâ 512, değer bozulmamış, head yerinde; oturum silinince aynı downgrade sonuna kadar koşuyor. `test_downgrade_precondition_does_not_fire_on_an_empty_table` boş tabloda yanlış tetiklenmediğini gösteriyor |
+| 4 | Editor timeline oluşturuyor/patch'liyor; viewer/approver hayır; matris eşleşiyor | ✅ `test_an_editor_can_author_and_render_while_a_viewer_and_an_approver_cannot` (HTTP: editor 201/201/202; viewer ve approver üç uçta da `403 INSUFFICIENT_PERMISSION`; viewer okuyabiliyor, approver okuyamıyor) + `test_every_content_write_answers_the_same_way_for_the_same_role` |
+| 5 | Doküman borçları kapandı | ✅ `error-handling.md` 2A bölümü, `infrastructure/CLAUDE.md` 5 satır, `.env.example` 13 anahtar |
+| 6 | `make verify` yeşil, test azalmıyor, head sabit, drift yok | ✅ 591 → 612; head `0013_script_generation`; kontrat üretildi ve **birebir aynı** çıktı |
+
+### Açıkça belirtmem gerekenler
+
+1. **İlan listesi dışında 4 dosyaya dokundum, gerekçeleriyle:**
+   - `app/modules/content/patch.py` — kanonik `serialize_patch`. Kanonik biçim operasyon
+     şeklini **sahip olan** modülde durmalı; `timeline.py`'nin `serialize_timeline`'ı zaten bu
+     desende ve timeline oluşturma parmak izi onu kullanıyor. Servise gömmek aynı bilgiyi ikinci
+     bir yere kopyalardı.
+   - `app/modules/brands/service.py` — envanterin bulduğu iki eksik parmak izi. WO kalem 2
+     "tespit edilen diğer eksikler de bu kalemde düzeltilir" diyor; dosya kapalı bir WO'nun
+     (W04) ve çakışma riski yok.
+   - `app/core/CLAUDE.md` ve `app/modules/content/CLAUDE.md` — DoD "modül dosyası değişince
+     `CLAUDE.md` güncellenir" kuralı. `infrastructure/CLAUDE.md` zaten listedeydi.
+   - `docs/STATUS.md`: yalnızca W14 satırı + backend doğrulama fact'i (591 → 612), git–doküman
+     tutarlılığı için.
+
+2. **`.env.example` sahiplik tablosunda W01'de görünüyor**, ama W01 kapandı ve dalı silindi;
+   bu WO dosyayı kendi ilan listesinde sayıyor. Çakışma yok. **PM'e:** sahiplik tablosu
+   kapanmış WO'ların satırlarını taşımaya devam ediyor; hangi satırların hâlâ bağlayıcı olduğu
+   belirsizleşiyor.
+
+3. **`.env.example`'da W11'in `RENDER_*` anahtarlarının 11'i de eksik** (`RENDER_ADAPTER`,
+   `RENDER_MAX_DURATION_MS`, `RENDER_STEP_TIMEOUT_SECONDS`, `RENDER_JOB_TIMEOUT_SECONDS`,
+   `RENDER_MAX_ATTEMPTS`, `RENDER_MAX_OUTPUT_BYTES`, `RENDER_X264_PRESET`, `RENDER_FONT_FILE`,
+   `RENDER_FONT_FAMILY`, `RENDER_MIN_RESOLUTION_RATIO`, `RENDER_SNAP_TOLERANCE_MS`). WO kalem 5
+   yalnızca `SCRIPT_GENERATION_*` diyor, o yüzden eklemedim — aynı sınıf borç, PM kuyruğuna.
+
+4. **`0011` artık tek yönlü bir migration sayılmalı.** Gerçek `UploadId` 288 karakter; hiçbir
+   daraltma onu `varchar(128)`'e sığdıramaz. Bugün doğru davranış anlaşılır şekilde durmak
+   (uygulandı) ama üretim verisi olduğu gün `0011`'in gerisine dönmek bir **veri taşıma işi**,
+   `alembic downgrade` değil. ADR-008'in W14 ekinde yazılı.
+
+5. **`content` modülünün `CLAUDE.md`'si 82 satır** (W11 kriteri ≤40 idi). Sınırı W13 aştı (76);
+   W14 üç değişmez satırı ekledi. Modül artık iki kabiliyet portu + timeline + patch + render
+   taşıyor; 40 satır bu yüzey için gerçekçi değil. Bölünmesi ya da sınırın güncellenmesi PM
+   kararı.
+
+6. **`_scrub_record` her kayıt için mesajı erken biçimlendiriyor** (`getMessage()`), çünkü
+   sızan değer çoğu zaman string bir argüman değil (httpx `URL` nesnesi). Kaydın seviyesi
+   logger'dan zaten geçmiş oluyor ve `"="` içermeyen mesajlarda regex hiç çalışmıyor, ama
+   davranış farkı gerçek: tembel `%s` argümanları artık kayıt anında `str()`'e gidiyor.
+   Doğruluk lehine bilinçli takas.
+
+7. **Record factory global bir kaynak.** Bizimki mevcut factory'yi zincirliyor, ama **bizden
+   sonra** başkası (örneğin bir OTel logging instrumentor'ı) factory kurarsa devre dışı kalır.
+   Bugün kimse kurmuyor; ileride bir logging instrumentor'ı eklenirse sıralama kontrol edilmeli.
+
+8. **`main`'e merge etmedim — bilinçli.** Protokol adım 7 slice kapanınca merge diyor, ama ana
+   worktree'de (`A:/socialpilot-ai`) `docs/handoffs/W13-script-generation.md` **commit
+   edilmemiş** durumda: Codex W13 doğrulamasını şu anda orada yazıyor. Fast-forward merge o
+   dosyaya dokunmasa bile ana worktree'de 24 dosyayı Codex'in ayağının altından değiştirirdi ve
+   sürmekte olan doğrulama koşusunu sessizce geçersiz kılabilirdi — README'nin "paylaşılan
+   ortamda başka oturumun doğrulamasını bozma" dersinin tam olarak bu hâli. Dal hazır, tek
+   commit (SHA `git log`'da), base `main` ile aynı, yani merge **fast-forward**:
+
+   ```
+   git -C A:/socialpilot-ai merge --ff-only slice/0p-verification-followups-2
+   ```
+
+   Codex W13'ü bıraktığında çalıştırılmalı. `origin`'e push edilmedi. Dal ve worktree,
+   protokol gereği (merge **ve** bağımsız doğrulama bitene kadar silinmez) duruyor.
 
 ## Doğrulama
 

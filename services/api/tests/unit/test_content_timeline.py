@@ -7,6 +7,7 @@ by hand, and text that cannot fit the safe area must be refused before any rende
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -15,7 +16,7 @@ import pytest
 
 from app.infrastructure.render.fake import FakeRenderAdapter
 from app.modules.content.domain import format_money
-from app.modules.content.patch import apply_patch, parse_patch
+from app.modules.content.patch import PatchOperation, apply_patch, parse_patch, serialize_patch
 from app.modules.content.render import RenderProfile, profile_spec
 from app.modules.content.timeline import (
     OverlayAnchor,
@@ -29,6 +30,7 @@ from app.modules.content.validation import (
     VerifiedValue,
     validate_timeline,
 )
+from app.modules.operations.service import request_fingerprint
 
 ASSET = UUID("11111111-1111-4111-8111-111111111111")
 OTHER_ASSET = UUID("22222222-2222-4222-8222-222222222222")
@@ -375,6 +377,62 @@ def test_patch_changes_text_and_anchor_without_touching_anything_else() -> None:
     assert patched.overlays[0].anchor is OverlayAnchor.TOP_CENTER
     assert patched.video_tracks == timeline.video_tracks
     assert patched.canvas == timeline.canvas
+
+
+def test_the_canonical_patch_form_separates_equivalent_requests_from_different_ones() -> None:
+    """What the idempotency fingerprint is taken over (W14, from the W11 finding).
+
+    The old fingerprint carried the operation *count*, so every one-operation patch looked
+    like every other one. These are the four comparisons that have to come out right, checked
+    on the canonical form itself so the property holds without a database in the way.
+    """
+
+    spelled_out = parse_patch(
+        [
+            {
+                "op": "set_overlay_text",
+                "index": 0,
+                "text_source": "literal",
+                "text": "ilk metin",
+                "reference_id": None,
+            }
+        ]
+    )
+    reordered = parse_patch(
+        [{"text": "ilk metin", "text_source": "literal", "index": 0, "op": "set_overlay_text"}]
+    )
+    different_text = parse_patch(
+        [{"op": "set_overlay_text", "index": 0, "text_source": "literal", "text": "ikinci metin"}]
+    )
+    different_order = parse_patch(
+        [
+            {"op": "set_overlay_anchor", "index": 0, "anchor": "top_center"},
+            {"op": "set_overlay_text", "index": 0, "text_source": "literal", "text": "ilk metin"},
+        ]
+    )
+    same_pair_other_order = parse_patch(
+        [
+            {"op": "set_overlay_text", "index": 0, "text_source": "literal", "text": "ilk metin"},
+            {"op": "set_overlay_anchor", "index": 0, "anchor": "top_center"},
+        ]
+    )
+
+    # Key order and an optional spelled out as null are the same request.
+    assert request_fingerprint(canonical(spelled_out)) == request_fingerprint(canonical(reordered))
+    # Different text is a different request — this is the case that used to collide.
+    assert request_fingerprint(canonical(spelled_out)) != request_fingerprint(
+        canonical(different_text)
+    )
+    # A patch is a sequence, not a set: reordering two operations can change the result.
+    assert request_fingerprint(canonical(different_order)) != request_fingerprint(
+        canonical(same_pair_other_order)
+    )
+    # The canonical form is JSON-safe, so the fingerprint never depends on Python repr.
+    assert json.loads(json.dumps(serialize_patch(spelled_out))) == serialize_patch(spelled_out)
+
+
+def canonical(operations: tuple[PatchOperation, ...]) -> dict[str, object]:
+    return {"operations": serialize_patch(operations)}
 
 
 def test_patch_cannot_write_prose_into_a_verified_slot() -> None:

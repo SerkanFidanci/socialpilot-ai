@@ -34,15 +34,19 @@ Route parameters are inputs, not authority. The application constructs `Authoriz
 
 ## Role baseline
 
-| Role | Business read | Content/media write | Membership management | Billing/tenant deletion |
-|---|---:|---:|---:|---:|
-| Owner | Yes | Yes | Yes | Yes |
-| Admin | Yes | Yes | Yes, policy-limited | No |
-| Editor | Yes | Yes | No | No |
-| Viewer | Yes | No | No | No |
-| Approver | Approval resources only | Approval decision only | No | No |
+| Role | Business read | Content production | Media upload | Business settings write | Membership management | Billing/tenant deletion |
+|---|---:|---:|---:|---:|---:|---:|
+| Owner | Yes | Yes | Yes | Yes | Yes | Yes |
+| Admin | Yes | Yes | Yes | Yes | Yes, policy-limited | No |
+| Editor | Yes | Yes | Yes | No | No | No |
+| Viewer | Yes | No | No | No | No | No |
+| Approver | Approval resources only | No | No | No | No | No |
 
-Exact permission names must be stable application contracts, separate from display labels. Future ad/billing privileges remain unavailable until their modules exist. The `Approver` role is defined in `BusinessRole` (W10) but maps to an **empty permission set** today: the approval sources it would read and the approval decisions it would make are Phase 2 work, so it grants nothing until those modules exist.
+**Content production** is the `content.generate` permission: authoring a timeline, applying a parametric patch, requesting a render, and generating a script. PRD §4 gives an editor "içerik üretir" while withholding every other write from the role, which is why this is its own permission rather than part of `business.update` — folding it in would lock editors out of the one thing the role exists for.
+
+W11 originally bound timeline writes to `business.update` and W13 introduced `content.generate` for script generation, leaving an editor able to write a script but not to place it on a timeline. W14 aligned every content write onto `content.generate`; `app/modules/content/policy.py` is the single mapping and `business.update` now means only *changing the business itself* (its profile, brand, catalogue, campaigns).
+
+Exact permission names must be stable application contracts, separate from display labels. Future ad/billing privileges remain unavailable until their modules exist. The `Approver` role is defined in `BusinessRole` (W10) but maps to an **empty permission set** today: the approval sources it would read and the approval decisions it would make are Phase 2 work, so it grants nothing — not even read — until those modules exist.
 
 ## Isolation test matrix
 

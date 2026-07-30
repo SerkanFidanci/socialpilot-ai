@@ -1090,18 +1090,40 @@ def _profile_columns(payload: BrandProfileInput) -> dict[str, object]:
 
 
 def _product_fingerprint(payload: ProductInput) -> dict[str, object]:
+    """Every cleaned field, not a memorable subset.
+
+    A fingerprint that skips a field answers "same request?" with "same in the ways I happened
+    to list", and the fields left out here were `description`, `category`, `valid_locations`
+    and `landing_page_url` — a retry that corrected any of them replayed the original product
+    and reported success. Covering the whole input is the only version of this that stays true
+    as `ProductInput` grows (W14, from the W11 patch finding).
+    """
+
     return {
         "name": lookup_key(payload.name),
+        "category": payload.category,
+        "description": payload.description,
         "status": payload.status.value,
         "stock_status": payload.stock_status.value,
+        "valid_locations": list(payload.valid_locations),
+        "landing_page_url": payload.landing_page_url,
         "price_minor": payload.price.price_minor if payload.price else None,
         "currency": payload.price.currency if payload.price else None,
     }
 
 
 def _offer_fingerprint(payload: CampaignOfferInput) -> dict[str, object]:
+    """Every cleaned field — see `_product_fingerprint`.
+
+    `status`, `approval_status`, `stock_limit`, `coupon_code`, `legal_text` and
+    `valid_locations` were previously outside the comparison, so a retry that changed the legal
+    text or the coupon of a campaign silently kept the first one.
+    """
+
     return {
         "name": lookup_key(payload.name),
+        "status": payload.status.value,
+        "approval_status": payload.approval_status.value,
         "starts_at": payload.starts_at.isoformat(),
         "ends_at": payload.ends_at.isoformat(),
         "discount_type": payload.discount_type.value,
@@ -1109,4 +1131,8 @@ def _offer_fingerprint(payload: CampaignOfferInput) -> dict[str, object]:
         "discount_amount_minor": payload.discount_amount_minor,
         "discount_currency": payload.discount_currency,
         "product_ids": sorted(str(value) for value in payload.product_ids),
+        "valid_locations": list(payload.valid_locations),
+        "stock_limit": payload.stock_limit,
+        "coupon_code": payload.coupon_code,
+        "legal_text": payload.legal_text,
     }

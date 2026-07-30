@@ -208,6 +208,62 @@ def _parse_set_captions(entry: Mapping[str, Any], pointer: str) -> SetCaptions:
     return SetCaptions(enabled=enabled, style_id=style_id)
 
 
+def serialize_patch(operations: Sequence[PatchOperation]) -> list[dict[str, Any]]:
+    """Render parsed operations back to JSON-safe primitives, in submission order.
+
+    This is the canonical form of a patch request, and the idempotency fingerprint is taken
+    over it. Fingerprinting the *parsed* operations rather than the raw body is what makes the
+    comparison mean "the same edit": key order, an omitted optional that parsing defaults, and
+    a reference id's letter case all normalise here, so an equivalent retry replays instead of
+    conflicting, while a different edit conflicts instead of silently replaying.
+
+    Order is preserved because a patch is not a set — `set_clip_range` then `set_captions` can
+    produce a different document than the reverse, so two orderings are two requests.
+    """
+
+    return [_serialize_operation(operation) for operation in operations]
+
+
+def _serialize_operation(operation: PatchOperation) -> dict[str, Any]:
+    match operation:
+        case SetOverlayText():
+            return {
+                "op": "set_overlay_text",
+                "index": operation.index,
+                "text_source": operation.text_source.value,
+                "text": operation.text,
+                "reference_id": (
+                    None if operation.reference_id is None else str(operation.reference_id)
+                ),
+            }
+        case SetOverlayAnchor():
+            return {
+                "op": "set_overlay_anchor",
+                "index": operation.index,
+                "anchor": operation.anchor.value,
+            }
+        case SetOverlayStyle():
+            return {
+                "op": "set_overlay_style",
+                "index": operation.index,
+                "style_id": operation.style_id,
+            }
+        case SetClipRange():
+            return {
+                "op": "set_clip_range",
+                "track_index": operation.track_index,
+                "clip_index": operation.clip_index,
+                "source_start_ms": operation.source_start_ms,
+                "source_end_ms": operation.source_end_ms,
+            }
+        case SetCaptions():
+            return {
+                "op": "set_captions",
+                "enabled": operation.enabled,
+                "style_id": operation.style_id,
+            }
+
+
 # --- application ---------------------------------------------------------------------------
 
 

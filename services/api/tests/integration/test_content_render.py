@@ -677,6 +677,298 @@ def test_patch_re_renders_without_consuming_a_new_entitlement(tmp_path: Path) ->
 
 
 @requires_storage
+@requires_ffmpeg
+def test_patch_idempotency_compares_the_whole_request_body(tmp_path: Path) -> None:
+    """The W11 finding: the same key with different text used to replay the first revision.
+
+    The fingerprint stored only the operation *count*, so "one operation" matched "one
+    operation" and a second, different edit returned `201` with the first revision's document.
+    The caller had every reason to believe its correction landed.
+
+    The four cases share one setup on purpose — the setup is a real encode plus the full
+    ingest/technical/scene analysis of the bytes, and running it four times would cost minutes
+    to prove nothing extra. Each case is independent of the others' outcomes and is asserted on
+    its own.
+    """
+
+    source, logo = tmp_path / "source.mp4", tmp_path / "logo.png"
+    make_video(source)
+    make_logo(logo)
+    owner = auth("fingerprint-owner", "fingerprint-owner@example.com")
+
+    async def revision_count(root_id: str) -> int:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        try:
+            async with engine.connect() as connection:
+                return int(
+                    cast(
+                        int,
+                        await connection.scalar(
+                            text("SELECT count(*) FROM content_timelines WHERE root_id = :root"),
+                            {"root": root_id},
+                        ),
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        application = cast(FastAPI, client.app)
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Fingerprint", "timezone": "UTC"}
+        ).json()["id"]
+        asset_id = upload(
+            client,
+            business_id,
+            owner,
+            source.read_bytes(),
+            filename="s.mp4",
+            content_type="video/mp4",
+        )
+        asyncio.run(
+            analyze(application, asset_id=asset_id, content_type="video/mp4", workdir=tmp_path)
+        )
+        logo_asset_id = upload(
+            client,
+            business_id,
+            owner,
+            logo.read_bytes(),
+            filename="l.png",
+            content_type="image/png",
+        )
+        asyncio.run(
+            analyze(application, asset_id=logo_asset_id, content_type="image/png", workdir=tmp_path)
+        )
+        client.put(
+            f"/v1/businesses/{business_id}/brand",
+            headers=owner,
+            json={
+                "display_name": "Fingerprint Test",
+                "tone": "sıcak",
+                "communication_language": "tr",
+                "default_currency": "TRY",
+                "assets": [{"role": "logo", "media_asset_id": logo_asset_id}],
+            },
+        )
+        timeline_id = client.post(
+            f"/v1/businesses/{business_id}/content/timelines",
+            headers=owner | {"Idempotency-Key": str(uuid.uuid4())},
+            json={
+                "profile": "instagram_reels_1080x1920",
+                "document": timeline_document(asset_id, logo_asset_id),
+            },
+        ).json()["id"]
+        url = f"/v1/businesses/{business_id}/content/timelines/{timeline_id}/patch"
+
+        def body(headline: str) -> dict[str, Any]:
+            return {
+                "profile": "instagram_reels_1080x1920",
+                "operations": [
+                    {
+                        "op": "set_overlay_text",
+                        "index": 0,
+                        "text_source": "literal",
+                        "text": headline,
+                    }
+                ],
+            }
+
+        key = str(uuid.uuid4())
+        first = client.post(url, headers=owner | {"Idempotency-Key": key}, json=body("ilk metin"))
+        assert first.status_code == 201, first.text
+        assert first.json()["revision"] == 2
+
+        # 1. Same key, same operation count, different text: a different request.
+        conflicting = client.post(
+            url, headers=owner | {"Idempotency-Key": key}, json=body("ikinci farkli metin")
+        )
+        assert conflicting.status_code == 409, conflicting.text
+        assert conflicting.json()["code"] == "IDEMPOTENCY_CONFLICT"
+        assert asyncio.run(revision_count(timeline_id)) == 2, "the refused patch wrote a revision"
+
+        # 2. Same key, byte-identical body: the stored result, not a second revision.
+        replayed = client.post(
+            url, headers=owner | {"Idempotency-Key": key}, json=body("ilk metin")
+        )
+        assert replayed.status_code == 201, replayed.text
+        assert replayed.json()["id"] == first.json()["id"]
+        assert replayed.json()["revision"] == 2
+        assert asyncio.run(revision_count(timeline_id)) == 2
+
+        # 3. A different key with the same body is a different request and must do the work.
+        repeated = client.post(
+            url, headers=owner | {"Idempotency-Key": str(uuid.uuid4())}, json=body("ilk metin")
+        )
+        assert repeated.status_code == 201, repeated.text
+        assert repeated.json()["id"] != first.json()["id"]
+        assert repeated.json()["revision"] == 3
+        assert asyncio.run(revision_count(timeline_id)) == 3
+
+        # 4. Canonicality: field order differs and an optional field is spelled out rather than
+        # omitted. Hashing the raw body would call this a conflict; it is the same edit.
+        equivalent = client.post(
+            url,
+            headers=owner | {"Idempotency-Key": key},
+            json={
+                "operations": [
+                    {
+                        "text": "ilk metin",
+                        "reference_id": None,
+                        "text_source": "literal",
+                        "index": 0,
+                        "op": "set_overlay_text",
+                    }
+                ],
+                "profile": "instagram_reels_1080x1920",
+            },
+        )
+        assert equivalent.status_code == 201, equivalent.text
+        assert equivalent.json()["id"] == first.json()["id"]
+        assert asyncio.run(revision_count(timeline_id)) == 3
+
+
+@requires_storage
+@requires_ffmpeg
+def test_an_editor_can_author_and_render_while_a_viewer_and_an_approver_cannot(
+    tmp_path: Path,
+) -> None:
+    """PRD §4 says an editor produces content. Until W14 it could write a script and no more.
+
+    W11 bound timeline writes to `business.update` and W13 bound script generation to
+    `content.generate`, so the role that exists to produce content could compose the words and
+    then be refused the timeline they were for. This is the aligned matrix at the HTTP boundary,
+    where the refusal a real client would see is the thing worth asserting.
+    """
+
+    source, logo = tmp_path / "source.mp4", tmp_path / "logo.png"
+    make_video(source)
+    make_logo(logo)
+    owner = auth("role-owner", "role-owner@example.com")
+    editor = auth("role-editor", "role-editor@example.com")
+    viewer = auth("role-viewer", "role-viewer@example.com")
+    approver = auth("role-approver", "role-approver@example.com")
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        application = cast(FastAPI, client.app)
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Roles", "timezone": "UTC"}
+        ).json()["id"]
+        asset_id = upload(
+            client,
+            business_id,
+            owner,
+            source.read_bytes(),
+            filename="s.mp4",
+            content_type="video/mp4",
+        )
+        asyncio.run(
+            analyze(application, asset_id=asset_id, content_type="video/mp4", workdir=tmp_path)
+        )
+        logo_asset_id = upload(
+            client,
+            business_id,
+            owner,
+            logo.read_bytes(),
+            filename="l.png",
+            content_type="image/png",
+        )
+        asyncio.run(
+            analyze(application, asset_id=logo_asset_id, content_type="image/png", workdir=tmp_path)
+        )
+        client.put(
+            f"/v1/businesses/{business_id}/brand",
+            headers=owner,
+            json={
+                "display_name": "Roles Test",
+                "tone": "sıcak",
+                "communication_language": "tr",
+                "default_currency": "TRY",
+                "assets": [{"role": "logo", "media_asset_id": logo_asset_id}],
+            },
+        )
+        # A member is added by email, so each account has to exist before it can be invited.
+        for headers, email, role in (
+            (editor, "role-editor@example.com", "editor"),
+            (viewer, "role-viewer@example.com", "viewer"),
+            (approver, "role-approver@example.com", "approver"),
+        ):
+            assert client.get("/v1/businesses", headers=headers).status_code == 200
+            added = client.post(
+                f"/v1/businesses/{business_id}/members",
+                headers=owner,
+                json={"email": email, "role": role},
+            )
+            assert added.status_code == 201, added.text
+
+        document = timeline_document(asset_id, logo_asset_id)
+        created = client.post(
+            f"/v1/businesses/{business_id}/content/timelines",
+            headers=editor | {"Idempotency-Key": str(uuid.uuid4())},
+            json={"profile": "instagram_reels_1080x1920", "document": document},
+        )
+        assert created.status_code == 201, created.text
+        timeline_id = created.json()["id"]
+
+        patched = client.post(
+            f"/v1/businesses/{business_id}/content/timelines/{timeline_id}/patch",
+            headers=editor | {"Idempotency-Key": str(uuid.uuid4())},
+            json={
+                "profile": "instagram_reels_1080x1920",
+                "operations": [{"op": "set_overlay_anchor", "index": 0, "anchor": "top_center"}],
+            },
+        )
+        assert patched.status_code == 201, patched.text
+
+        rendered = client.post(
+            f"/v1/businesses/{business_id}/content/timelines/{timeline_id}/renders",
+            headers=editor | {"Idempotency-Key": str(uuid.uuid4())},
+            json={"profile": "instagram_reels_1080x1920"},
+        )
+        assert rendered.status_code == 202, rendered.text
+
+        for headers in (viewer, approver):
+            refusals = [
+                client.post(
+                    f"/v1/businesses/{business_id}/content/timelines",
+                    headers=headers | {"Idempotency-Key": str(uuid.uuid4())},
+                    json={"profile": "instagram_reels_1080x1920", "document": document},
+                ),
+                client.post(
+                    f"/v1/businesses/{business_id}/content/timelines/{timeline_id}/patch",
+                    headers=headers | {"Idempotency-Key": str(uuid.uuid4())},
+                    json={
+                        "profile": "instagram_reels_1080x1920",
+                        "operations": [
+                            {"op": "set_overlay_anchor", "index": 0, "anchor": "top_center"}
+                        ],
+                    },
+                ),
+                client.post(
+                    f"/v1/businesses/{business_id}/content/timelines/{timeline_id}/renders",
+                    headers=headers | {"Idempotency-Key": str(uuid.uuid4())},
+                    json={"profile": "instagram_reels_1080x1920"},
+                ),
+            ]
+            for refused in refusals:
+                assert refused.status_code == 403, refused.text
+                assert refused.json()["code"] == "INSUFFICIENT_PERMISSION"
+
+        # A viewer still reads; an approver holds no permission at all, not even read.
+        assert (
+            client.get(
+                f"/v1/businesses/{business_id}/content/timelines/{timeline_id}", headers=viewer
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                f"/v1/businesses/{business_id}/content/timelines/{timeline_id}", headers=approver
+            ).status_code
+            == 403
+        )
+
+
+@requires_storage
 def test_another_tenant_cannot_place_or_read_this_tenants_work(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     make_video(source)

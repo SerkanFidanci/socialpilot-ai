@@ -6,7 +6,7 @@
 |---|---|
 | `main` | `2e4c59a` — W01→W13 tamamı merge edildi (yalnız W06 bekliyor), origin ile senkron |
 | Alembic head | `0013_script_generation` (tek head; zincir 0001→0013, merge sonrası up/down/up doğrulandı) |
-| Backend doğrulama | **591 pytest** (gerçek PostgreSQL + MinIO, merge sonrası `main`'de) · lint + format + mypy strict 169 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **612 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; 591 → 612, W14 dalında) · lint + format + mypy strict 170 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -129,7 +129,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
 
 | [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi, doğrulanmış alan bindirmesi | **tamamlandı** · merge (`2e4c59a`) · `0013` · **Codex doğrulaması bekliyor** | dal + worktree duruyor (doğrulama bitene kadar) | Opus 5 / high | kullanıldı |
-| [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** — presigned URL log sızıntısı (YÜKSEK) · patch idempotency gövde fingerprint'i · `0011` downgrade koruması · izin hizalaması · doküman borçları | **şimdi** | `slice/0p-verification-followups-2` | Opus 5 / high | — (yalnızca `0011` downgrade'ine koruma) |
+| [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** — presigned URL log sızıntısı (YÜKSEK) · patch idempotency gövde fingerprint'i · `0011` downgrade koruması · izin hizalaması · doküman borçları | **tamamlandı** · 5/5 kalem · 591 → 612 test · **merge + Codex doğrulaması bekliyor** | `slice/0p-verification-followups-2` | Opus 5 / high | — (yalnızca `0011` downgrade'ine koruma) |
 
 ### Dosya sahipliği (çakışma önleme)
 

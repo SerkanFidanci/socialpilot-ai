@@ -142,3 +142,22 @@ mode (and its compensating abort), and the small server-owned object that had to
 on completion or cancellation. The "Persisting the provider `UploadId` in the existing column
 silently truncates" rejected alternative no longer applies — the column is now wide enough. The
 completion-verification design, the SigV4 approach, and the presigning split above are unchanged.
+
+## Amendment — W14: the widening is one-way in practice
+
+Verification of W10 found that `alembic downgrade` past `0011` stops with the driver's
+`StringDataRightTruncationError` as soon as a real 288-character AWS `UploadId` is stored. That
+is not a defect in the reversal; it is what narrowing a column to `varchar(128)` means when the
+data is 288 characters long. No shrink can keep those values, and inventing a truncation would
+turn a loud failure into a corrupted upload session.
+
+So the reversal now states its limit instead of discovering it. `0011`'s `downgrade()` opens with
+a precondition check and, if any row is too long, raises `MIGRATION_0011_DOWNGRADE_BLOCKED`
+naming how many rows do not fit, the longest length, and one offending session id — before
+dropping or recreating anything. The `UploadId` itself is not printed: it is provider material,
+and an error message is a place values leak from.
+
+**Consequence to plan around:** `0011` is reversible only against data that predates the
+widening (or an empty table). Today that is exactly true — this is development data and there is
+no production deployment — but the day there is one, rolling back past `0011` is a data-migration
+task, not an `alembic downgrade`.

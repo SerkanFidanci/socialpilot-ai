@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
+import re
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 import httpx
@@ -22,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import Settings
+from app.core.logging import REDACTED
 from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.main import create_app
 
@@ -137,6 +141,95 @@ def business_for(client: TestClient, headers: dict[str, str], name: str) -> str:
             "/v1/businesses", headers=headers, json={"name": name, "timezone": "Europe/Istanbul"}
         ).json()["id"]
     )
+
+
+class _AllHandlerOutput(logging.Handler):
+    """Capture what an arbitrary third-party handler would print, with its own formatter.
+
+    Deliberately not `caplog`: the claim under test is that a handler this module never told
+    anything about still cannot render signing material, so the capture has to look like a
+    handler somebody else installed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.NOTSET)
+        self.setFormatter(logging.Formatter("%(name)s %(levelname)s %(message)s"))
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.lines.append(self.format(record))
+        except Exception:  # pragma: no cover - a formatting error is not the subject here
+            self.lines.append(f"{record.name} <unformattable>")
+
+
+@contextmanager
+def capture_every_log_record() -> Iterator[_AllHandlerOutput]:
+    """Listen to every logger in the process at DEBUG, including httpx's and httpcore's."""
+
+    handler = _AllHandlerOutput()
+    root = logging.getLogger()
+    previous_level = root.level
+    noisy = [logging.getLogger(name) for name in ("httpx", "httpcore")]
+    previous = [(logger, logger.level, logger.disabled) for logger in noisy]
+    root.setLevel(logging.DEBUG)
+    root.addHandler(handler)
+    for logger in noisy:
+        logger.setLevel(logging.DEBUG)
+        logger.disabled = False
+    try:
+        yield handler
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous_level)
+        for logger, level, disabled in previous:
+            logger.setLevel(level)
+            logger.disabled = disabled
+
+
+def signature_of(url: str) -> str:
+    match = re.search(r"X-Amz-Signature=([0-9a-fA-F]+)", url)
+    assert match is not None, "the presigned URL carried no signature to use as a sentinel"
+    return match.group(1)
+
+
+@requires_storage
+def test_no_logger_writes_the_presigned_signature_during_a_real_multipart_upload() -> None:
+    """The W11 finding, on the path it was found on.
+
+    W01's sentinel test scanned application logs and database rows. It passed while httpx was
+    printing the entire presigned URL at INFO one frame away, because that record never went
+    through a structlog processor. This test captures *every* record any logger emits during a
+    real MinIO create/part/complete round trip and asserts the signature appears in none of
+    them — and, as a positive control, that the httpx line was produced and masked rather than
+    simply absent.
+    """
+
+    owner = auth("minio-log-leak", "minio-log-leak@example.com")
+    application = create_app(config())
+    with capture_every_log_record() as captured:
+        with TestClient(application, raise_server_exceptions=False) as client:
+            business_id = business_for(client, owner, "MinIO log leak")
+            upload = client.post(
+                f"/v1/businesses/{business_id}/media/uploads", headers=owner, json=payload()
+            ).json()
+            sentinel = signature_of(str(upload["parts"][0]["upload_url"]))
+            uploaded = put_parts(upload["parts"], [FIRST_PART, LAST_PART])
+            completed = client.post(
+                f"/v1/businesses/{business_id}/media/uploads/{upload['id']}/complete",
+                headers=owner | {"Idempotency-Key": str(uuid.uuid4())},
+                json={"sha256_checksum": CHECKSUM, "parts": uploaded},
+            )
+            assert completed.status_code == 200, completed.text
+
+    output = "\n".join(captured.lines)
+    # Positive control first: without it, a green test could only mean "nothing was logged".
+    assert f"X-Amz-Signature={REDACTED}" in output, (
+        "no record carried a presigned URL, so this test proved nothing"
+    )
+    assert sentinel not in output
+    assert "X-Amz-Credential=" + REDACTED in output
+    assert not re.search(r"X-Amz-(?:Signature|Credential)=(?!\[REDACTED\])", output)
 
 
 @requires_storage

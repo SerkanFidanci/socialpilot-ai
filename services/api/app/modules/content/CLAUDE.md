@@ -37,6 +37,13 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - **Bu katmanda `ffmpeg`/`subprocess`/HTTP istemcisi geçmez**, `app.infrastructure` import
   edilmez; test tokenize ederek zorlar (docstring'de anlatmak serbest, koda sızmak değil).
 - **`ContentRenderService` yapıcısında model portu yoktur.** Render yolu hâlâ sıfır AI çağrısı.
+- **İdempotency parmak izi isteğin tamamının kanonik biçminden alınır**, özetinden değil.
+  Timeline oluşturma `serialize_timeline`'ı, patch `serialize_patch`'i, senaryo üretimi
+  `ScriptRequest.as_payload`'ı kullanır. Operasyon *sayısını* saklamak parmak izi değildi:
+  aynı anahtarla farklı metin ilk revizyonu tekrar oynatıyordu (W11 doğrulaması, W14'te kapandı).
+- **Yazma yetkisi tek çizgidedir:** timeline yazma, patch, render isteği ve senaryo üretimi
+  `content.generate`. PRD §4'te editor içerik üretir; `business.update` yalnızca **işletmenin
+  kendisini** değiştirmektir.
 
 ## Dosyalar
 
@@ -46,13 +53,13 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `timeline.py` | §18.2 dokümanı: kapalı şema, çapa/stil/metin-kaynağı enum'ları, parse + serialize |
 | `validation.py` | §18.3 kuralları (saf), `ValidationContext`, satır kaydırma, dokümante hata kodları |
-| `patch.py` | K4 parametrik düzenleme: kapalı operasyon kümesi, segment sınırına snap, track yeniden dizilimi |
+| `patch.py` | K4 parametrik düzenleme: kapalı operasyon kümesi, segment sınırına snap, track yeniden dizilimi, `serialize_patch` (idempotency fingerprint'inin alındığı kanonik biçim) |
 | `render.py` | `RenderPort`, `RenderCapabilities`, `RenderPlan`, §19.2 profilleri, disclosure/provenance durumları |
 | `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` + `content_scripts` + `prompt_templates` |
 | `repository.py` | `ContentRepository` (tenant-kapsamlı, senaryo okumaları ve prompt sürümü dahil) + `ContentFactsReader` + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim |
 | `service.py` | `ContentTimelineService` — yetki, doğrulama, revizyon, render isteği, idempotency, audit |
 | `render_service.py` | `ContentRenderService` — job claim, materialize, render, depolama, dead-letter |
-| `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (senaryo üretimi `content.generate`) |
+| `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (**her yazma** `content.generate`, her okuma `business.read`) |
 | `domain.py` | `format_money` — doğrulanmış değerin saf gösterimi |
 
 ## Gereksinim, karar, mimari
