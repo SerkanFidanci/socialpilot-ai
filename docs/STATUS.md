@@ -104,7 +104,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W09](handoffs/W09-real-media-materializer.md) | **Gerçek medya materializer + `.mov`/HEVC analiz kapısı** | **tamamlandı** · merge edildi · ADR **011**'e numaralandırıldı (009 W02'de) | merge edildi, dal silindi | Opus 4.8 / high | — |
 | [W07](handoffs/W07-single-server-resilience.md) | **Tek sunucu dayanıklılığı** — kaynak limitleri + sunucu dışına yedek + geri yükleme provası | **şimdi** | `slice/0l-single-server-resilience` | Opus 4.8 / medium | — |
 | [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark koşum takımı** — gerçek AI sağlayıcısı bağlamanın ön koşulu | **şimdi** (W07 ile paralel) | `slice/1h-provider-benchmark` | Opus 5 / high | — |
-| W04 | Marka profili + ürün/hizmet kataloğu modülü | W09 sonrası | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** — `storage_upload_id` kolonunu `String(128)`'den genişletme işi de bu slota bindirilir (W01'in kontrol-objesi geçici çözümünü kaldırır) |
+| W04 | Marka profili + ürün/hizmet kataloğu modülü | W09 sonrası | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** — bu slota üç iş biner: (a) `provider_usage` tablosunun oluşturulması (ADR-007 onu varmış gibi anlatıyordu, aslında yok — W08 bulgusu; `ProviderUsageRecord` şekli hazır), (b) `storage_upload_id` kolonunu `String(128)`'den genişletme (W01'in kontrol-objesi geçici çözümünü kaldırır), (c) fotoğraf analiz durumu için enum genişletmesi (K6 ikinci yarısı) |
 | W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | Opus 4.8 / medium | — |
 | W06 | PostgreSQL 18 + Valkey imaj geçişi | W01 + W02 kapanınca | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
 

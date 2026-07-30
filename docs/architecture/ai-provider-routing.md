@@ -24,7 +24,7 @@ The application service persists the decision before a paid/provider call. An ad
 
 ## Fallback and cost
 
-Fallback occurs only for classified transient/throttled provider failure, within the persisted route policy, region/privacy constraint, retry budget, and approved cost cap. Policy, validation, budget, and invalid-response failures do not fall through to another provider automatically. `provider_usage` records tenant/job/asset/run/capability/provider/model, estimated and actual integer-minor-unit cost, currency, duration, outcome, and correlation ID. It deliberately excludes token values, prompts, signed URLs, and full responses.
+Fallback occurs only for classified transient/throttled provider failure, within the persisted route policy, region/privacy constraint, retry budget, and approved cost cap. Policy, validation, budget, and invalid-response failures do not fall through to another provider automatically. **`provider_usage` is a planned table, not an implemented one (2026-07-30).** No migration or model creates it yet; W08 surfaced this gap after this document already described it in the present tense. The intended record carries tenant/job/asset/run/capability/provider/model, estimated and actual integer-minor-unit cost, currency, duration, outcome, and correlation ID, and deliberately excludes token values, prompts, signed URLs, and full responses. The benchmark harness produces a `ProviderUsageRecord` value with exactly this shape so the table can back it without reshaping call sites; creating the table is scheduled on the next migration slot (W04). Until then, cost attribution is per-run output only and is **not** durable.
 
 ## Operations
 

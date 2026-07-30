@@ -82,6 +82,12 @@ Kullanıcı "en mantıklısı ve en doğrusuyla devam et her zaman" dedi. Bunun 
 - **K4** (kullanıcı düzenleme modeli) Phase 2 timeline şemasıyla birlikte kararlaştırılır — önerisi hazır, ama önünde timeline işi yokken karara bağlamak erken olur.
 - Geri dönüşü zor veya dışa dönük her yeni işlem tipi (üretim deploy, ödeme, dış platforma içerik gönderme) yine ayrıca sorulur.
 
+## PM'in kendi hataları (kayda geçsin)
+
+1. **Mimari dokümana güvenip şemayı doğrulamadım.** W08'in kabul kriteri 5'ini `provider_usage` tablosu üzerine yazdım çünkü `ai-provider-routing.md` onu şimdiki zamanda anlatıyordu. Tablo hiç yoktu. Yürüten oturum yakaladı ve doğru davrandı (migration slotu olmadığı için eklemedi, `ProviderUsageRecord` şeklini bıraktı, bildirdi). **Ders:** iş emrinde bir tablo/alan/endpoint adı geçiyorsa, WO'yu yazmadan önce onun **kodda** var olduğu doğrulanır. Doküman niyeti anlatır, şema gerçeği söyler.
+
+2. **W07 ve W08'e aynı dosyayı (`Makefile`) verdim.** Dosya-ayrıklığı garanti etmem gerekirken iki WO'da da Makefile'a dokunma izni bıraktım. Merge'i PM yaptığı için zararsız kaldı ama kural ihlaliydi.
+
 ## Öğrenilen dersler (tekrarlanmasın)
 
 1. **Çift iş.** İki oturum `258439d` base'inden aynı slice'ı yaptı; `c43ccad` silinmek zorunda kaldı. Panzehir: WO'da "dokunulacak dosyalar" ilanı + [STATUS.md](../STATUS.md) dosya sahipliği tablosu + tetiklemeden önce durumun `tetiklenmedi` olduğunu doğrulama.
