@@ -1,11 +1,5 @@
 # ADR-013: Tek Sunucu Dağıtım Topolojisi
 
-> **Numara PM tarafından merge sırasında verilecek.** Bu dosya `ADR-013` adıyla yazıldı; W07
-> paralel çalıştığı için numarayı yürüten oturum seçmez (2026-07-30'da W02 ve W09 ikisi de
-> ADR-009'u almıştı). Kod içindeki `ADR-013` referansları (`compose.yaml`, `.env.example`,
-> `Makefile`, `scripts/backup_db.py`, `scripts/restore_check.py`) tek bir find-replace ile
-> numaralandırılacak.
-
 **Status:** Accepted
 **Date:** 2026-07-30
 **Karar veren:** PM/mimar oturumu (kullanıcı kararı K5 doğrultusunda) · yürüten: W07

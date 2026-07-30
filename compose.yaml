@@ -1,6 +1,6 @@
 name: ${COMPOSE_PROJECT_NAME:-socialpilot-ai}
 
-# Single-server resource budget (ADR-XXX). The product runs on one cheap dedicated box, so
+# Single-server resource budget (ADR-013). The product runs on one cheap dedicated box, so
 # every service carries an explicit CPU ceiling (`cpus`), memory ceiling (`mem_limit`), and a
 # relative CPU weight (`cpu_shares`) that arbitrates *only* when the box is saturated. Ceilings
 # are deliberately oversubscribed — their sum exceeds the host's cores — because a ceiling caps
@@ -78,7 +78,7 @@ services:
       timeout: 3s
       retries: 20
     networks: [backend, edge]
-    # Local-only object storage: production uses zero-egress R2 (ADR-XXX), so this exists just
+    # Local-only object storage: production uses zero-egress R2 (ADR-013), so this exists just
     # for the development byte path. Modest ceilings keep it from competing with PostgreSQL or the
     # API for RAM; weight sits above the workers because uploads must stay responsive.
     cpus: 1.0
@@ -202,7 +202,7 @@ services:
     # Concurrency 2 caps heavy FFmpeg jobs to two at a time so they fit the 2-core ceiling
     # (~1 core each) and cannot swamp the box. §38.2's per-queue profiles (a separate,
     # higher-concurrency worker for light queues such as outbox dispatch and notifications)
-    # are a config addition once task routing lands — see ADR-XXX.
+    # are a config addition once task routing lands — see ADR-013.
     command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
     profiles: ["worker"]
     depends_on:
@@ -229,7 +229,7 @@ services:
     # on-failure (not unless-stopped): a warm SIGTERM shutdown exits 0 and stays down, while a
     # crash (e.g. OOM-kill, exit 137) restarts under Docker's exponential backoff, which caps the
     # restart *rate* so an OOM loop cannot busy-spin the CPU. Plain `docker compose` has no
-    # attempt cap; the production host bounds attempts with systemd StartLimitBurst (ADR-XXX).
+    # attempt cap; the production host bounds attempts with systemd StartLimitBurst (ADR-013).
     stop_grace_period: 30s
     restart: on-failure
 

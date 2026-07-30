@@ -1,4 +1,4 @@
-"""Restore rehearsal: an untested backup is not a backup (ADR-XXX).
+"""Restore rehearsal: an untested backup is not a backup (ADR-013).
 
 Downloads the most recent encrypted backup, decrypts and decompresses it, loads it into an
 **empty scratch database**, and then proves the restore is real:

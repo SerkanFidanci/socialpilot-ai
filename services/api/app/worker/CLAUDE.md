@@ -11,7 +11,7 @@ Celery uygulama nesnesi (→ `../infrastructure/celery_app.py`), HTTP katmanı.
 - Composition **süreç başınadır.** `build_worker_context` worker süreci başlarken kurulur, `worker_process_init`/`worker_process_shutdown` sinyallerine bağlıdır; global paylaşılan bağlantı taşınmaz.
 - Her task bir queue'ya ve timeout'a bağlıdır; süresi geçmiş işler `operations.recovery.drain` ile geri alınır.
 - Task adları (`media.*.drain`, `operations.*`) kontrattır; yeniden adlandırmak kuyruktaki mesajları düşürür.
-- **Tek sunucu dayanıklılığı (ADR-XXX).** Drain, scratch bütçe üstündeyken yeni iş almaz (`WorkerScratchGuard.ensure_within_budget` → `WORKER_SCRATCH_BUDGET_EXCEEDED`); süreç init'te orphan scratch temizlenir ve süreç kendini renice eder (`os.nice(+10)`) → FFmpeg alt süreçleri düşük CPU önceliği miras alır. Bütçe tmpfs boyutundan türetilir; ENOSPC sert duvarı `compose.yaml` tmpfs tavanıdır.
+- **Tek sunucu dayanıklılığı (ADR-013).** Drain, scratch bütçe üstündeyken yeni iş almaz (`WorkerScratchGuard.ensure_within_budget` → `WORKER_SCRATCH_BUDGET_EXCEEDED`); süreç init'te orphan scratch temizlenir ve süreç kendini renice eder (`os.nice(+10)`) → FFmpeg alt süreçleri düşük CPU önceliği miras alır. Bütçe tmpfs boyutundan türetilir; ENOSPC sert duvarı `compose.yaml` tmpfs tavanıdır.
 
 ## Dosyalar
 
@@ -19,7 +19,7 @@ Celery uygulama nesnesi (→ `../infrastructure/celery_app.py`), HTTP katmanı.
 |---|---|
 | `composition.py` | `WorkerContext`, `build_worker_context`, `get_worker_context`, `start_worker_process` — süreç sahipli composition root; init'te renice + scratch reclaim |
 | `tasks.py` | Drain task'ları: `media.ingest`, `media.technical_analysis`, `media.scene_speech_analysis`, `media.video_understanding`, `operations.recovery`, `operations.outbox.dispatch` + süreç init/shutdown sinyalleri; her drain scratch bütçesini kontrol eder |
-| `scratch.py` | `WorkerScratchGuard`, `WorkerScratchExhausted` — tek sunucuda scratch bütçe/orphan temizliği (ADR-XXX) |
+| `scratch.py` | `WorkerScratchGuard`, `WorkerScratchExhausted` — tek sunucuda scratch bütçe/orphan temizliği (ADR-013) |
 | `__init__.py` | Paket |
 
 ## Gereksinim, karar, mimari

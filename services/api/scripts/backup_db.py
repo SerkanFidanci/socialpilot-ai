@@ -1,4 +1,4 @@
-"""Off-server, encrypted PostgreSQL backup for the single-server deployment (ADR-XXX).
+"""Off-server, encrypted PostgreSQL backup for the single-server deployment (ADR-013).
 
 One server is one point of failure and the production database will not live in git, so a
 daily dump must leave the box. This script:
