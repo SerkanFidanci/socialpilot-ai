@@ -108,9 +108,11 @@ Endpoint başına bir satır tablo (metot, yol, amaç, yetki, idempotency gereki
 
 `docs/index.md` ve `docs/adr/README.md`'nin **tek sahibi sensin**. W01 ve W02 paralel çalışırken yeni ADR dosyaları (ADR-008, ADR-009, ADR-010) üretiyor ama indekslere dokunmuyorlar. Merge sırasında `docs/adr/` dizinini tara ve **o an var olan** tüm ADR'leri (ADR-001…ADR-010) hem router'a hem ADR kataloğuna bağla. Var olmayan ADR için satır yazma.
 
-### 9. `docs/reviews/` klasörü
+### 9. `docs/reviews/` ve `docs/handoffs/` router'a bağlanır
 
-Oluşturulur; `README.md`'si "tarih-konu" adlandırma kuralını söyler. İçeriği PM doldurur.
+`docs/reviews/` zaten var ve içinde `2026-07-30-tech-methodology.md` bulunuyor; `README.md`'sini ekle ("tarih-konu" adlandırma kuralı). İçeriğini PM doldurur, sen yeniden yazmazsın.
+
+Router'da (`docs/index.md`) şu üçü mutlaka linkli olsun: `STATUS.md`, `handoffs/README.md` + `handoffs/PM-NOTES.md`, `reviews/`. Bir oturumun "proje nerede kaldı" ve "nasıl çalışıyoruz" sorularına tek tıkla ulaşması gerekiyor.
 
 ## Kapsam dışı (dokunma)
 

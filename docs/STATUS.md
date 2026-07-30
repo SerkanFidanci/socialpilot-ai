@@ -12,6 +12,8 @@
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
 
 > **Her oturum İLK bu dosyayı okur.** Bu dosya ile `git log` çelişirse **git kazanır**; çelişkiyi gören oturum bu dosyayı aynı commit'te düzeltir.
+>
+> **PM oturumu ayrıca [handoffs/PM-NOTES.md](handoffs/PM-NOTES.md)'yi okur** — rol, tetikleme promptları, bekleyen kararlar, yazılacak iş emirleri, öğrenilen dersler. Teknoloji/metodoloji değerlendirmesi: [reviews/2026-07-30-tech-methodology.md](reviews/2026-07-30-tech-methodology.md).
 
 ## Nerede kaldık
 
