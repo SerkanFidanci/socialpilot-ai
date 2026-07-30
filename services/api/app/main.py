@@ -12,10 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from starlette.responses import Response
 
-from app.api.routes.businesses import router as businesses_router
-from app.api.routes.health import router as health_router
-from app.api.routes.identity import router as identity_router
-from app.api.routes.media import router as media_router
+from app.api.routes import register_routes
 from app.core.config import Settings, get_settings
 from app.core.correlation import CorrelationIdMiddleware
 from app.core.errors import (
@@ -125,10 +122,7 @@ def create_app(
     )
     application.add_middleware(CorrelationIdMiddleware)
     configure_openapi(application)
-    application.include_router(health_router)
-    application.include_router(identity_router)
-    application.include_router(businesses_router)
-    application.include_router(media_router)
+    register_routes(application)
 
     if include_test_routes:
 
