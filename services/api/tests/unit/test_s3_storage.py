@@ -7,7 +7,6 @@ These run without network or credentials. The real-provider proof lives in
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -28,8 +27,9 @@ from app.modules.media.storage import (
 )
 
 OBJECT_KEY = "tenant/11111111-1111-1111-1111-111111111111/media/asset/original/abc123"
-SESSION_ID = "0123456789abcdef0123456789abcdef"
-CONTROL_KEY = f"_control/uploads/{SESSION_ID}.json"
+# The provider's own multipart UploadId, returned by CreateMultipartUpload and persisted directly
+# on the session. There is no server-owned control object mapping a client id to this value.
+UPLOAD_ID = "provider-upload-1"
 NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
 PAYLOAD = b"a" * 4096
 PAYLOAD_SHA256 = hashlib.sha256(PAYLOAD).hexdigest()
@@ -84,7 +84,7 @@ class ScriptedS3:
             return httpx.Response(
                 200,
                 content=self._xml(
-                    "<ROOT><Bucket>socialpilot-media</Bucket><UploadId>provider-upload-1</UploadId>"
+                    f"<ROOT><Bucket>socialpilot-media</Bucket><UploadId>{UPLOAD_ID}</UploadId>"
                     "</ROOT>".replace("<ROOT>", "<InitiateMultipartUploadResult>").replace(
                         "</ROOT>", "</InitiateMultipartUploadResult>"
                     )
@@ -145,18 +145,6 @@ class ScriptedS3:
             return httpx.Response(200, content=body, headers=response_headers)
         return httpx.Response(405)
 
-    def seed_control(self) -> None:
-        self.objects[CONTROL_KEY] = (
-            json.dumps(
-                {
-                    "object_key": OBJECT_KEY,
-                    "upload_id": "provider-upload-1",
-                    "content_type": "video/mp4",
-                }
-            ).encode("utf-8"),
-            {"content-type": "application/json"},
-        )
-
 
 def adapter(provider: ScriptedS3, **overrides: object) -> S3MultipartStorage:
     return S3MultipartStorage(settings(**overrides), transport=provider.transport())
@@ -166,19 +154,20 @@ def later(seconds: int = 900) -> datetime:
     return datetime.now(UTC) + timedelta(seconds=seconds)
 
 
-async def test_create_upload_presigns_parts_for_the_client_endpoint() -> None:
+async def test_create_upload_returns_the_provider_upload_id_and_presigns_parts() -> None:
     provider = ScriptedS3()
 
-    instructions = await adapter(provider).create_upload(
-        storage_upload_id=SESSION_ID,
+    created = await adapter(provider).create_upload(
         object_key=OBJECT_KEY,
         content_type="video/mp4",
         expires_at=later(),
         part_numbers=(1, 2),
     )
 
-    assert [instruction.part_number for instruction in instructions] == [1, 2]
-    parsed = urlsplit(instructions[0].upload_url)
+    # The provider's own UploadId is surfaced for the caller to persist; no control object.
+    assert created.storage_upload_id == UPLOAD_ID
+    assert [instruction.part_number for instruction in created.instructions] == [1, 2]
+    parsed = urlsplit(created.instructions[0].upload_url)
     query = parse_qs(parsed.query)
     # Signed for the client-reachable host, not the server-side endpoint.
     assert parsed.netloc == "storage.public:9000"
@@ -187,23 +176,17 @@ async def test_create_upload_presigns_parts_for_the_client_endpoint() -> None:
     assert query["X-Amz-Credential"][0].startswith("test-access-key/")
     assert query["X-Amz-Credential"][0].endswith("/us-east-1/s3/aws4_request")
     assert query["X-Amz-SignedHeaders"] == ["host"]
-    assert query["partNumber"] == ["1"] and query["uploadId"] == ["provider-upload-1"]
+    assert query["partNumber"] == ["1"] and query["uploadId"] == [UPLOAD_ID]
     assert len(query["X-Amz-Signature"][0]) == 64
-    # The provider call itself went to the internal endpoint.
+    # The provider call itself went to the internal endpoint; nothing but the create POST ran.
     assert provider.requests[0].url.host == "storage.internal"
-    control = json.loads(provider.objects[CONTROL_KEY][0])
-    assert control == {
-        "object_key": OBJECT_KEY,
-        "upload_id": "provider-upload-1",
-        "content_type": "video/mp4",
-    }
+    assert [request.method for request in provider.requests] == ["POST"]
 
 
 async def test_create_upload_stamps_the_declared_content_type_on_the_object() -> None:
     provider = ScriptedS3()
 
     await adapter(provider).create_upload(
-        storage_upload_id=SESSION_ID,
         object_key=OBJECT_KEY,
         content_type="video/quicktime",
         expires_at=later(),
@@ -215,49 +198,57 @@ async def test_create_upload_stamps_the_declared_content_type_on_the_object() ->
 
 async def test_part_urls_expire_with_the_session_and_never_outlive_the_ttl() -> None:
     provider = ScriptedS3()
-    provider.seed_control()
     storage = adapter(provider, s3_presign_ttl_seconds=600)
 
     short = await storage.create_part_urls(
-        storage_upload_id=SESSION_ID, expires_at=later(120), part_numbers=(1,)
+        object_key=OBJECT_KEY, storage_upload_id=UPLOAD_ID, expires_at=later(120), part_numbers=(1,)
     )
     long = await storage.create_part_urls(
-        storage_upload_id=SESSION_ID, expires_at=later(3_000), part_numbers=(1,)
+        object_key=OBJECT_KEY,
+        storage_upload_id=UPLOAD_ID,
+        expires_at=later(3_000),
+        part_numbers=(1,),
     )
 
     assert int(parse_qs(urlsplit(short[0].upload_url).query)["X-Amz-Expires"][0]) <= 120
     assert int(parse_qs(urlsplit(long[0].upload_url).query)["X-Amz-Expires"][0]) == 600
+    # Presigning is a local operation: issuing part URLs never calls the provider.
+    assert provider.requests == []
 
 
 async def test_expired_session_gets_no_part_url() -> None:
     provider = ScriptedS3()
-    provider.seed_control()
 
     with pytest.raises(StorageUnavailableError):
         await adapter(provider).create_part_urls(
-            storage_upload_id=SESSION_ID, expires_at=later(-1), part_numbers=(1,)
+            object_key=OBJECT_KEY,
+            storage_upload_id=UPLOAD_ID,
+            expires_at=later(-1),
+            part_numbers=(1,),
         )
 
-    assert all(request.method == "GET" for request in provider.requests)
+    assert provider.requests == []
 
 
 async def test_part_numbers_beyond_the_configured_ceiling_are_refused() -> None:
     provider = ScriptedS3()
-    provider.seed_control()
 
     with pytest.raises(StoragePermanentError):
         await adapter(provider, media_max_parts=4).create_part_urls(
-            storage_upload_id=SESSION_ID, expires_at=later(), part_numbers=(5,)
+            object_key=OBJECT_KEY,
+            storage_upload_id=UPLOAD_ID,
+            expires_at=later(),
+            part_numbers=(5,),
         )
 
 
 @pytest.mark.parametrize("namespaced", [True, False])
 async def test_completion_verifies_the_object_it_finalized(namespaced: bool) -> None:
     provider = ScriptedS3(namespaced=namespaced)
-    provider.seed_control()
 
     metadata = await adapter(provider).complete_upload(
-        storage_upload_id=SESSION_ID,
+        object_key=OBJECT_KEY,
+        storage_upload_id=UPLOAD_ID,
         parts=(CompletedPart(1, '"AAA111"'), CompletedPart(2, "bbb222")),
     )
 
@@ -267,16 +258,15 @@ async def test_completion_verifies_the_object_it_finalized(namespaced: bool) -> 
     assert metadata.byte_size == len(PAYLOAD)
     assert metadata.content_type == "video/mp4"
     assert metadata.etag == "stored-etag"
-    # The control object is cleaned up once the upload is finalized.
-    assert CONTROL_KEY not in provider.objects
 
 
 async def test_completion_finalizes_from_the_provider_part_inventory() -> None:
     provider = ScriptedS3()
-    provider.seed_control()
 
     await adapter(provider).complete_upload(
-        storage_upload_id=SESSION_ID, parts=(CompletedPart(1, "aaa111"), CompletedPart(2, "bbb222"))
+        object_key=OBJECT_KEY,
+        storage_upload_id=UPLOAD_ID,
+        parts=(CompletedPart(1, "aaa111"), CompletedPart(2, "bbb222")),
     )
 
     finalize = next(
@@ -300,10 +290,11 @@ async def test_completion_rejects_a_declaration_that_storage_contradicts(
     declared: tuple[CompletedPart, ...],
 ) -> None:
     provider = ScriptedS3()
-    provider.seed_control()
 
     with pytest.raises(StoragePermanentError):
-        await adapter(provider).complete_upload(storage_upload_id=SESSION_ID, parts=declared)
+        await adapter(provider).complete_upload(
+            object_key=OBJECT_KEY, storage_upload_id=UPLOAD_ID, parts=declared
+        )
 
     assert not provider.completed
 
@@ -367,29 +358,14 @@ async def test_network_failure_is_transient() -> None:
         await storage.get_object_metadata(object_key=OBJECT_KEY)
 
 
-async def test_control_write_failure_aborts_the_provider_upload() -> None:
+async def test_cancel_aborts_the_provider_upload() -> None:
     provider = ScriptedS3()
-    provider.status_overrides[f"PUT {CONTROL_KEY}"] = 500
 
-    with pytest.raises(StorageUnavailableError):
-        await adapter(provider).create_upload(
-            storage_upload_id=SESSION_ID,
-            object_key=OBJECT_KEY,
-            content_type="video/mp4",
-            expires_at=later(),
-            part_numbers=(1,),
-        )
+    await adapter(provider).cancel_upload(object_key=OBJECT_KEY, storage_upload_id=UPLOAD_ID)
 
+    abort = provider.requests[-1]
     assert provider.aborted
-
-
-async def test_cancel_aborts_the_upload_and_drops_the_control_object() -> None:
-    provider = ScriptedS3()
-    provider.seed_control()
-
-    await adapter(provider).cancel_upload(storage_upload_id=SESSION_ID)
-
-    assert provider.aborted and CONTROL_KEY not in provider.objects
+    assert abort.method == "DELETE" and b"uploadId" in abort.url.query
 
 
 @pytest.mark.parametrize(
@@ -405,11 +381,16 @@ async def test_unusable_object_keys_never_reach_the_provider(object_key: str) ->
     assert provider.requests == []
 
 
-async def test_unusable_session_identifiers_never_reach_the_provider() -> None:
+@pytest.mark.parametrize("storage_upload_id", ["upload id with spaces", "bad<id>", "a" * 513, ""])
+async def test_unusable_upload_identifiers_never_reach_the_provider(
+    storage_upload_id: str,
+) -> None:
     provider = ScriptedS3()
 
     with pytest.raises(StoragePermanentError):
-        await adapter(provider).cancel_upload(storage_upload_id="../../control")
+        await adapter(provider).cancel_upload(
+            object_key=OBJECT_KEY, storage_upload_id=storage_upload_id
+        )
 
     assert provider.requests == []
 
@@ -469,19 +450,21 @@ async def test_persist_file_refuses_an_empty_file(tmp_path: Path) -> None:
 
 async def test_adapter_logs_never_carry_urls_signatures_or_keys() -> None:
     provider = ScriptedS3()
-    provider.seed_control()
     storage = adapter(provider)
 
     with structlog.testing.capture_logs() as events:
         await storage.create_part_urls(
-            storage_upload_id=SESSION_ID, expires_at=later(), part_numbers=(1, 2)
+            object_key=OBJECT_KEY,
+            storage_upload_id=UPLOAD_ID,
+            expires_at=later(),
+            part_numbers=(1, 2),
         )
         provider.status_overrides[f"HEAD {OBJECT_KEY}"] = 503
         with pytest.raises(StorageUnavailableError):
             await storage.get_object_metadata(object_key=OBJECT_KEY)
 
     assert events
-    rendered = json.dumps(events)
+    rendered = str(events)
     for forbidden in ("X-Amz-Signature", "X-Amz-Credential", "test-secret-key", OBJECT_KEY, "http"):
         assert forbidden not in rendered
 
@@ -489,15 +472,14 @@ async def test_adapter_logs_never_carry_urls_signatures_or_keys() -> None:
 async def test_virtual_host_addressing_moves_the_bucket_into_the_host() -> None:
     provider = ScriptedS3()
 
-    instructions = await adapter(provider, s3_force_path_style=False).create_upload(
-        storage_upload_id=SESSION_ID,
+    created = await adapter(provider, s3_force_path_style=False).create_upload(
         object_key=OBJECT_KEY,
         content_type="video/mp4",
         expires_at=later(),
         part_numbers=(1,),
     )
 
-    parsed = urlsplit(instructions[0].upload_url)
+    parsed = urlsplit(created.instructions[0].upload_url)
     assert parsed.netloc == "socialpilot-media.storage.public:9000"
     assert parsed.path == f"/{OBJECT_KEY}"
 

@@ -4,13 +4,12 @@ The adapter is the only place that knows a provider exists. It signs requests wi
 directly over ``httpx`` rather than pulling a synchronous vendor SDK into an async request
 path, and it never returns, logs, or raises provider URLs, credentials, or response bodies.
 
-Multipart state mapping. The port identifies an upload by the server-generated
-``storage_upload_id`` persisted in ``media_upload_sessions.storage_upload_id``
-(``String(128)``). A provider ``UploadId`` cannot go in that column: AWS values routinely
-exceed 128 characters and widening the column needs a migration this slice may not add.
-So ``create_upload`` writes a small server-owned control object at
-``_control/uploads/{storage_upload_id}.json`` holding the object key and provider upload
-id, and the later part/complete/cancel calls resolve through it. See ADR-008.
+Multipart state mapping. ``create_upload`` returns the provider's own ``UploadId``; the caller
+persists it in ``media_upload_sessions.storage_upload_id`` (widened to ``String(512)`` by
+migration 0011) and hands it back — together with the tenant object key it already holds on the
+asset — on every later part/complete/cancel call. The adapter therefore stays stateless across
+processes without a server-owned control object; W10 removed the ``_control/`` workaround the
+narrow column had forced. See ADR-008 and its W10 amendment.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import json
 import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -34,6 +32,7 @@ import structlog
 from app.core.config import Settings
 from app.modules.media.storage import (
     CompletedPart,
+    CreatedUpload,
     StoragePermanentError,
     StorageUnavailableError,
     StoredObjectMetadata,
@@ -46,28 +45,20 @@ _ALGORITHM = "AWS4-HMAC-SHA256"
 _UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
 _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 _CHUNK_BYTES = 1_048_576
-_CONTROL_PREFIX = "_control/uploads/"
 _MAX_XML_BYTES = 1_048_576
 _S3_MAX_PART_NUMBER = 10_000
 _SHA256_METADATA = "x-amz-meta-sha256"
 
-_SAFE_UPLOAD_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+# A provider ``UploadId`` is opaque and, on AWS/R2, long and base64url-ish. The value is only
+# ever placed in a URL query (percent-encoded when signed) and the persisted column, so a
+# permissive-but-bounded allowlist is enough to reject a garbled or hostile provider response.
+# Bounded to the widened ``storage_upload_id`` column width (512).
+_SAFE_UPLOAD_ID = re.compile(r"^[A-Za-z0-9._~+/=-]{1,512}$")
 _SAFE_OBJECT_KEY = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/-]{0,1023}$")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _ETAG = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 # Transient at the HTTP layer: throttling, gateway churn, provider outage.
 _TRANSIENT_STATUS = frozenset({401, 403, 408, 429, 500, 502, 503, 504, 507, 509})
-
-
-class _ControlRecord:
-    """Server-owned mapping from the persisted session id to provider multipart state."""
-
-    __slots__ = ("content_type", "object_key", "upload_id")
-
-    def __init__(self, *, object_key: str, upload_id: str, content_type: str) -> None:
-        self.object_key = object_key
-        self.upload_id = upload_id
-        self.content_type = content_type
 
 
 @dataclass(frozen=True)
@@ -248,10 +239,6 @@ def _validate_upload_id(storage_upload_id: str) -> str:
     return storage_upload_id
 
 
-def _control_key(storage_upload_id: str) -> str:
-    return f"{_CONTROL_PREFIX}{_validate_upload_id(storage_upload_id)}.json"
-
-
 def _normalized_etag(value: str) -> str:
     return value.strip().strip('"').lower()
 
@@ -322,50 +309,38 @@ class S3MultipartStorage:
     async def create_upload(
         self,
         *,
-        storage_upload_id: str,
         object_key: str,
         content_type: str,
+        expires_at: datetime,
+        part_numbers: tuple[int, ...],
+    ) -> CreatedUpload:
+        _validate_object_key(object_key)
+        upload_id = await self._create_multipart(object_key, content_type)
+        instructions = self._instructions(object_key, upload_id, expires_at, part_numbers)
+        return CreatedUpload(storage_upload_id=upload_id, instructions=instructions)
+
+    async def create_part_urls(
+        self,
+        *,
+        object_key: str,
+        storage_upload_id: str,
         expires_at: datetime,
         part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]:
         _validate_object_key(object_key)
         _validate_upload_id(storage_upload_id)
-        upload_id = await self._create_multipart(object_key, content_type)
-        try:
-            await self._put_bytes(
-                _control_key(storage_upload_id),
-                json.dumps(
-                    {
-                        "object_key": object_key,
-                        "upload_id": upload_id,
-                        "content_type": content_type,
-                    }
-                ).encode("utf-8"),
-                content_type="application/json",
-            )
-        except (StorageUnavailableError, StoragePermanentError):
-            # Never leave a provider-side multipart upload without its control record.
-            await self._abort_quietly(object_key, upload_id)
-            raise
-        return self._instructions(object_key, upload_id, expires_at, part_numbers)
-
-    async def create_part_urls(
-        self, *, storage_upload_id: str, expires_at: datetime, part_numbers: tuple[int, ...]
-    ) -> tuple[UploadPartInstruction, ...]:
-        control = await self._get_control(storage_upload_id)
-        return self._instructions(control.object_key, control.upload_id, expires_at, part_numbers)
+        return self._instructions(object_key, storage_upload_id, expires_at, part_numbers)
 
     async def complete_upload(
-        self, *, storage_upload_id: str, parts: tuple[CompletedPart, ...]
+        self, *, object_key: str, storage_upload_id: str, parts: tuple[CompletedPart, ...]
     ) -> StoredObjectMetadata:
-        control = await self._get_control(storage_upload_id)
-        observed = await self._list_parts(control.object_key, control.upload_id)
+        _validate_object_key(object_key)
+        _validate_upload_id(storage_upload_id)
+        observed = await self._list_parts(object_key, storage_upload_id)
         self._require_declared_parts_match(parts, observed)
         # Finalize from the server-observed inventory, never from the client's copy.
-        await self._complete_multipart(control.object_key, control.upload_id, observed)
-        metadata = await self.get_object_metadata(object_key=control.object_key)
-        await self._delete_quietly(_control_key(storage_upload_id))
-        return metadata
+        await self._complete_multipart(object_key, storage_upload_id, observed)
+        return await self.get_object_metadata(object_key=object_key)
 
     async def get_object_metadata(self, *, object_key: str) -> StoredObjectMetadata:
         _validate_object_key(object_key)
@@ -411,10 +386,10 @@ class S3MultipartStorage:
             byte_size=byte_size, content_type=content_type, sha256_checksum=checksum, etag=etag
         )
 
-    async def cancel_upload(self, *, storage_upload_id: str) -> None:
-        control = await self._get_control(storage_upload_id)
-        await self._abort_multipart(control.object_key, control.upload_id)
-        await self._delete_quietly(_control_key(storage_upload_id))
+    async def cancel_upload(self, *, object_key: str, storage_upload_id: str) -> None:
+        _validate_object_key(object_key)
+        _validate_upload_id(storage_upload_id)
+        await self._abort_multipart(object_key, storage_upload_id)
 
     async def download_to_path(self, *, object_key: str, destination: Path, max_bytes: int) -> int:
         """Stream an object to a worker file in bounded chunks; never buffer it in memory.
@@ -575,39 +550,6 @@ class S3MultipartStorage:
     async def _abort_multipart(self, object_key: str, upload_id: str) -> None:
         await self._request("DELETE", object_key, query={"uploadId": upload_id}, payload=b"")
 
-    async def _abort_quietly(self, object_key: str, upload_id: str) -> None:
-        try:
-            await self._abort_multipart(object_key, upload_id)
-        except (StorageUnavailableError, StoragePermanentError):
-            logger.warning("storage_multipart_abort_failed")
-
-    async def _delete_quietly(self, object_key: str) -> None:
-        try:
-            await self._request("DELETE", object_key, query={}, payload=b"")
-        except (StorageUnavailableError, StoragePermanentError):
-            logger.warning("storage_control_object_delete_failed")
-
-    async def _get_control(self, storage_upload_id: str) -> _ControlRecord:
-        response = await self._request(
-            "GET", _control_key(storage_upload_id), query={}, payload=b""
-        )
-        try:
-            document = json.loads(response.content)
-        except ValueError as error:
-            raise StoragePermanentError("storage control record is not usable") from error
-        if not isinstance(document, dict):
-            raise StoragePermanentError("storage control record is not usable")
-        object_key = document.get("object_key")
-        upload_id = document.get("upload_id")
-        content_type = document.get("content_type")
-        if not isinstance(object_key, str) or not isinstance(upload_id, str):
-            raise StoragePermanentError("storage control record is not usable")
-        return _ControlRecord(
-            object_key=_validate_object_key(object_key),
-            upload_id=_validate_upload_id(upload_id),
-            content_type=content_type if isinstance(content_type, str) else "",
-        )
-
     async def _head(self, object_key: str) -> _HeadResult:
         head = await self._head_optional(object_key)
         if head is None:
@@ -664,15 +606,6 @@ class S3MultipartStorage:
         if total != expected_size:
             raise StoragePermanentError("storage object size does not match")
         return digest.hexdigest()
-
-    async def _put_bytes(self, object_key: str, payload: bytes, *, content_type: str) -> None:
-        await self._request(
-            "PUT",
-            object_key,
-            query={},
-            payload=payload,
-            extra_headers={"content-type": content_type},
-        )
 
     async def _put_stream(
         self,

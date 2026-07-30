@@ -13,12 +13,16 @@ composition (→ `../../infrastructure/celery_app.py`, `../../worker/`).
 - Idempotency anahtarı istek parmak iziyle (`request_fingerprint`) eşleşmiyorsa çakışma sayılır; aynı anahtarla farklı gövde sessizce kabul edilmez.
 - Tüm kayıtlar tenant-kapsamlıdır; `OperationsRepository` üzerinden filtresiz erişim yok.
 - Durum geçişleri `JobStateService` üzerinden yapılır; model alanı elle güncellenmez.
+- **`provider_usage` maliyet muhasebesidir, sağlayıcı yükü değil.** ADR-007 şekli birebir:
+  token/prompt/imzalı URL/ham yanıt için **sütun yoktur**. Benchmark'ın `ProviderUsageRecord`
+  ölçüm alanları `ProviderUsage.from_measurement` ile buraya girer; ikinci maliyet modeli
+  kurulmaz. Tenant'ı gerçek analiz koşusu verir; benchmark tenant'sızdır ve buraya yazmaz.
 
 ## Dosyalar
 
 | Dosya | İş |
 |---|---|
-| `models.py` | `OutboxEvent`, `BackgroundJob`, `JobAttempt`, `IdempotencyKey`, `AuditLog` + durum enum'ları |
+| `models.py` | `OutboxEvent`, `BackgroundJob`, `JobAttempt`, `IdempotencyKey`, `AuditLog`, `ProviderUsage` + durum enum'ları |
 | `service.py` | `IdempotencyService`, `OperationsService`, `JobStateService`, `JobRecoveryService`, `OutboxDispatchService`, `OutboxPublisherPort`, job timeout hesabı |
 | `repository.py` | `OperationsRepository` — tenant-kapsamlı dayanıklı kayıt işlemleri |
 | `tasks.py` | Celery task kaydı: `dispatch_outbox`, `media_ingest`, `media_technical_analysis`, `media_scene_speech_analysis` |

@@ -24,7 +24,7 @@ The application service persists the decision before a paid/provider call. An ad
 
 ## Fallback and cost
 
-Fallback occurs only for classified transient/throttled provider failure, within the persisted route policy, region/privacy constraint, retry budget, and approved cost cap. Policy, validation, budget, and invalid-response failures do not fall through to another provider automatically. **`provider_usage` is a planned table, not an implemented one (2026-07-30).** No migration or model creates it yet; W08 surfaced this gap after this document already described it in the present tense. The intended record carries tenant/job/asset/run/capability/provider/model, estimated and actual integer-minor-unit cost, currency, duration, outcome, and correlation ID, and deliberately excludes token values, prompts, signed URLs, and full responses. The benchmark harness produces a `ProviderUsageRecord` value with exactly this shape so the table can back it without reshaping call sites; creating the table is scheduled on the next migration slot (W04). Until then, cost attribution is per-run output only and is **not** durable.
+Fallback occurs only for classified transient/throttled provider failure, within the persisted route policy, region/privacy constraint, retry budget, and approved cost cap. Policy, validation, budget, and invalid-response failures do not fall through to another provider automatically. **`provider_usage` is an implemented table** (`app.modules.operations.models.ProviderUsage`, migration `0011`, W10). It carries tenant/job/asset/run/capability/provider/model, estimated and actual integer-minor-unit cost, currency, duration, outcome, and correlation ID, and — by construction, having no column for any of them — excludes token values, prompts, signed URLs, and full responses. The benchmark harness produces a `ProviderUsageRecord` value with exactly the measurement shape, and `ProviderUsage.from_measurement` adopts it under a tenant, so there is no second cost model. A real analysis run supplies the tenant/job/asset context and writes the row; the offline harness has no tenant and writes nothing.
 
 ## Operations
 
@@ -49,8 +49,9 @@ database — and scores output against machine-readable ground truth committed u
 - **Cost and latency use one record shape.** Each call produces a neutral `ProviderUsageRecord`
   mirroring the ADR-007 `provider_usage` fields (capability/provider/model, estimated + actual
   integer-minor cost, currency, duration, outcome, correlation id) plus route revision and
-  prompt version. There is **no parallel cost model**. Note: a persisted `provider_usage` table
-  does not yet exist in code; this record is the shape a future persistence layer adopts.
+  prompt version. There is **no parallel cost model**: the persisted `provider_usage` table
+  (`operations.ProviderUsage`, migration `0011`) adopts this record's measurement fields via
+  `from_measurement`. The harness itself stays DB-free — it has no tenant and persists nothing.
 - **Cost cap halts before spending.** `CostLedger.reserve` checks the estimated cost of the
   next call against the cap and stops the run without invoking the provider when it would be
   breached — it never silently spends past the ceiling.

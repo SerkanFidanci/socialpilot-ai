@@ -99,3 +99,21 @@ def test_role_permission_matrix() -> None:
     assert permits(BusinessRole.ADMIN, Permission.MEMBERS_CREATE)
     assert not permits(BusinessRole.EDITOR, Permission.BUSINESS_UPDATE)
     assert not permits(BusinessRole.VIEWER, Permission.MEMBERS_READ)
+
+
+def test_every_role_is_mapped_in_the_permission_table() -> None:
+    """A new role must be given a permission set deliberately, not KeyError at first use."""
+
+    for role in BusinessRole:
+        assert isinstance(permits(role, Permission.BUSINESS_READ), bool)
+
+
+def test_approver_holds_no_permission_yet() -> None:
+    """Approver exists as a role but grants nothing until the Phase 2 approval sources exist.
+
+    The danger is not creating the role; it is creating it and silently granting breadth. Every
+    permission in the catalogue must be denied to approver today.
+    """
+
+    for permission in Permission:
+        assert not permits(BusinessRole.APPROVER, permission)

@@ -7,9 +7,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from app.modules.media.storage import (
     CompletedPart,
+    CreatedUpload,
     StoragePermanentError,
     StorageUnavailableError,
     StoredObjectMetadata,
@@ -40,21 +42,32 @@ class FakeMultipartStorage:
     async def create_upload(
         self,
         *,
-        storage_upload_id: str,
         object_key: str,
         content_type: str,
         expires_at: datetime,
         part_numbers: tuple[int, ...],
-    ) -> tuple[UploadPartInstruction, ...]:
+    ) -> CreatedUpload:
+        # The fake stands in for the provider, so it mints the "provider" upload id the caller
+        # will persist, exactly as a real S3 CreateMultipartUpload returns one.
+        storage_upload_id = uuid4().hex
         self._uploads[storage_upload_id] = _Upload(
             object_key, content_type, expires_at, part_numbers
         )
-        return await self.create_part_urls(
-            storage_upload_id=storage_upload_id, expires_at=expires_at, part_numbers=part_numbers
+        instructions = await self.create_part_urls(
+            object_key=object_key,
+            storage_upload_id=storage_upload_id,
+            expires_at=expires_at,
+            part_numbers=part_numbers,
         )
+        return CreatedUpload(storage_upload_id=storage_upload_id, instructions=instructions)
 
     async def create_part_urls(
-        self, *, storage_upload_id: str, expires_at: datetime, part_numbers: tuple[int, ...]
+        self,
+        *,
+        object_key: str,
+        storage_upload_id: str,
+        expires_at: datetime,
+        part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]:
         upload = self._get(storage_upload_id)
         if (
@@ -73,7 +86,7 @@ class FakeMultipartStorage:
         )
 
     async def complete_upload(
-        self, *, storage_upload_id: str, parts: tuple[CompletedPart, ...]
+        self, *, object_key: str, storage_upload_id: str, parts: tuple[CompletedPart, ...]
     ) -> StoredObjectMetadata:
         upload = self._get(storage_upload_id)
         if (
@@ -133,7 +146,7 @@ class FakeMultipartStorage:
         self._object_files[object_key] = destination
         return metadata
 
-    async def cancel_upload(self, *, storage_upload_id: str) -> None:
+    async def cancel_upload(self, *, object_key: str, storage_upload_id: str) -> None:
         self._get(storage_upload_id).cancelled = True
 
     def mark_uploaded_for_testing(

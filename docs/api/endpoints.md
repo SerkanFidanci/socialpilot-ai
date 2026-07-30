@@ -30,7 +30,7 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 | `GET` | `/health/live` | Return process liveness without contacting dependencies | genel (kimlik gerekmez) | — | `200` |
 | `GET` | `/health/ready` | Check PostgreSQL and Redis independently without exposing connection data | genel (kimlik gerekmez) | — | `200` |
 
-## brands
+## brands — marka, katalog, kampanya
 
 | Metot | Yol | Amaç | Yetki | Idempotency | Başarı |
 |---|---|---|---|---|---|

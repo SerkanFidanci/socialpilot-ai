@@ -35,6 +35,10 @@ ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
         {Permission.BUSINESS_READ, Permission.MEDIA_READ, Permission.MEDIA_UPLOAD}
     ),
     BusinessRole.VIEWER: frozenset({Permission.BUSINESS_READ, Permission.MEDIA_READ}),
+    # Approver holds no permission yet: the approval sources it would read and decide on do not
+    # exist until Phase 2. It is mapped explicitly (not omitted) so `permits` never raises for a
+    # real role, and so that granting it any ability later is a deliberate one-line change here.
+    BusinessRole.APPROVER: frozenset(),
 }
 
 

@@ -1,0 +1,154 @@
+"""Migration 0011 data-safety coverage (W10, item 2 / acceptance criterion 1).
+
+Two things must hold: the widened ``storage_upload_id`` column actually holds a real (long)
+provider ``UploadId``, and reverting that widening on downgrade preserves the row rather than
+dropping or corrupting it. The downgrade path is exercised with the real Alembic CLI so the
+recreation of the enum types is covered at the same time.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import sys
+from collections.abc import Generator
+from pathlib import Path
+from typing import cast
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+pytestmark = pytest.mark.integration
+
+_API_DIR = Path(__file__).resolve().parents[2]
+
+
+async def _insert_upload_graph(storage_upload_id: str) -> str:
+    """Insert the minimal user -> business -> asset -> session graph; return the session id."""
+
+    user_id, business_id, asset_id, session_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    suffix = uuid4().hex
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("INSERT INTO users (id, email, status) VALUES (:id, :email, 'active')"),
+                {"id": user_id, "email": f"migration-{suffix}@example.com"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO businesses (id, name, slug, status, timezone, created_by_user_id) "
+                    "VALUES (:id, 'Migration', :slug, 'active', 'Europe/Istanbul', :uid)"
+                ),
+                {"id": business_id, "slug": f"migration-{suffix}", "uid": user_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO media_assets (id, business_id, created_by_user_id, "
+                    "storage_object_key, content_type, byte_size, sha256_checksum, status, "
+                    "ingest_status) VALUES (:id, :bid, :uid, :okey, 'video/mp4', 128, :chk, "
+                    "'uploaded', 'pending')"
+                ),
+                {
+                    "id": asset_id,
+                    "bid": business_id,
+                    "uid": user_id,
+                    "okey": f"tenant/{business_id}/media/{asset_id}/original/{suffix}",
+                    "chk": "a" * 64,
+                },
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO media_upload_sessions (id, business_id, asset_id, "
+                    "storage_upload_id, expected_part_count, status, expires_at) VALUES "
+                    "(:id, :bid, :aid, :suid, 2, 'created', now() + interval '1 hour')"
+                ),
+                {"id": session_id, "bid": business_id, "aid": asset_id, "suid": storage_upload_id},
+            )
+    finally:
+        await engine.dispose()
+    return str(session_id)
+
+
+async def _read_storage_upload_id(session_id: str) -> str | None:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    try:
+        async with engine.connect() as connection:
+            value = await connection.scalar(
+                text("SELECT storage_upload_id FROM media_upload_sessions WHERE id = :id"),
+                {"id": session_id},
+            )
+            return cast("str | None", value)
+    finally:
+        await engine.dispose()
+
+
+async def _clear() -> None:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("TRUNCATE media_upload_sessions, media_assets, businesses, users CASCADE")
+            )
+    finally:
+        await engine.dispose()
+
+
+def _alembic(*command: str) -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "alembic", *command],
+        cwd=_API_DIR,
+        env=os.environ.copy(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.fixture(autouse=True)
+def clean() -> Generator[None]:
+    if os.getenv("RUN_INTEGRATION_TESTS") == "1":
+        asyncio.run(_clear())
+    yield
+    if os.getenv("RUN_INTEGRATION_TESTS") == "1":
+        _alembic("upgrade", "head")
+        asyncio.run(_clear())
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_widened_column_holds_a_real_provider_upload_id() -> None:
+    # A representative long S3-style UploadId that the old String(128) could never hold.
+    long_upload_id = "aBcDeF0123456789" * 18  # 288 chars
+    assert len(long_upload_id) > 128
+
+    session_id = asyncio.run(_insert_upload_graph(long_upload_id))
+
+    assert asyncio.run(_read_storage_upload_id(session_id)) == long_upload_id
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_downgrade_preserves_storage_upload_id_data() -> None:
+    # Fits both widths, so reverting the widening is a lossless in-place ALTER, not a rebuild.
+    upload_id = "provider-upload-" + "x" * 100
+    assert len(upload_id) <= 128
+
+    session_id = asyncio.run(_insert_upload_graph(upload_id))
+
+    _alembic("downgrade", "0010_brand_catalog")
+    try:
+        # The row and its value survived the column-type reversal.
+        assert asyncio.run(_read_storage_upload_id(session_id)) == upload_id
+    finally:
+        _alembic("upgrade", "head")
+
+    # And it is still there after re-applying the widening.
+    assert asyncio.run(_read_storage_upload_id(session_id)) == upload_id

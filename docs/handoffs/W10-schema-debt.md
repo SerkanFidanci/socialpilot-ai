@@ -92,9 +92,86 @@ docs/architecture/tenant-isolation.md                       (approver satırı)
 
 Numarayı **sen seçmiyorsun.** Gerçek bir karar çıkarsa `ADR-XXX-<konu>.md` yaz, başlıkta da `ADR-XXX` bırak, raporda bildir. PM numaralandırır.
 
-## Rapor
+## Rapor — 2026-07-30 · yürütücü oturum (Opus 4.8)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/0m-schema-debt` (base `main` `3fcec78`) · **Commit'ler:** tek commit (SHA git log'da) · **Durum:** tamamlandı
+
+### Yapılanlar
+
+**1. `provider_usage` tablosu.** `operations/models.py`'ye `ProviderUsage` modeli eklendi
+(migration `0011`). Sütunlar birebir ADR-007 şekli: `business_id` (tenant, FK), `job_id`,
+`asset_id`, `run_id`, `capability`, `provider`, `model`, `estimated_cost_minor`,
+`actual_cost_minor` (BigInteger, `>= 0` check), `currency`, `duration_ms`, `outcome`,
+`correlation_id`, `created_at`. **Token/prompt/imzalı URL/ham yanıt için sütun yok** — dışlama
+yapısal. `capability` PG enum değil düz string (yeni kabiliyet migration istemez); `job_id`/
+`asset_id` düz UUID (`jobs.resource_id` deseni), yalnız `business_id` FK — modül `media`'ya
+bağımlı olmuyor. `ProviderUsage.from_measurement(...)` benchmark'ın `ProviderUsageRecord` ölçüm
+alanlarını tenant bağlamıyla satıra çevirir; **paralel maliyet modeli yok**, benchmark'a import
+yok (parametreler primitif). Harness **DB'ye yazmaz** (tenant'sız); gerçek koşu yazar. Bağ, bir
+benchmark koşusunun ürettiği kayıtları tenant altında kalıcılaştıran integration testiyle
+gösteriliyor.
+
+**2. `storage_upload_id` genişletmesi + kontrol objesi kaldırıldı.** Kolon `String(128) → String(512)`.
+`create_upload` artık sağlayıcının gerçek `UploadId`'sini `CreatedUpload` ile döner; servis onu
+kolona yazar ve part/complete/cancel yollarına `object_key` (asset'ten) + `storage_upload_id`
+olarak geçer. `s3.py`'den `_control/` katmanı tamamen kaldırıldı (`_ControlRecord`, `_control_key`,
+`_get_control`, `_abort_quietly`, `_delete_quietly`, `_put_bytes`, `json` importu). `_SAFE_UPLOAD_ID`
+gerçek sağlayıcı formatlarını taşıyacak şekilde genişletildi (`[A-Za-z0-9._~+/=-]{1,512}`; MinIO
+alt kümesi hâlâ geçer). Fake adapter artık id üretir. **Geçiş:** dev-only, üretim verisi yok;
+kolon genişletme veri kaybetmez, downgrade daralması ≤128 değerleri korur, >128 olursa **sessizce
+kesmez, hata verir**. Gerçek MinIO byte yolu (`test_media_uploads_minio.py`) yeni adapter'la geçiyor.
+
+**3. Fotoğraf durumu enum'u.** `IngestStatus.READY_FOR_PHOTO_ANALYSIS` eklendi (migration `0011`,
+`ALTER TYPE ... ADD VALUE IF NOT EXISTS`). **Hiçbir kod yolu üretmiyor**: HEIC/HEIF hâlâ ingest'te
+reddediliyor. Ulaşılamazlık, `app/` kaynağını tarayan bir testle (`test_photo_ingest_status.py`)
+kanıtlanıyor — değer yalnızca tanımlandığı `models.py`'de geçiyor. Slotu bir kez kullanmak için
+eklendi; fotoğraf hattı ayrı slice.
+
+**4. `approver` rolü.** `BusinessRole.APPROVER` + `business_role` enum'una değer. `policy.py`'de
+`ROLE_PERMISSIONS[APPROVER] = frozenset()` — **hiçbir yetki yok**. Brands `permits_action` merkezî
+tabloya devrettiği için W04'ün "her rol için marka cevabı tanımlı" testi **zayıflatılmadan**
+geçiyor (brands dosyasına dokunmadan; sadece merkezî tablo). Approver'ın hiçbir `Permission`'ı
+olmadığı açıkça test edildi.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+- Fotoğraf analiz hattı, onay akışı, gerçek sağlayıcı bağlama — WO'da açıkça kapsam dışı.
+- `provider_usage`'a `route_revision`/`prompt_version`/`data_region` **eklemedim**: WO'nun ve
+  ADR-007'nin sütun listesinde yoklar (yalnız ölçüm çekirdeği). Benchmark kaydı bunları kendi
+  raporu için tutar; kalıcılıkta atfedilmezler. Provenance'ın DB'de istenip istenmediği PM'e.
+
+### Doğrulama
+Araç zinciri: py 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · alembic 1.18.5 · sqlalchemy 2.0.51 ·
+PostgreSQL 16 + MinIO (compose, `COMPOSE_PROJECT_NAME=sp-w10`, worktree kökünden).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | ✅ temiz |
+| `ruff format --check` | ✅ 151 dosya |
+| `mypy .` | ✅ 140 dosyada sorun yok |
+| `pytest` (RUN_INTEGRATION_TESTS=1, PG+MinIO) | ✅ **406 passed** (392→406, +14; azalma yok) |
+| migration up→down(0010)→up→down(base)→up | ✅ tek head `0011_schema_debt` |
+| downgrade veri kaybı testi (kolon daralması) | ✅ satır + değer korunuyor; >128 değer widened kolonda tutuluyor |
+| `provider_usage` dışlama (token/prompt/url/yanıt sütunu yok) | ✅ unit + integration |
+| kontrol objesi kaldırıldı (`_control/` altına yazım yok) | ✅ s3 unit + MinIO byte yolu |
+| approver hiçbir yetki | ✅ `test_approver_holds_no_permission_yet` |
+| fotoğraf durumu ulaşılamaz | ✅ kaynak tarama testi |
+| `make generate-docs` sonrası kontrat | ✅ regenerate edildi (aşağıya bak) |
+
+### Açıkça belirtmem gerekenler
+- **ADR numarası:** yeni ADR **çıkmadı** — dört kalem de önceden kararlı (ADR-007, ADR-008/011,
+  PRD §4). ADR-008'e "kontrol objesi kaldırıldı" eki düşüldü. PM'in numaralayacağı yeni dosya yok.
+- **İlan dışı dokunulan dosyalar (gerekçeli):**
+  - `docs/generated/openapi.json` + `docs/api/endpoints.md`: `approver`/`ready_for_photo_analysis`
+    enum'ları API şemasında görünüyor (`role: BusinessRole`), kriter 8 regenerate gerektiriyor.
+    **Yan etki:** regenerate, `main`'de zaten var olan bir drift'i de düzeltti —
+    `generate_endpoints_doc.py:30` "brands — marka, katalog, kampanya" başlığını üretiyor ama
+    commit'li `endpoints.md` "brands" diyordu (bayat). W10 kaynaklı değil, zorunlu regenerate
+    yüzeye çıkardı. openapi.json diff'i **yalnızca** iki enum değeri.
+  - Modül `CLAUDE.md`'leri (operations/media/businesses/benchmark): DoD "modül dosyası
+    değişince CLAUDE.md güncellenir" kuralı. WO ilan listesinde tek tek yoktu; W03 tekelindeki
+    `docs/index.md`/`docs/adr/README.md`'ye **dokunmadım** (WO'da kapsam dışı).
+  - `docs/STATUS.md`: yalnız W10 satırı + Alembic head fact'i (git-doc tutarlılığı).
+- **`docs/index.md` / `docs/adr/README.md`:** indekse ekleme yapılmadı (W03 tekeli), bildiriliyor.
 
 ## Doğrulama
 

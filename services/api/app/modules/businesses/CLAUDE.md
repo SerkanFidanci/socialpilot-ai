@@ -12,6 +12,7 @@ kataloğu (PRD §11, henüz yok — W04), HTTP taşıma (→ `../../api/routes/b
 - Yetki kararı **yalnızca** `policy.permits(role, permission)` üzerinden verilir. Route
   veya servis içinde elle rol karşılaştırması (`role == "owner"` gibi) yazılmaz.
 - Yeni bir yetki eklemek `Permission` enum'una satır eklemektir; politika tablosu tek yerde.
+- **Her `BusinessRole` `ROLE_PERMISSIONS`'ta anahtar olmalı** (aksi halde `permits` KeyError verir; W04 marka testi bunu zorlar). `approver` rolü var ama şu an **boş yetki kümesine** eşlenir — onay kaynakları Phase 2 işi; rol var olup sessizce yetki vermemeli (W10, PRD §4).
 - Slug üretimi `service.create_slug` ile deterministiktir; istemciden gelen slug'a güvenilmez.
 - İş kuralı servis katmanındadır, controller'da değildir.
 

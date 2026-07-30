@@ -7,6 +7,8 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -178,6 +180,98 @@ class IdempotencyKey(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProviderUsage(Base):
+    """One attributable paid/provider call, persisted for durable cost attribution (ADR-007).
+
+    This is the table the benchmark harness's ``ProviderUsageRecord`` (``app/benchmark/model.py``)
+    is shaped after: the measurement fields — capability/provider/model, estimated and actual
+    integer-minor-unit cost, currency, duration, outcome and correlation id — map one for one, so
+    persistence sits *behind* that record instead of a second cost model. Tenant/job/asset/run are
+    the context a real analysis run supplies at write time; the offline harness has no tenant, so
+    the harness itself never writes here (its default run touches no database).
+
+    By construction this row **excludes** everything ADR-007 keeps out of a usage record: token
+    counts, prompts, signed URLs and full provider payloads. There is no column for any of them.
+
+    ``capability`` is a plain string, not a PostgreSQL enum, so adding a future capability never
+    needs a migration; ``job_id``/``asset_id`` are plain UUIDs (like ``jobs.resource_id``) rather
+    than foreign keys, keeping this module free of a hard dependency on the media schema.
+    """
+
+    __tablename__ = "provider_usage"
+    __table_args__ = (
+        CheckConstraint(
+            "estimated_cost_minor >= 0", name="ck_provider_usage_estimated_non_negative"
+        ),
+        CheckConstraint("actual_cost_minor >= 0", name="ck_provider_usage_actual_non_negative"),
+        Index("ix_provider_usage_business_created", "business_id", "created_at"),
+        Index("ix_provider_usage_business_capability", "business_id", "capability"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    job_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=True)
+    asset_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    capability: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    estimated_cost_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actual_cost_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    @classmethod
+    def from_measurement(
+        cls,
+        *,
+        business_id: UUID,
+        capability: str,
+        provider: str,
+        model: str,
+        estimated_cost_minor: int,
+        actual_cost_minor: int,
+        currency: str,
+        duration_ms: int,
+        outcome: str,
+        correlation_id: str,
+        job_id: UUID | None = None,
+        asset_id: UUID | None = None,
+        run_id: str | None = None,
+    ) -> ProviderUsage:
+        """Build a row from a single measurement plus the tenant/job/asset/run it belongs to.
+
+        The measurement arguments mirror ``benchmark.model.ProviderUsageRecord`` field for field;
+        the caller supplies the tenant context a bare measurement never carries. Keeping the
+        parameters primitive means the operations module does not import the benchmark harness.
+        """
+
+        return cls(
+            business_id=business_id,
+            job_id=job_id,
+            asset_id=asset_id,
+            run_id=run_id,
+            capability=capability,
+            provider=provider,
+            model=model,
+            estimated_cost_minor=estimated_cost_minor,
+            actual_cost_minor=actual_cost_minor,
+            currency=currency,
+            duration_ms=duration_ms,
+            outcome=outcome,
+            correlation_id=correlation_id,
+        )
 
 
 class AuditLog(Base):

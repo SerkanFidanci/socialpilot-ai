@@ -608,7 +608,8 @@
           "owner",
           "admin",
           "editor",
-          "viewer"
+          "viewer",
+          "approver"
         ],
         "title": "BusinessRole",
         "type": "string"
@@ -1169,7 +1170,8 @@
           "ready_for_analysis",
           "rejected",
           "failed",
-          "dead"
+          "dead",
+          "ready_for_photo_analysis"
         ],
         "title": "IngestStatus",
         "type": "string"

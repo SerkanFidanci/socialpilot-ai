@@ -42,7 +42,7 @@ Route parameters are inputs, not authority. The application constructs `Authoriz
 | Viewer | Yes | No | No | No |
 | Approver | Approval resources only | Approval decision only | No | No |
 
-Exact permission names must be stable application contracts, separate from display labels. Future ad/billing privileges remain unavailable until their modules exist.
+Exact permission names must be stable application contracts, separate from display labels. Future ad/billing privileges remain unavailable until their modules exist. The `Approver` role is defined in `BusinessRole` (W10) but maps to an **empty permission set** today: the approval sources it would read and the approval decisions it would make are Phase 2 work, so it grants nothing until those modules exist.
 
 ## Isolation test matrix
 
