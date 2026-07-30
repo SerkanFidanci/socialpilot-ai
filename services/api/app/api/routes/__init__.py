@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app.api.routes.brands import router as brands_router
 from app.api.routes.businesses import router as businesses_router
 from app.api.routes.health import router as health_router
 from app.api.routes.identity import router as identity_router
@@ -21,4 +22,5 @@ def register_routes(application: FastAPI) -> None:
     application.include_router(health_router)
     application.include_router(identity_router)
     application.include_router(businesses_router)
+    application.include_router(brands_router)
     application.include_router(media_router)
