@@ -111,6 +111,38 @@ def test_settings_default_to_the_fake_storage_adapter() -> None:
     assert Settings.model_validate(valid_values()).storage_adapter == "fake"
 
 
+def test_settings_default_to_the_fake_materializer_adapter() -> None:
+    settings = Settings.model_validate(valid_values())
+    assert settings.materializer_adapter == "fake"
+    assert settings.media_analyzable_video_types == ("video/mp4", "video/quicktime")
+    assert settings.media_supported_video_codecs == ("h264", "hevc")
+
+
+def test_settings_reject_the_fake_materializer_in_production() -> None:
+    values = s3_values() | {
+        "app_env": "production",
+        "storage_adapter": "s3",
+        "materializer_adapter": "fake",
+    }
+
+    with pytest.raises(ValidationError, match="fake media materializer"):
+        Settings.model_validate(values)
+
+
+def test_settings_require_s3_configuration_when_the_materializer_is_s3() -> None:
+    # The s3 materializer reuses the storage adapter, so it needs the S3_* set even when the
+    # storage adapter itself is left as the fake. Blank one field explicitly so an ambient
+    # S3_* environment variable cannot satisfy it.
+    values = s3_values() | {
+        "storage_adapter": "fake",
+        "materializer_adapter": "s3",
+        "s3_endpoint_url": "",
+    }
+
+    with pytest.raises(ValidationError, match="s3 storage adapter requires"):
+        Settings.model_validate(values)
+
+
 def test_settings_reject_the_fake_storage_adapter_in_production() -> None:
     values = s3_values() | {"app_env": "production", "storage_adapter": "fake"}
 

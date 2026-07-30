@@ -44,9 +44,7 @@ def _purpose(operation: dict[str, Any]) -> str:
 
 def _authorization(operation: dict[str, Any], path: str) -> str:
     schemes = sorted(
-        name
-        for requirement in operation.get("security") or []
-        for name in requirement
+        name for requirement in operation.get("security") or [] for name in requirement
     )
     if not schemes:
         return "genel (kimlik gerekmez)"
@@ -68,9 +66,7 @@ def _idempotency(operation: dict[str, Any], method: str) -> str:
 
 
 def _success_codes(operation: dict[str, Any]) -> str:
-    codes = sorted(
-        code for code in operation.get("responses", {}) if code.startswith("2")
-    )
+    codes = sorted(code for code in operation.get("responses", {}) if code.startswith("2"))
     return ", ".join(f"`{code}`" for code in codes) or "—"
 
 

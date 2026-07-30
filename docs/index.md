@@ -97,7 +97,10 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-005](adr/ADR-005-transactional-outbox.md) transactional outbox ·
 [ADR-006](adr/ADR-006-media-ingest-security-gate.md) ingest güvenlik geçidi ·
 [ADR-007](adr/ADR-007-media-analysis-provider-routing.md) analiz sağlayıcı yönlendirme ·
-[ADR-008](adr/ADR-008-s3-compatible-storage-adapter.md) S3-uyumlu storage adapter
+[ADR-008](adr/ADR-008-s3-compatible-storage-adapter.md) S3-uyumlu storage adapter ·
+[ADR-009](adr/ADR-009-dependency-and-runtime-baseline.md) bağımlılık ve runtime temeli ·
+[ADR-010](adr/ADR-010-valkey-runtime-evaluation.md) Valkey değerlendirmesi (önerildi) ·
+[ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer
 
 ## Kontratlar, planlar, runbook'lar
 

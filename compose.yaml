@@ -1,4 +1,4 @@
-name: socialpilot-ai
+name: ${COMPOSE_PROJECT_NAME:-socialpilot-ai}
 
 services:
   postgres:

@@ -21,11 +21,16 @@ resolve an ADR identifier.
 | [ADR-006](ADR-006-media-ingest-security-gate.md) | Media Ingest Security Gate | Accepted | 2026-07-28 |
 | [ADR-007](ADR-007-media-analysis-provider-routing.md) | Media Analysis Provider Routing | Accepted | 2026-07-28 |
 | [ADR-008](ADR-008-s3-compatible-storage-adapter.md) | S3-Compatible Storage Adapter | Accepted | 2026-07-30 |
+| [ADR-009](ADR-009-dependency-and-runtime-baseline.md) | Dependency and Runtime Baseline | Accepted | 2026-07-30 |
+| [ADR-010](ADR-010-valkey-runtime-evaluation.md) | Valkey Runtime Evaluation | Proposed | 2026-07-30 |
+| [ADR-011](ADR-011-real-media-materializer.md) | Real Media Materializer and `.mov`/HEVC Analysis Gate | Accepted | 2026-07-30 |
 
-Seven ADRs exist as of this catalog's last update. Parallel work orders (W01, W02) may add
-higher-numbered ADR files without touching this catalog or the router; whoever merges them
-scans this directory and adds the rows in the merge commit. A row is never written for an
-ADR file that does not exist.
+Paralel work order'lar bu katalogu ve router'i degistirmeden daha yuksek numarali ADR
+dosyalari ekleyebilir; merge eden bu dizini tarar ve satirlari merge commit'inde ekler. Var
+olmayan bir ADR icin asla satir yazilmaz. **Numara cakismasi gercek bir risktir:** 2026-07-30'da
+W02 ve W09 paralel calisirken ikisi de ADR-009'u aldi; W09'un dosyasi merge sirasinda ADR-011'e
+tasindi (henuz katalogda olmadigi icin yeniden numaralandirma mesruydu). Kabul edilmis ve
+kataloga girmis bir ADR asla yeniden numaralandirilmaz.
 
 ## Creating a new ADR
 

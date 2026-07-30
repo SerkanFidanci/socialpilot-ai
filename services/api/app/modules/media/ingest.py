@@ -30,6 +30,13 @@ from app.modules.operations.models import BackgroundJob, JobAttempt, JobAttemptS
 from app.modules.operations.repository import OperationsRepository
 from app.modules.operations.service import OperationsService
 
+# Admitted at the upload boundary (W01, iOS) but with no analysis pipeline yet: a photo needs
+# a not-yet-built transcode to be usable, so it is declined explicitly here rather than left in
+# the silent accepted-but-never-analyzed limbo that K6 warns against. The photo-analysis chain
+# (technical metadata + VLM tagging, no scene/ASR) is a separate slice; when it lands this set
+# empties. jpeg/png/audio keep their existing accepted-no-video-analysis contract.
+_ANALYSIS_DECLINED_CONTENT_TYPES = frozenset({"image/heic", "image/heif"})
+
 
 @dataclass(frozen=True)
 class ContentInspectionResult:
@@ -163,6 +170,9 @@ class MediaIngestService:
                     in {MalwareScanStatus.INFECTED, MalwareScanStatus.INDETERMINATE},
                     scan_status=verdict,
                 )
+            # Security gate first (ADR-006), then decline media whose analysis is undefined.
+            if metadata.content_type.lower() in _ANALYSIS_DECLINED_CONTENT_TYPES:
+                raise IngestValidationError("INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE")
         except (
             StorageUnavailableError,
             ContentInspectionUnavailableError,
@@ -253,7 +263,11 @@ class MediaIngestService:
                     )
                 )
             asset.ingest_status = IngestStatus.READY_FOR_ANALYSIS
-            if asset.content_type == "video/mp4":
+            # Schedule technical analysis for every supported video container, not just mp4.
+            # The container admits the asset to the pipeline; the ffprobe-resolved codec is
+            # validated inside technical analysis, so an unsupported codec is rejected there
+            # with a documented code rather than stopping silently here.
+            if asset.content_type.lower() in self._settings.media_analyzable_video_types:
                 await OperationsService(self._session, self._settings).record_technical_analysis(
                     business_id=business_id, asset_id=asset.id, correlation_id=job.correlation_id
                 )

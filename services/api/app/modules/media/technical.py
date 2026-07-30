@@ -19,6 +19,7 @@ from app.core.config import Settings
 from app.core.errors import ProblemException
 from app.modules.media.models import (
     IngestStatus,
+    MediaAssetStatus,
     MediaDerivative,
     MediaDerivativeStatus,
     MediaTechnicalAnalysis,
@@ -97,6 +98,15 @@ class TechnicalPermanentError(RuntimeError):
     pass
 
 
+class TechnicalUnsupportedMediaError(TechnicalPermanentError):
+    """Media the pipeline can never analyze (e.g. an unsupported codec).
+
+    Unlike other permanent failures, which may reflect a transient-adjacent infrastructure
+    problem, this is a determination about the media itself, so the asset becomes ``rejected``
+    (media-ingest-pipeline.md) rather than a technical stage that appears to hang.
+    """
+
+
 def validate_technical_metadata(
     *, settings: Settings, asset_byte_size: int, metadata: NormalizedTechnicalMetadata
 ) -> None:
@@ -106,6 +116,14 @@ def validate_technical_metadata(
         raise TechnicalPermanentError("TECHNICAL_DURATION_EXCEEDED")
     if metadata.width is None or metadata.height is None:
         raise TechnicalPermanentError("TECHNICAL_VIDEO_STREAM_REQUIRED")
+    # The container was admitted at the ingest gate; the codec is decided here from what
+    # FFprobe actually resolved. An unsupported codec (e.g. a QuickTime container wrapping a
+    # codec the pipeline cannot proxy) is a documented rejection, not a silent stop.
+    if (
+        metadata.video_codec is None
+        or metadata.video_codec.lower() not in settings.media_supported_video_codecs
+    ):
+        raise TechnicalUnsupportedMediaError("TECHNICAL_VIDEO_CODEC_UNSUPPORTED")
     # FFprobe reports encoded raster dimensions. Rotation is metadata only, and
     # symmetric long/short edge validation intentionally yields the same policy
     # for landscape and portrait media.
@@ -469,6 +487,9 @@ class TechnicalAnalysisService:
             return await self._fail(
                 business_id, job_id, expected_attempt_number, str(error), transient=True
             )
+        except TechnicalUnsupportedMediaError as error:
+            # Subclass of TechnicalPermanentError, so it must be caught first.
+            return await self._reject(business_id, job_id, expected_attempt_number, str(error))
         except TechnicalPermanentError as error:
             return await self._fail(
                 business_id, job_id, expected_attempt_number, str(error), transient=False
@@ -610,4 +631,44 @@ class TechnicalAnalysisService:
                         if transient
                         else TechnicalAnalysisStatus.FAILED
                     )
+            return job
+
+    async def _reject(
+        self, business_id: UUID, job_id: UUID, expected_attempt_number: int, code: str
+    ) -> BackgroundJob:
+        """Reject the asset for permanently unsupported media; no retry can change it.
+
+        The asset moves to ``rejected`` so the client's summary reports a terminal failure
+        instead of a technical stage that never completes; the documented code stays on both
+        the technical analysis row and the job.
+        """
+
+        async with self._session.begin():
+            job = await self._operations.get_job_for_update(business_id, job_id)
+            if job is None:
+                raise RuntimeError("technical job disappeared")
+            attempt = await self._operations.get_active_attempt_for_update(
+                job, expected_attempt_number
+            )
+            if attempt is None:
+                return job
+            asset = await self._media.get_asset(business_id, job.resource_id, lock=True)
+            if asset is not None:
+                asset.ingest_status = IngestStatus.REJECTED
+                asset.status = MediaAssetStatus.REJECTED
+            analysis = await self._media.get_technical_analysis(
+                business_id, job.resource_id, lock=True
+            )
+            if analysis is not None:
+                analysis.status, analysis.safe_error_code = (TechnicalAnalysisStatus.FAILED, code)
+            attempt.status = JobAttemptStatus.FAILED
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error_code = code
+            attempt.error_summary = code
+            job.status, job.next_attempt_at, job.finished_at = (
+                JobStatus.FAILED,
+                None,
+                datetime.now(UTC),
+            )
+            job.last_error_code = job.last_error_summary = code
             return job

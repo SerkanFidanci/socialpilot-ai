@@ -5,10 +5,10 @@ COMPOSE ?= docker compose
 .PHONY: lint format-check typecheck test-backend verify migrate migrate-down compose-config compose-up compose-ps generate-docs check-openapi
 
 lint:
-	cd $(API_DIR) && $(PYTHON) -m ruff check app tests migrations
+	cd $(API_DIR) && $(PYTHON) -m ruff check app tests migrations scripts
 
 format-check:
-	cd $(API_DIR) && $(PYTHON) -m ruff format --check app tests migrations
+	cd $(API_DIR) && $(PYTHON) -m ruff format --check app tests migrations scripts
 
 test-backend:
 	cd $(API_DIR) && $(PYTHON) -m pytest

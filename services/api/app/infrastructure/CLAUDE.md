@@ -23,6 +23,8 @@ buradaki hiçbir sınıf domain kararı vermez.
 | `storage/fake.py` | `FakeMultipartStorage` — byte kabul etmeyen bellek içi multipart fake (bkz. bloke edici **B1**) |
 | `identity/local.py` | `LocalIdentityVerifier` — yalnızca geliştirme/test için imzalı yerel token |
 | `media/frame_extraction.py` | `FFmpegFrameExtractionAdapter` + `select_frame_timestamps` — sınırlı gerçek frame çıkarma |
+| `media/s3_materializer.py` | `S3MediaMaterializer` — depodan worker scratch'ine akışlı indirme; W01 adapter'ının imzalamasını yeniden kullanır, kısmi dosya bırakmaz (ADR-009) |
+| `media/__init__.py` | `create_materializer` — `MATERIALIZER_ADAPTER`'a göre fake/s3 seçimi (`create_storage` deseni), üretimde `fake` reddedilir |
 | `media/fake_ingest.py` | Byte'sız içerik denetimi / malware tarama / materialize fake'leri |
 | `media/fake_scene_speech.py` | Deterministik sahne tespiti, ses çıkarma ve ASR fake'leri |
 | `media/fake_video_understanding.py` | Deterministik frame çıkarma ve video-understanding fake'leri |

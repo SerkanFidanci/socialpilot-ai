@@ -16,9 +16,11 @@ sys.path.insert(0, str(API_ROOT))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app.main import create_app  # noqa: E402
-
+# Resolved at runtime through the sys.path insert above; mypy is configured to ignore the
+# missing import for this module in pyproject (ADR-009), so no inline ignore is needed.
 from generate_endpoints_doc import write as write_endpoints_doc  # noqa: E402
+
+from app.main import create_app  # noqa: E402
 
 
 def main() -> None:
