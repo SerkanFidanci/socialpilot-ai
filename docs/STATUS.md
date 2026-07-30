@@ -117,7 +117,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W10](handoffs/W10-schema-debt.md) | **Şema borcu** (4 kalem) | **tamamlandı** · merge (`0a44f22`) · `0011` | dal silindi | Opus 4.8 / medium | kullanıldı |
 | [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
 
-| W13 | **Phase 2B** — senaryo üretimi (`script_generation` portu, katı JSON şema, doğrulanmış alan bindirmesi) | iş emri yazılacak | `slice/2b-script-generation` | Opus 5 / high | gerekiyorsa sıradaki |
+| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi: `script_generation` portu (fake), katı JSON şema, **doğrulanmış alan bindirmesi** (model fiyat/tarih yazamaz, kod yerleştirir), prompt versiyonlama | **şimdi** | `slice/2b-script-generation` | Opus 5 / high | **SENDE** (`0013`) |
 
 ### Dosya sahipliği (çakışma önleme)
 
