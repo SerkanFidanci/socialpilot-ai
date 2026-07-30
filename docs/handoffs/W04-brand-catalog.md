@@ -1,7 +1,7 @@
 # W04 — Marka profili + ürün/hizmet kataloğu
 
 **Dal:** `slice/1f-brand-catalog` · **Base:** `main` · **Migration slotu: SENDE** (`0010`) · **W05 ile paralel** (dosya-ayrık)
-**Durum:** hazır, tetiklenmedi
+**Durum:** tamamlandı (2026-07-30) — rapor aşağıda, merge ve üç tek satırlık PM kararı bekliyor
 **Model/effort:** Opus 5 / high
 **Neden bu iş:** Phase 1'in son eksik parçası ve **Phase 2'nin ön koşulu.** İçerik üretimi doğrulanmış ürün, fiyat ve kampanya verisi olmadan çalışamaz — PRD'nin en sert kuralı bu: *"AI kampanya tarihini veya fiyatı yazmaz. Doğrulanmış kayıttan alır."* (§11.3). O kayıt henüz yok. Marka tonu, yasak kelimeler ve onaylı CTA listesi de burada doğuyor; senaryo üretimi bunlara dayanacak.
 
@@ -98,9 +98,128 @@ docs/adr/ADR-XXX-<konu>.md                           (yalnızca gerçek bir kara
 
 Numarayı **sen seçmiyorsun.** Gerçek bir mimari karar çıktıysa dosyayı `ADR-XXX-<konu>.md` adıyla yaz, başlıkta da `ADR-XXX` bırak, raporda bildir. PM merge sırasında numaralandırır.
 
-## Rapor
+## Rapor — 2026-07-30 · Claude Opus 4.8 (yürüten oturum)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/1f-brand-catalog` (base `main` = `374c02b`) · **Commit'ler:** aşağıdaki tek slice commit'i · **Durum:** tamamlandı
+
+### Yapılanlar
+
+- **`modules/brands`** — `businesses` desenini izleyen yeni domain modülü: `models.py` (10 tablo),
+  `domain.py` (saf kurallar), `policy.py`, `repository.py`, `service.py`, `CLAUDE.md`.
+  Tablolar: `brand_profiles`, `brand_assets`, `target_audiences`, `products`, `product_prices`,
+  `campaign_offers`, `campaign_offer_products`, `approved_claims`, `forbidden_claims`,
+  `approved_ctas`.
+- **Migration `0010_brand_catalog`** — tek head, up/down/up temiz. Tenant-öncelikli indeksler,
+  `brand_assets → media_assets` FK'si `RESTRICT`, kampanya penceresi ve indirim tutarlılığı için
+  CHECK constraint'leri, **ürün başına tek açık fiyat** için kısmi unique index.
+- **Para birimi değişmezi** — `price_minor`/`discount_amount_minor` `BigInteger` minor unit +
+  `String(3)` ISO-4217. Modülde `float`/`Decimal`/`Numeric` yok; test bunu üç yerden doğrular
+  (mapped sütunlar, modül kaynak kodu, üretilmiş OpenAPI şeması). `CURRENCY_MISMATCH` üç yolda:
+  markanın kayıt para birimi ↔ ürün fiyatı, ürünün mevcut fiyatı ↔ yeni fiyat, kampanya sabit
+  indirim ↔ kampanya ürünlerinin fiyatı.
+- **Fiyat geçmişi append-only** — reprice açık satırı kapatır, yeni satır ekler; aynı tutara
+  reprice no-op. Geçen ay yayınlanmış bir gönderinin fiyatı hâlâ açıklanabilir.
+- **Kampanya aktifliği deterministik** — `evaluate_campaign_activity` (saf) + SQL yüklemi
+  `active_campaign_conditions`, pencere yarı açık `[starts_at, ends_at)`. İkisinin sınır
+  satırlarında aynı cevabı verdiği integration testiyle bağlandı (drift koruması).
+- **Marka sağlık skoru** — PRD §10.4'ün 11 bileşeni; 8'i ölçülüyor, modülü olmayan 3'ü
+  `unavailable` ve paydadan düşülüyor. Salt okuma ucu, `advisory: true`; hiçbir mutation'ı
+  bloke etmiyor (testte gösterildi).
+- **`core/pagination.py`** — yeniden kullanılabilir keyset primitifi: opak unpadded base64url
+  cursor, `created_at DESC, id DESC` kararlı sıralama (tie-break dahil), `limit` tavanı 100,
+  bozuk cursor `400 PAGINATION_CURSOR_INVALID` (sessiz sıfırlama yok). Domain tipi bilmiyor.
+- **API** — PRD §29.4'teki 8 ucun tamamı. Router **yalnızca** `routes/__init__.py`'a bir import +
+  bir satır ile bağlandı; `main.py` **değişmedi** (`git diff` boş).
+- Yeni hata kodları `error-handling.md`'ye, mimari `docs/architecture/brand-catalog.md`'ye yazıldı;
+  OpenAPI + `endpoints.md` yeniden üretildi (16 → 24 endpoint, drift yok).
+
+### Kararlar (gerekçeleriyle)
+
+- **Yeni `Permission` satırı eklemedim.** `businesses/policy.py` dokunulacak dosya listemde
+  değil ve WO "yetki `businesses`'ten gelir, yeniden yazılmaz" diyor. `brands/policy.py` yalnızca
+  **eşleme** yapıyor: yazma → `business.update` (owner/admin), okuma → `business.read` (tüm
+  roller). Bu, istenen rol matrisini birebir üretiyor ve ikinci bir politika tablosu doğurmuyor.
+  İleride ayrı `brand.*` yetkileri istenirse değişecek tek yer bu eşleme.
+- **Kampanya `approval_status` varsayılanı `not_required`.** Onay akışı (PRD §11.1/11) ve
+  `approver` rolü yok; create yalnızca `not_required`/`pending` kabul ediyor, `approved`
+  veremiyor. Aksi hâlde aktiflik sorgusu hiçbir kampanyayı kullanılabilir saymazdı.
+- **Reklam bütçesi alanı (PRD §11.3) bilinçli olarak YOK.** Guardrail doğrulaması olmadan bütçe
+  saklamak kod inceleme kuralını ihlal eder; reklam modülüyle gelmeli.
+- **`campaign_offer_products` §28.2 listesinde yok** ama ilişki bunu gerektiriyor; JSON id dizisi
+  yerine FK'li link tablosu seçtim ki kampanya silinmiş ürünü gösteremesin.
+- **ADR yazmadım.** Yeni bir mimari karar çıkmadı: her şey mevcut ADR-001/002 ve PRD'nin içinde.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **`businesses` ve `media` listelerinin cursor pagination'a çevrilmesi** — WO'da açıkça yok;
+  kontrat + mobil istemci değişikliği, ayrı slice. **Öneri:** `slice/…-list-pagination-retrofit`.
+- **Şema borcu üç kalemi** (`provider_usage`, `storage_upload_id`, fotoğraf enum'u) — W10'da.
+- **ETag/optimistic locking (§29.1)** — `version` sütunu ekleyip zorlamamak dekorasyon olurdu;
+  kabul kriterlerinde de yok. Ayrı, bütün API'yi kapsayan bir slice olmalı.
+- `docs/index.md` / `docs/adr/README.md` indekslerine dokunmadım (W03 tekeli): **PM,
+  `brand-catalog.md`'yi mimari tabloya eklemeli.**
+
+### Sahibi olmadığım dosyalar — DURDUM, PM'e bırakıyorum
+
+| # | Dosya | Neden gerekiyor | Etki |
+|---|---|---|---|
+| 1 | `services/api/app/modules/businesses/models.py` + `policy.py` | **`approver` rolü `BusinessRole` enum'unda yok.** Kabul kriteri 3'ün "approver yalnızca kendi kaynaklarını görür" yarısı bu yüzden test edilemedi | Rol eklemek enum migration'ı da ister. Yazdığım test `BusinessRole`'daki **her** rol için marka cevabının tanımlı olduğunu doğruluyor; `approver` eklendiği an bu test onu eşlemeye eklemeye zorlar |
+| 2 | `services/api/app/infrastructure/database/metadata.py` | `MODEL_MODULES`'a `brands` eklenmeli (tek satır). Şu an API süreci route üzerinden import ettiği için çalışıyor, worker brands tablolarına dokunmuyor — **fonksiyonel açık yok**, ama dosyanın sözleşmesi "her tabloyu kaydet" | Autogenerate/metadata tabanlı bir kontrol ileride eksik görebilir |
+| 3 | `services/api/scripts/generate_endpoints_doc.py` | `TAG_TITLES`'a `"brands": "brands — marka, katalog, kampanya"` (tek satır); şu an bölüm başlığı düz `brands` | Yalnızca kozmetik |
+
+### Doğrulama
+
+Docker (`COMPOSE_PROJECT_NAME=sp-w04`, ayrık host portları 55442/56389/59010/8010) içinde,
+gerçek PostgreSQL + Redis + MinIO ile. Araç zinciri konteynerde: Python 3.13.14 · mypy 2.3.0 ·
+ruff 0.16.0 · pytest 9.1.1.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app, tests, migrations, scripts) | ✅ temiz |
+| `ruff format --check` | ✅ temiz |
+| `mypy .` (strict) | ✅ 133 dosya, hata yok |
+| `pytest` (RUN_INTEGRATION_TESTS=1) | ✅ **378 passed** (öncesi 313; +65 yeni test) |
+| migration up → down → up | ✅ tek head `0010_brand_catalog` |
+| OpenAPI + `endpoints.md` drift | ✅ yeniden üretildi ve commit'lendi (24 endpoint) |
+| `main.py` değişmedi | ✅ `git diff services/api/app/main.py` boş |
+| Kabul kriteri 1–10, 12, 13 | ✅ |
+| Kabul kriteri 3 (`approver` yarısı) | ⚠️ rol enum'da yok — yukarıdaki tablo #1 |
+| Kabul kriteri 11 | ✅ |
+
+Kabul kriteri karşılıkları: (2) cross-tenant marka/ürün/kampanya okuma **ve** yazma `404`,
+`PRODUCT_NOT_FOUND`/`BUSINESS_NOT_FOUND` ayrımı testli · (4) para birimi testleri üç katmanda ·
+(5) sınır anları (`starts_at`, `ends_at - 1µs`, `ends_at`) + SQL/saf kural mutabakatı · (6) liste
+girdilerinde boş/uzun/duplicate sınırları · (7) skor testte 0 iken tüm yazmalar başarılı ·
+(8) 7 ürün üzerinde limit=2 ile sayfa yürüyüşü: atlama/tekrar yok, bozuk cursor `400` ·
+(9) replay aynı ürünü döndürüyor, farklı gövde `IDEMPOTENCY_CONFLICT`, tek satır yazılmış.
+
+### Açıkça belirtmem gerekenler
+
+- **`STATUS.md` ile `git` çelişiyordu:** tablo `main`'i `7b9fd35` gösteriyor, gerçek `374c02b`
+  (W04/W05 iş emirlerinin yazıldığı commit). `main` satırı PM'in; ben yalnızca W04 satırını
+  güncelledim. **PM düzeltmeli.**
+- **Compose kazası ve düzeltmesi:** ilk denemede `cd` bir dizin fazla gittiğinden `docker compose`
+  üst dizine yürüyüp **`main` deposunun** `compose.yaml`'ını kullandı. Ayrı proje adı ve ayrı host
+  portları sayesinde `main`'in konteynerleri **ele geçirilmedi**; yanlış stack `down -v` ile
+  silindi ve doğrulama worktree kökünden yeniden koştu. Protokolün uyardığı hata tam olarak bu:
+  proje adını ayırmak yeterli değil, **compose'u worktree kökünden çalıştırmak** da gerekiyor.
+- **Yakalanıp düzeltilen gerçek regresyon:** ilk yazımda response sınıfımın adı `AssetResponse`
+  idi ve `media` modülünde aynı adda bir model var. FastAPI çakışmayı **iki şemayı da** tam nitelikli
+  ada çevirerek çözüyor — yani benim dosyam, `media`'nın mevcut public şema adını
+  `app__api__routes__media__AssetResponse`'a **yeniden adlandırıyordu** (üretilmiş istemcileri
+  bozan bir kontrat değişikliği). Sınıflar `BrandAssetPayload`/`BrandAssetResponse` olarak
+  adlandırıldı ve şema adlarında `__` bulunmadığını doğrulayan bir **regresyon testi** eklendi;
+  bir sonraki modül aynı tuzağa sessizce düşemez.
+- **Aktiflik kuralı iki yerde** (saf fonksiyon + SQL yüklemi). Kaçınılmaz; mutabakat testiyle
+  bağlandı, ama gelecekte biri kuralı değiştirirse **iki yeri** değiştirmeli.
+- **`MediaAssetReader`** brands içinden `media_assets`'i salt-okunur sorguluyor (sağlık skoru
+  foto/video sayımı + marka asset'inin tenant doğrulaması). `media` modülü kendi envanter
+  okumasını yayınlamadığı ve o modül dosya listemde olmadığı için port arkasına tek isimli bir
+  nesne olarak koydum; medya bunu kendi sunduğunda silinecek tek yer o sınıf.
+- Kampanya sabit indirimi, fiyatı olmayan ürüne izin veriyor (mutlak tutar); fiyatı olan her
+  ürünün para birimiyle uyuşmak zorunda.
+- Ürün adı tenant içinde tekil (`PRODUCT_NAME_CONFLICT`) — katalog hijyeni ve üretimin "hangi
+  Soğuk Latte" belirsizliğini yaşamaması için bilinçli.
 
 ## Doğrulama
 

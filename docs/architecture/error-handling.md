@@ -39,6 +39,15 @@ Public API errors use `application/problem+json`, based on RFC 9457, with a stab
 | 422 | `INGEST_CONTENT_TYPE_REJECTED` | Inspected content type is not allowed by the media policy. |
 | 409 | `INGEST_STORAGE_METADATA_INVALID` | Immutable object metadata cannot be safely verified. |
 | 409 | `MALWARE_SCAN_NOT_CLEAN` | The asset cannot enter analysis because its scan result is not clean. |
+| 400 | `PAGINATION_CURSOR_INVALID` | The supplied cursor is malformed, oversized, or not decodable. The list is not silently restarted. |
+| 404 | `BRAND_PROFILE_NOT_FOUND` | The authorized business has no brand profile yet. |
+| 404 | `PRODUCT_NOT_FOUND` | Product does not exist in the authorized tenant, including non-disclosing cross-tenant access. |
+| 404 | `CAMPAIGN_OFFER_NOT_FOUND` | Campaign offer does not exist in the authorized tenant. |
+| 409 | `PRODUCT_NAME_CONFLICT` | Another product in this business already uses this name. |
+| 409 | `CURRENCY_MISMATCH` | A price, discount, or brand currency of record disagrees with the record it must match. |
+| 422 | `CAMPAIGN_WINDOW_INVALID` | The campaign end is not after its start, so the window could never be active. |
+| 422 | `CAMPAIGN_PRODUCT_UNKNOWN` | A cited product is not available in this business; the unknown identifier is not echoed. |
+| 422 | `BRAND_ASSET_INVALID` | A brand asset does not reference an uploaded media asset of this business. |
 | 429 | `RATE_LIMITED` | Client must retry after the supplied interval. |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Required readiness dependency is unavailable. |
 | 503 | `STORAGE_UNAVAILABLE` | The upload-storage control-plane adapter is temporarily unavailable. |
