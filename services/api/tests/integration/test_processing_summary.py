@@ -125,7 +125,7 @@ async def clear() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean() -> Generator[None, None, None]:
+def clean() -> Generator[None]:
     asyncio.run(clear())
     yield
     asyncio.run(clear())

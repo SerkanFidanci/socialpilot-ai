@@ -1,0 +1,18 @@
+# gitleaks configuration for the CI secret gate (.github/workflows/verify.yml).
+#
+# Extends the bundled default ruleset and allowlists the repository's well-known
+# development-only placeholder credentials. These strings never authenticate anything outside
+# the local Compose stack; the settings layer refuses them in `production` (see
+# services/api/app/core/config.py). Allowlisting them keeps the gate focused on real leaks
+# instead of false-positiving on non-secret fixtures across the whole git history.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Development-only placeholder credentials, never valid outside local Compose."
+regexTarget = "line"
+regexes = [
+  '''socialpilot_local_only''',
+  '''development-local-identity-key-not-for-production''',
+]

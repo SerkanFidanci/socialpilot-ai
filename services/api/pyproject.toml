@@ -1,33 +1,40 @@
 [build-system]
-requires = ["setuptools>=75.0,<76.0"]
+requires = ["setuptools>=78"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "socialpilot-api"
 version = "0.1.0"
 description = "SocialPilot AI backend foundation"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.13"
+# Version ranges carry only lower bounds; the exact resolved set is pinned in `uv.lock`,
+# which is the reproducibility contract (`uv sync --locked`). Upper caps were removed
+# because they actively blocked upgrades; renovate keeps the lock fresh. The single
+# deliberate cap is SQLAlchemy (see below).
 dependencies = [
-    "alembic>=1.14,<1.15",
-    "asyncpg>=0.29,<0.31",
-    "celery>=5.4,<5.5",
-    "fastapi>=0.115,<0.116",
+    "alembic>=1.18",
+    "asyncpg>=0.30",
+    "celery>=5.6",
+    "fastapi>=0.141",
     # Storage client: the S3-compatible adapter signs SigV4 requests over httpx rather than
     # adding a synchronous vendor SDK to an async request path.
-    "httpx>=0.27,<0.29",
-    "pydantic-settings>=2.6,<3.0",
-    "redis>=5.2,<6.0",
+    "httpx>=0.28",
+    "pydantic-settings>=2.14",
+    # redis-py's usable ceiling is governed by celery/kombu; the resolver picks the highest
+    # compatible release and pins it in uv.lock, so no explicit upper cap is needed here.
+    "redis>=5.2",
+    # Deliberate cap: SQLAlchemy 2.1 is still beta. This is the one intentional upper bound.
     "sqlalchemy[asyncio]>=2.0,<2.1",
-    "structlog>=24.4,<25.0",
-    "uvicorn[standard]>=0.30,<0.31",
+    "structlog>=26.1",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.13,<1.14",
-    "pytest>=8.3,<9.0",
-    "pytest-asyncio>=0.24,<0.25",
-    "ruff>=0.8,<0.9",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
 ]
 
 [tool.setuptools.packages.find]
@@ -43,7 +50,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -53,6 +60,21 @@ ignore = ["E501"]
 extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 files = ["app", "tests"]
+
+# Celery's task decorators are untyped, so mypy 2.x reports `untyped-decorator` at every
+# `@celery_app.task` / `@signal.connect` site. Confine that single tool-driven exception to
+# the two modules that define Celery tasks rather than weakening strict mode globally or
+# scattering per-line ignores across application code.
+[[tool.mypy.overrides]]
+module = ["app.worker.tasks", "app.modules.operations.tasks"]
+disallow_untyped_decorators = false
+
+# `scripts/generate_openapi.py` imports its sibling `generate_endpoints_doc` through a runtime
+# `sys.path` insert (it is executed as a script, not imported as a package). mypy 2.x no longer
+# resolves that sibling statically; the import is exercised by `make generate-docs`.
+[[tool.mypy.overrides]]
+module = "generate_endpoints_doc"
+ignore_missing_imports = true

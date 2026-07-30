@@ -18,11 +18,14 @@ typecheck:
 
 verify: lint format-check typecheck test-backend check-openapi
 
+# Regenerates both the OpenAPI contract and the readable endpoint inventory
+# (docs/api/endpoints.md) from the same in-memory schema, so the table cannot drift from code.
 generate-docs:
 	$(PYTHON) services/api/scripts/generate_openapi.py
 
+# Fails when either generated artifact is stale relative to the code.
 check-openapi: generate-docs
-	git diff --exit-code -- docs/generated/openapi.json
+	git diff --exit-code -- docs/generated/openapi.json docs/api/endpoints.md
 
 migrate:
 	cd $(API_DIR) && $(PYTHON) -m alembic upgrade head

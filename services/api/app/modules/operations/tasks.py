@@ -9,7 +9,7 @@ from app.infrastructure.celery_app import celery_app
 logger = structlog.get_logger(__name__)
 
 
-@celery_app.task(name="socialpilot.operations.dispatch_outbox")  # type: ignore[misc]
+@celery_app.task(name="socialpilot.operations.dispatch_outbox")
 def dispatch_outbox() -> dict[str, str]:
     """Transport trigger only; worker composition injects the publisher port later."""
 
@@ -17,7 +17,7 @@ def dispatch_outbox() -> dict[str, str]:
     return {"status": "triggered"}
 
 
-@celery_app.task(name="socialpilot.media.ingest")  # type: ignore[misc]
+@celery_app.task(name="socialpilot.media.ingest")
 def media_ingest() -> dict[str, str]:
     """Durable delivery trigger; worker composition injects ingest dependencies."""
 
@@ -25,7 +25,7 @@ def media_ingest() -> dict[str, str]:
     return {"status": "triggered"}
 
 
-@celery_app.task(name="socialpilot.media.technical_analysis")  # type: ignore[misc]
+@celery_app.task(name="socialpilot.media.technical_analysis")
 def media_technical_analysis() -> dict[str, str]:
     """Durable delivery trigger; worker composition injects media adapters."""
 
@@ -33,7 +33,7 @@ def media_technical_analysis() -> dict[str, str]:
     return {"status": "triggered"}
 
 
-@celery_app.task(name="socialpilot.media.scene_speech_analysis")  # type: ignore[misc]
+@celery_app.task(name="socialpilot.media.scene_speech_analysis")
 def media_scene_speech_analysis() -> dict[str, str]:
     """Durable trigger; worker composition injects scene and ASR ports."""
 

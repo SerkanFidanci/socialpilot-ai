@@ -103,7 +103,7 @@ async def clear() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean() -> Generator[None, None, None]:
+def clean() -> Generator[None]:
     if os.getenv("RUN_INTEGRATION_TESTS") == "1":
         asyncio.run(clear())
     yield
@@ -375,14 +375,12 @@ def test_technical_analysis_persists_metadata_and_derivatives(tmp_path: Path) ->
         engine = create_async_engine(os.environ["DATABASE_URL"])
         try:
 
-            async def stored_results() -> (
-                tuple[
-                    MediaTechnicalMetadata | None,
-                    list[MediaDerivative],
-                    BackgroundJob | None,
-                    JobAttempt | None,
-                ]
-            ):
+            async def stored_results() -> tuple[
+                MediaTechnicalMetadata | None,
+                list[MediaDerivative],
+                BackgroundJob | None,
+                JobAttempt | None,
+            ]:
                 async with AsyncSession(engine) as session:
                     metadata = await session.scalar(
                         select(MediaTechnicalMetadata).where(
