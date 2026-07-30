@@ -101,7 +101,16 @@ Değişmez testlerinde **denenecek girdiler sayılıdır** — "test var" yetmez
 
 ## Rapor — 2026-07-31 · Claude Opus 5 / high
 
-**Dal:** `slice/2b-script-generation` · **Commit:** `e44e3cb` · **Durum:** tamamlandı
+**Dal:** `slice/2b-script-generation` · **Commit:** `e44e3cb` (+ bu rapor) · **Durum:** tamamlandı,
+**merge bekliyor**
+
+> **Merge neden yapılmadı:** protokolün 7. adımı slice kapanınca `main`'e merge diyor, ama
+> `main` worktree'sinde şu anda Codex'in **commit'lenmemiş** W10/W11/W12 doğrulama yazımı
+> duruyor (`git status`: üç handoff dosyası `M`). `main` orada checkout edilmiş durumda; ref'i
+> altından fast-forward etmek o oturumun çalışma ağacını kendi index'iyle tutarsız bırakırdı —
+> WO'nun eşzamanlılık uyarısının önlemek istediği şeyin ta kendisi. Dal hazır ve `main`'in
+> tepesinden (`3cafc12`) lineer; Codex'in yazımı commit'lendiği an merge tek `git merge`
+> komutu. Çakışma yüzeyi yok: W13 o üç dosyaya dokunmuyor.
 
 ### Yapılanlar
 
