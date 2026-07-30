@@ -174,7 +174,7 @@ async def persisted_text() -> str:
 
 
 @pytest.fixture(autouse=True)
-def clean() -> Generator[None, None, None]:
+def clean() -> Generator[None]:
     if os.getenv("RUN_INTEGRATION_TESTS") == "1":
         asyncio.run(clear())
     yield
@@ -384,14 +384,19 @@ def test_concurrent_completion_is_serialized() -> None:
         )
 
         def complete() -> int:
-            return client.post(
-                f"/v1/businesses/{business_id}/media/uploads/{upload['id']}/complete",
-                headers=owner,
-                json={
-                    "sha256_checksum": CHECKSUM,
-                    "parts": [{"part_number": 1, "etag": "one"}, {"part_number": 2, "etag": "two"}],
-                },
-            ).status_code
+            return int(
+                client.post(
+                    f"/v1/businesses/{business_id}/media/uploads/{upload['id']}/complete",
+                    headers=owner,
+                    json={
+                        "sha256_checksum": CHECKSUM,
+                        "parts": [
+                            {"part_number": 1, "etag": "one"},
+                            {"part_number": 2, "etag": "two"},
+                        ],
+                    },
+                ).status_code
+            )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             statuses = list(executor.map(lambda _: complete(), range(2)))

@@ -93,7 +93,7 @@ async def clear() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean() -> Generator[None, None, None]:
+def clean() -> Generator[None]:
     if os.getenv("RUN_INTEGRATION_TESTS") == "1":
         asyncio.run(clear())
     yield

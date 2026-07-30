@@ -100,7 +100,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 |---|---|---|---|---|---|
 | [W01](handoffs/W01-object-storage-adapter.md) | MinIO/S3 storage adapter + iOS MIME düzeltmesi | **tamamlandı** (`8d055b7`) · Codex doğrulaması bekliyor | merge edildi, dal silindi | Opus 5 / high | — |
 | [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **tamamlandı** (`8b74f5c`) · merge edildi | merge edildi, dal silindi | Opus 4.8 / medium | — |
-| [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **W01 merge sonrası** | `slice/0h-platform-hardening` | Opus 4.8 / medium | — |
+| [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **tamamlandı** · doğrulama bekliyor (dal: `claude/platform-hardening-w02-74a021`) | `slice/0h-platform-hardening` (harness dalı farklı — rapora bkz.) | Opus 4.8 / medium | — |
 | [W09](handoffs/W09-real-media-materializer.md) | **Gerçek medya materializer + `.mov`/HEVC analiz kapısı** — Phase 1 çıkış kriterinin kalan yarısı | **sıradaki** (W02 ile paralel olabilir) | `slice/1g-real-materializer` | Opus 5 / high | — |
 | W04 | Marka profili + ürün/hizmet kataloğu modülü | W09 sonrası | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** — `storage_upload_id` kolonunu `String(128)`'den genişletme işi de bu slota bindirilir (W01'in kontrol-objesi geçici çözümünü kaldırır) |
 | W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | Opus 4.8 / medium | — |

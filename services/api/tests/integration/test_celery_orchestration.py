@@ -120,7 +120,7 @@ def broker() -> redis.Redis:
 
 
 @pytest.fixture(autouse=True)
-def clean() -> Generator[None, None, None]:
+def clean() -> Generator[None]:
     asyncio.run(clear())
     with broker() as client:
         client.delete(QUEUE)

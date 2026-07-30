@@ -75,7 +75,7 @@ async def clear() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean() -> Generator[None, None, None]:
+def clean() -> Generator[None]:
     if os.getenv("RUN_INTEGRATION_TESTS") == "1":
         asyncio.run(clear())
     yield
@@ -190,9 +190,13 @@ def test_same_idempotency_key_executes_once_concurrently_and_rollbacks_leave_no_
         headers = {**owner, "Idempotency-Key": "same-key"}
 
         def complete() -> int:
-            return client.post(
-                complete_path(business_id, str(upload["id"])), headers=headers, json=complete_body()
-            ).status_code
+            return int(
+                client.post(
+                    complete_path(business_id, str(upload["id"])),
+                    headers=headers,
+                    json=complete_body(),
+                ).status_code
+            )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             assert sorted(executor.map(lambda _: complete(), range(2))) == [200, 200]

@@ -81,9 +81,131 @@ docs/adr/ADR-010-<valkey-degerlendirmesi>.md         (yeni, statü: önerildi)
 7. ADR-009 ve ADR-010 yazıldı (indekslere **eklenmedi** — W03'ün sahipliğinde, raporda bildirildi).
 8. Yükseltme sırasında değiştirilen her uygulama satırı rapora tek tek yazıldı.
 
-## Rapor
+## Rapor — 2026-07-30 · yürütme oturumu (Opus 4.8)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `claude/platform-hardening-w02-74a021` (harness worktree dalı — WO'nun ilan ettiği
+`slice/0h-platform-hardening` yerine; ayrıntı aşağıda) · **Commit'ler:** `993d31b` ·
+**Durum:** tamamlandı (merge PM/doğrulama oturumuna bırakıldı — `main`'e girmedi)
+
+### Yapılanlar
+
+**1. Paket yönetimi + lockfile (uv)**
+- `services/api/pyproject.toml` uv'ye taşındı: üst sınır pinleri kaldırıldı, aralıklar yalnızca
+  **alt sınır**; tekrarlanabilirlik `services/api/uv.lock` (yeni, commit'li) ile sağlanıyor.
+  Tek bilinçli üst sınır **SQLAlchemy `<2.1`** (2.1 hâlâ beta) — yorumla işaretlendi.
+- `requires-python` `>=3.13`; ruff `target-version = "py313"`, mypy `python_version = "3.13"`.
+- `services/api/requirements.txt` **kaldırıldı**.
+- Her sürüm **kurulum anında PyPI'dan doğrulandı** (hafızadan değil). Lock'ta sabitlenen
+  başlıca sürümler: fastapi 0.141.1, uvicorn 0.52.0, alembic 1.18.5, celery 5.6.3, redis 8.1.0,
+  kombu 5.6.2, structlog 26.1.0, pydantic-settings 2.14.2, pydantic 2.13.4, sqlalchemy 2.0.51,
+  httpx 0.28.1, asyncpg 0.31.0, mypy 2.3.0, pytest 9.1.1, pytest-asyncio 1.4.0, ruff 0.16.0.
+  (Dış-platform teyidi [99-external-platform-facts.md](../product/requirements/99-external-platform-facts.md)
+  §49 satırıyla uyumlu.)
+
+**2. Dockerfile**
+- `python:3.13-slim`; pinlenmiş `ghcr.io/astral-sh/uv:0.11.31` katmanından uv; iki katmanlı
+  `uv sync --locked` (önce bağımlılık, sonra proje). Ortam **kaynak ağacının dışında**
+  (`/opt/venv`) tutuluyor — Compose'un read-only kaynak bind-mount'u kurulu paketleri
+  gölgeleyemesin diye (kritik: aksi halde api servisi kırılırdı).
+
+**3. CI güvenlik kapıları (`.github/workflows/verify.yml`)** — PRD §41.1 / §33.5
+- `backend` işi uv'ye geçti (`astral-sh/setup-uv@v9.0.0`, `uv sync --locked --all-extras`,
+  `UV_PYTHON=3.13`); mevcut adımların tümü korundu.
+- `dependency-audit`: `uv export`'lanan kilitli set üzerinde `pip-audit` (eşik: herhangi bir
+  PyPA/OSV zafiyeti = kırmızı).
+- `secret-scan`: pinlenmiş `gitleaks 8.30.1` ikilisi, **tüm geçmiş** (`fetch-depth: 0`); dev
+  placeholder'ları `.gitleaks.toml` allowlist'inde.
+- `container-scan`: API imajı build edilir, `aquasecurity/trivy-action@v0.36.0` (eşik:
+  düzeltilebilir **CRITICAL** = kırmızı; `ignore-unfixed`). Tüm eşikler workflow'da yazılı.
+
+**4. Ortam / APK (B2)** — `docs/runbooks/local-development.md`'ye Windows adım adım JDK 17 +
+Android cmdline-tools + lisans + `flutter build apk --debug` yazıldı. (Doğrulama notu aşağıda.)
+
+**5. Devralınan iki kalem**
+- `make check-openapi` artık **hem** `openapi.json` **hem** `docs/api/endpoints.md`'yi diff'liyor
+  (endpoints.md zaten `generate_openapi.py` tarafından üretiliyordu; eksik olan drift koruması
+  bağlandı). `generate-docs` davranışı ve `check-openapi` sözleşmesi korundu.
+- Runbook'a gerçek byte yolu bölümü (`.env`'e `STORAGE_ADAPTER=s3` + `docker compose up -d api`;
+  varsayılan `fake` bırakıldı) ve uv kurulum bölümü eklendi.
+
+**6. Otomatik güncelleme** — `renovate.json` (yeni): haftalık, gruplu (Python / CI-imaj),
+`rangeStrategy: update-lockfile`, SQLAlchemy major hold'u devre dışı kural olarak kodlandı.
+
+**7. ADR'ler** — `ADR-009-dependency-and-runtime-baseline.md` (Accepted),
+`ADR-010-valkey-runtime-evaluation.md` (Proposed, uygulanmadı). **İndekslere eklenMEdi**
+(`docs/index.md` + `docs/adr/README.md` W03 tekelinde) — PM/W03 bağlar.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- `compose.yaml`, `app/core/config.py`, `docs/architecture/media-upload.md`,
+  `docs/product/**`, `AGENTS.md`/`CLAUDE.md`, `docs/index.md`, `docs/adr/README.md`:
+  sahibi başka WO — dokunulmadı (yalnızca doğrulama için compose **çalıştırıldı**, düzenlenmedi).
+- PostgreSQL 18 / Valkey uygulaması → W06 (ADR-010 yalnızca öneri).
+- OpenTelemetry → W05.
+- Mobil kaynak kodu → dokunulmadı (`apps/mobile` diff'te yok).
+
+### Doğrulama
+
+| Kontrol | Sonuç |
+|---|---|
+| `uv sync --locked` temiz kurulum (host + Docker build) | ✅ 59 paket çözüldü, imaj build edildi |
+| `make verify` eşdeğeri — Linux konteynerde | ✅ ruff temiz · ruff format temiz · **mypy 102 dosya temiz** · **244 pytest passed** (gerçek PostgreSQL+Redis+MinIO) · check-openapi (host) drift yok |
+| Alembic `upgrade head → downgrade base → upgrade head` (konteyner) | ✅ head değişmedi (`0009_video_understanding`) |
+| `pip-audit` kilitli set | ✅ "No known vulnerabilities found" (kapı temiz sette kırmızıya düşmüyor) |
+| Kabul kriteri 4 — CI kapıları + eşikler | ✅ üç kapı, eşikler dokümante |
+| Kabul kriteri 5 — `flutter analyze`/`flutter test` etkilenmedi | ✅ mobil dosya değişmedi (bkz. aşağı: bu ortamda Flutter kurulu değil) |
+| Kabul kriteri 6 — `flutter build apk --debug` | ⚠️ adımlar yazıldı; **bu ortamda doğrulanamadı** (JDK yok, `JAVA_HOME` boş, Flutter SDK bu shell'de çözülmüyor = B2'nin kendisi). Tam hata: `java` bulunamıyor + `flutter` komutu yok |
+| Kabul kriteri 7 — ADR-009/010 | ✅ yazıldı, indekse eklenmedi (raporlandı) |
+
+### Açıkça belirtmem gerekenler
+
+**a) Sürüm yükseltmesinde değişen uygulama/test satırları (kriter 8).** Hepsi araç/sürüm
+kaynaklı; app/** için minimum tutuldu ve mümkün olduğunca `pyproject` (benim sahipliğim)
+konfigürasyonuna alındı:
+
+- `pyproject.toml` (benim): iki dar kapsamlı `[[tool.mypy.overrides]]` — (i)
+  `disallow_untyped_decorators=false` yalnızca `app.worker.tasks` + `app.modules.operations.tasks`
+  (Celery'nin tipsiz `@task`/`@signal.connect` decorator'ları; mypy 2.x `untyped-decorator`);
+  (ii) `generate_endpoints_doc` için `ignore_missing_imports` (script'in sys.path-tabanlı kardeş
+  importu). Bu sayede `app/worker/tasks.py`'a **hiç** dokunulmadı, strict global olarak
+  gevşetilmedi.
+- `app/infrastructure/redis/client.py`: `redundant-cast` (redis-py 8 tiplemesi) → `cast(Redis, …)`
+  ve artık gereksiz `from typing import cast` importu kaldırıldı, doğrudan `return Redis.from_url(…)`.
+- `app/modules/operations/tasks.py`: 4 decorator'daki artık **kullanılmayan** `# type: ignore[misc]`
+  yorumları kaldırıldı (override sonrası `unused-ignore`).
+- `tests/integration/` 8 dosya: `Generator[None, None, None]` → `Generator[None]` (ruff UP043,
+  py313 hedefi); `test_media_ingest.py`'da ek bir ruff-format satır düzeni.
+- `tests/integration/{test_operations,test_media_uploads,test_identity_businesses}.py`:
+  `.status_code` dönüşleri `int(...)` ile sarıldı (mypy 2.3 `no-any-return`; değerler zaten int).
+- `docs/generated/openapi.json`: **+7 satır** — fastapi 0.141 `ValidationError` şemasına pydantic
+  `ctx`/`input` alanlarını ekliyor (katkısal/kırıcı değil). Regenerate edilip commit edildi;
+  aksi halde `check-openapi` kırmızıya düşerdi.
+
+**b) İlan edilen "Dokunulacak dosyalar" dışına çıkan dosyalar** (yukarıdaki upgrade fallout'a ek):
+`.gitleaks.toml` (yeni) eklendi — secret kapısının dev placeholder'larda (`socialpilot_local_only`,
+`development-local-identity-key-not-for-production`) yanlış-pozitif vermeden gerçek sızıntıları
+yakalaması için gerekli. PM'in haberi olsun diye bildiriyorum.
+
+**c) Dal adı uyuşmazlığı.** Harness bu worktree'yi `claude/platform-hardening-w02-74a021` dalıyla
+kurdu; WO `slice/0h-platform-hardening` diyor. Harness otomasyonunu bozmamak için dalı yeniden
+adlandırmadım. Merge/rename PM'e bırakıldı; STATUS W02 satırına gerçek dal not düşüldü.
+
+**d) B2 tam kapatılmadı.** APK adımları runbook'ta hazır ama bu ortamda JDK/Flutter olmadığından
+uçtan uca çalıştırılamadı (kriter 6'nın "çalışmıyorsa tam hata rapora yazılır" dalı). İlk mobil
+oturum adımları izleyip sonucu runbook'taki durum notuna yazmalı.
+
+**e) Takip için not (bloke edici değil).** starlette 1.3 TestClient bir
+`StarletteDeprecationWarning` veriyor: *"Using httpx with starlette.testclient is deprecated;
+install httpx2 instead."* Testler geçiyor; ileride starlette test istemcisi değişimi için ayrı
+bir kalem olabilir — bu WO kapsamında değil.
+
+**f) Windows-yerel birim testleri.** Host'ta 14 birim testi düşüyor (`ffmpeg` yok → `[WinError 2]`;
+`worker_temp_root` POSIX-mutlak-yol doğrulayıcısı `C:\` yolunu reddediyor). İkisi de **ortamsal**,
+sürüm yükseltmesiyle ilgisiz; Linux konteynerde 244/244 geçiyor.
+
+## Doğrulama
+
+_(test eden oturum doldurur)_
 
 ## Doğrulama
 

@@ -53,7 +53,7 @@ async def clear_identity_tables() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean_database() -> Generator[None, None, None]:
+def clean_database() -> Generator[None]:
     if os.getenv("RUN_INTEGRATION_TESTS") != "1":
         yield
         return
@@ -295,7 +295,7 @@ def test_concurrent_owner_removal_preserves_an_active_owner() -> None:
                 headers=headers,
                 json={"status": "suspended"},
             )
-            return response.status_code
+            return int(response.status_code)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         statuses = list(

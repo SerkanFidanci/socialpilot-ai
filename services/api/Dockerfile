@@ -1,10 +1,20 @@
-FROM python:3.12-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ARG INSTALL_DEV=false
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    # Deterministic installs from uv.lock. The environment lives OUTSIDE the source tree
+    # (/opt/venv, not services/api/.venv) so the Compose read-only source bind mount cannot
+    # shadow the installed packages.
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH="/opt/venv/bin:$PATH"
+
+# Pinned uv binary; the 0.11.31 tag was verified against the astral-sh/uv registry at write time.
+COPY --from=ghcr.io/astral-sh/uv:0.11.31 /uv /uvx /bin/
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg \
@@ -13,14 +23,21 @@ RUN apt-get update \
 
 WORKDIR /app/services/api
 
-COPY services/api/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Layer 1: resolve dependencies from the lockfile without the project itself, so this layer
+# is cached across source-only changes.
+COPY services/api/pyproject.toml services/api/uv.lock ./
+RUN if [ "$INSTALL_DEV" = "true" ]; then \
+      uv sync --locked --no-install-project --all-extras; \
+    else \
+      uv sync --locked --no-install-project; \
+    fi
 
+# Layer 2: bring in the source and install the project into the environment.
 COPY services/api /app/services/api
 RUN if [ "$INSTALL_DEV" = "true" ]; then \
-      pip install --no-cache-dir ".[dev]"; \
+      uv sync --locked --all-extras; \
     else \
-      pip install --no-cache-dir --no-deps .; \
+      uv sync --locked; \
     fi
 
 USER app
