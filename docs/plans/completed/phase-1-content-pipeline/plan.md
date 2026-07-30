@@ -1,6 +1,6 @@
 # Phase 1 — Content Pipeline Plan
 
-**Status:** Active
+**Status:** Completed 2026-07-30 — `main` `28e356a`, Alembic head `0010_brand_catalog`, 392 test. Çıkış kriteri mekanik olarak karşılandı; ASR/VLM hâlâ fake (gerçek sağlayıcı W08 sonrası).
 **Scope owner:** Backend media-processing foundation
 **Prerequisite:** Completed Phase 0 at migration head `0004_operational_reliability`
 

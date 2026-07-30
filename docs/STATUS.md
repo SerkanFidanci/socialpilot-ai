@@ -33,9 +33,13 @@
 - **Phase 1 çıkış kriteri mekanik olarak karşılandı** (`5ee03d4`): gerçek video yüklenip sahne + transcript + etiket üretiyor, `.mov`/HEVC dahil. **Ama ASR ve VLM hâlâ fake** — yani transcript ve etiketlerin *içeriği* sentetik. Gerçek sağlayıcı bağlanması **W08** benchmark'ından sonra; kriteri "gerçek içerikle karşılandı" saymak için o gerekiyor.
 - Fotoğraf (HEIC/HEIF/JPEG/PNG) analiz hattı yok — K6'nın ikinci yarısı. Şu an HEIC açık kodla reddediliyor (sessiz durma yok).
 
+### Sırada
+
+**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.**
+
 ### Başlamadı
 
-Phase 2 içerik üretimi · Phase 3 abonelik/entitlement · Phase 4 yayınlama · Phase 5–6 reklam · admin web paneli · n8n
+Phase 3 abonelik/entitlement · Phase 4 yayınlama · Phase 5–6 reklam · admin web paneli · n8n
 
 ## Bloke ediciler
 
@@ -64,8 +68,8 @@ docker compose --profile worker up -d        # worker gerekiyorsa
 |---|---|---|---|
 | K1 | **Faturalandırma modeli:** mağaza IAP mı, web-first + refakatçi mobil mi? Türkiye alternatif faturalandırma programlarında **yok** → %15–30 komisyon kaçınılmaz | Phase 3'ten önce | Web-first satış, mobilde satın alma yok (Apple 3.1.3(a)) |
 | ~~K2~~ | **KARARA BAĞLANDI — [ADR-012](adr/ADR-012-remove-n8n-from-mvp.md):** n8n MVP kapsamından çıkarıldı. Gerekçe: yasaklar uygulandıktan sonra kalan iş zamanlama/bildirimden ibaret ve Celery Beat bunu zaten üretimde yapıyor; SUL lisansı ticari platform motoru olmayı kısıtlıyor; tek sunucuda her zaman açık bir bileşen + credential store + editor erişim yüzeyi. `workflows/n8n/` oluşturulmaz. Geri dönüş kolay: outbox zarfı taşıyıcıdan bağımsız | — | — |
-| K3 | **Pazar kapsamı:** yalnız TR mi, EU/global roadmap'te mi? | Phase 2 render şeması | EU roadmap'teyse C2PA/provenance alanları şimdi şemaya girsin |
-| K4 | **Kullanıcı düzenleme modeli:** "ufak editler" (metin taşı, sticker ekle, stil değiştir) nasıl yapılacak? PRD §18.2 bildirimsel overlay'i, §21.3 revizyonu tanımlıyor; §3.3 manuel editörü kapsam dışı bırakıyor — arada karar verilmemiş bir boşluk var | Phase 2 timeline şeması | **Parametrik düzenleme:** timeline JSON patch'i — metin içeriği (yasak-kelime doğrulamalı, fiyat/tarih yalnızca doğrulanmış kayıttan), 9'lu ızgara konum çapaları, stil token'ı, marka onaylı sticker kütüphanesi, segment sınırına snap. Serbest x/y ve kare kare montaj yok. Saf yeniden render **yeni hak tüketmez**, revizyon kotasından düşer. Platformun etkileşimli sticker'ları (anket/konum/mention) API ile eklenemez — ürün tarafında açıkça anlatılmalı |
+| K3 | **Pazar kapsamı:** yalnız TR mi, EU/global mi? **Çerçeveleme düzeltildi:** bunu Phase 2 render şemasını bloke eden karar olarak sunmuştum — yanlıştı. AI disclosure alanı Meta'nın Temmuz 2026 zorunluluğu nedeniyle **TR-only kapsamda da** gerekli, ve C2PA kancası 2A'da açılıyor. K3 yalnızca **işaretlemenin katılığını** belirliyor. | Phase 2 sonu / EU'ya girmeden | EU roadmap'teyse makine-okunur işaretlemeyi katılaştır; alan zaten var |
+| ~~K4~~ | **KARARA BAĞLANDI (PM/mimar):** parametrik düzenleme. Timeline JSON patch'i; metin içeriği yasak-kelime doğrulamalı, fiyat/tarih yalnızca doğrulanmış kayıttan, 9'lu ızgara konum çapaları, stil token'ı, marka onaylı sticker kütüphanesi, segment sınırına snap. Serbest x/y ve kare kare montaj yok. **Saf yeniden render yeni hak tüketmez**, revizyon kotasından düşer. Platformun etkileşimli sticker'ları (anket/konum/mention) API ile eklenemez — ürün tarafında anlatılmalı. Gerekçe ve ADR: [Phase 2 planı](plans/active/phase-2-content-generation.md) §2, ADR'ı slice 2A yazar | — | — |
 
 | K6 | **iOS medya formatlarının analizi.** ~~`.mov` sessizce duruyor~~ **video yarısı W09'da çözüldü** (`5ee03d4` merge edildi): `.mov`/`video/quicktime` artık analiz hattına giriyor, codec ffprobe'dan doğrulanıyor, desteklenmeyen codec `rejected`. HEIC/HEIF ingest'te **açıkça reddediliyor** (`INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE`) — sessiz çıkmaz sokak yok. **Kalan (ikinci yarı):** HEIC/HEIF *fotoğraf* analiz hattı (teknik metadata + VLM etiketleme; sahne/ASR yok) tanımlanıp inşa edilmeli — ayrı slice, enum durumu için migration slotu ister | fotoğraf hattı Phase 2'den önce | **Video yarısı uygulandı** (ADR-011). Fotoğraf hattı: bir "fotoğraf hazır/analiz" durumu + VLM etiketleme; landing'de HEIC→JPEG transcode gerekir (platform uyumu). Bu geldiğinde W09'un geçici HEIC reddi kalkar |
 
@@ -109,8 +113,9 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark koşum takımı** | **tamamlandı** · merge edildi · `provider_usage` bulgusu W04 slotuna alındı | merge edildi, dal silindi | Opus 5 / high | — |
 | [W04](handoffs/W04-brand-catalog.md) | **Marka profili + ürün/hizmet kataloğu** — Phase 2'nin ön koşulu | **tamamlandı** · merge edildi | merge edildi, dal silindi | Opus 5 / high | **kullanıldı** (`0010`) |
 | [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **tamamlandı** · merge edildi · ADR-014 | merge edildi, dal silindi | Opus 4.8 / medium | — |
-| W06 | PostgreSQL 18 + Valkey imaj geçişi | **sıradaki** (`compose.yaml` serbest) | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
-| W10 | **Şema borcu:** `provider_usage` tablosu · `storage_upload_id` genişletmesi · fotoğraf analiz enum'u · **`approver` rolü** (`BusinessRole` enum'unda yok, W04 bulgusu) | **sıradaki** (slot boşaldı) | `slice/0m-schema-debt` | Opus 4.8 / medium | **SLOT SERBEST** |
+| W06 | PostgreSQL 18 + Valkey imaj geçişi | **bekletildi** — hiçbir şeyi bloke etmiyor, Phase 2'den sonra | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
+| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** — `provider_usage` tablosu · `storage_upload_id` genişletmesi (kontrol objesini kaldırır) · fotoğraf durumu enum'u · `approver` rolü | **şimdi** | `slice/0m-schema-debt` | Opus 4.8 / medium | **SENDE** (`0011`) |
+| W2A | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render | W10 ile paralel (iş emri yazılacak) | `slice/2a-timeline-render` | Opus 5 / high | 2. sırada |
 
 ### Dosya sahipliği (çakışma önleme)
 

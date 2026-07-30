@@ -45,7 +45,8 @@ Bunu karıştırmamak önemli:
 | ~~P1~~ | **`main` push edildi** (2026-07-30, `5aabf2e` → `origin/main`). Kullanıcı 'en mantıklısı ve en doğrusuyla devam et' diyerek genel yetki verdi; 33 commit'i tek makinede yedeksiz bırakmak o yetkinin altında kalmıyordu. Bundan sonra slice kapanışlarında push PM'in rutini. | kapandı |
 | K1 | Faturalandırma modeli (IAP vs web-first) — Phase 3'ten önce | açık |
 | ~~K2~~ | n8n → **ADR-012 ile MVP'den çıkarıldı** (PM/mimar kararı, genel yetki kapsamında) | kapandı |
-| K3 | Pazar kapsamı TR / EU-global — Phase 2 render şemasından önce | açık |
+| K3 | Pazar kapsamı TR / EU-global. **Çerçevelemem yanlıştı ve düzelttim:** Phase 2'yi bloke etmiyor — AI disclosure alanı Meta zorunluluğu nedeniyle TR-only'de de gerekli, C2PA kancası 2A'da açılıyor; K3 yalnızca işaretlemenin katılığını belirliyor | açık ama **bloke etmiyor** |
+| ~~K4~~ | Kullanıcı düzenleme modeli → **parametrik düzenleme** olarak karara bağlandı (PM/mimar). Gerekçe Phase 2 planı §2'de; ADR'ı slice 2A yazacak | kapandı |
 
 K1–K3'ün gerekçeleri ve PM önerileri [STATUS.md](../STATUS.md) "Karar bekleyenler" tablosunda.
 
@@ -104,7 +105,7 @@ Kural [README.md](README.md)'de. PM için özeti: **slice başına yeni oturum**
 ## Sıradaki iş (2026-07-30 sonu itibarıyla)
 
 - **W10 — şema borcu.** Slot serbest. Dört kalem: `provider_usage` tablosu, `storage_upload_id` genişletmesi (W01'in kontrol-objesi geçici çözümünü kaldırır), fotoğraf analiz durumu enum'u, **`approver` rolü** (`BusinessRole`'a eklenmesi; W04'ün "her rol için cevap tanımlı" testi eşlemeyi zorlayacak). İş emri yazılacak.
-- **W06 — PostgreSQL 18 + Valkey.** `compose.yaml` serbest. W07'nin kaynak limitleri ve `cpu_shares` öncelik sırası korunmalı.
+- **W06 — PostgreSQL 18 + Valkey. BEKLETİLDİ.** `compose.yaml` serbest ama hiçbir şeyi bloke etmiyor; `uuidv7()` ve Valkey lisansı gerçek kazançlar ama Phase 2'nin önüne geçmeyi hak etmiyorlar. Phase 2'den sonra. W07'nin kaynak limitleri ve `cpu_shares` sırası korunmalı.
 - **Codex doğrulaması** hâlâ `main` üzerinde bekliyor: W07 (yedek/geri yükleme, scratch guard), W08 (ground-truth metrik, maliyet tavanı). W04 ve W05 de sıraya girdi: cross-tenant, para biriminde kayan nokta, cursor sayfa atlama; telemetride presigned URL sızıntısı ve kapalıyken sıfır maliyet.
 - **Phase 2 kapısı.** Artık teknik önkoşullar hazır (marka/katalog verisi, gözlemlenebilirlik, benchmark aracı, gerçek medya hattı). Girmeden önce: **K3** ve **K4** cevaplanmalı, `RenderPort` ADR'ı yazılmalı (K5 gereği), durable execution (DBOS/Temporal) ve LiteLLM değerlendirilmeli.
 
