@@ -55,7 +55,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | WO | Konu | Durum | Dal | Model / effort | Migration slotu |
 |---|---|---|---|---|---|
 | [W01](handoffs/W01-object-storage-adapter.md) | MinIO/S3 storage adapter + iOS MIME düzeltmesi | **şimdi** | `slice/1e-object-storage` | Opus 5 / high | — |
-| [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **şimdi** (W01 ile paralel) | `slice/doc-restructure` | Opus 4.8 / medium | — |
+| [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **doğrulama bekliyor** (dalda tamam; `make verify` merge öncesi çalıştırılmalı) | `slice/doc-restructure` | Opus 4.8 / medium | — |
 | [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **W01 merge sonrası** | `slice/0h-platform-hardening` | Opus 4.8 / medium | — |
 | W04 | Marka profili + ürün/hizmet kataloğu modülü | W03 kapanınca yazılacak | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** |
 | W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | Opus 4.8 / medium | — |
