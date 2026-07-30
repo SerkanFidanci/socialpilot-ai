@@ -101,7 +101,8 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-009](adr/ADR-009-dependency-and-runtime-baseline.md) bağımlılık ve runtime temeli ·
 [ADR-010](adr/ADR-010-valkey-runtime-evaluation.md) Valkey değerlendirmesi (önerildi) ·
 [ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer ·
-[ADR-012](adr/ADR-012-remove-n8n-from-mvp.md) n8n MVP'den çıkarıldı (ADR-003 supersede)
+[ADR-012](adr/ADR-012-remove-n8n-from-mvp.md) n8n MVP'den çıkarıldı (ADR-003 supersede) ·
+[ADR-013](adr/ADR-013-single-server-deployment-topology.md) tek sunucu dağıtım topolojisi
 
 ## Kontratlar, planlar, runbook'lar
 
@@ -111,5 +112,6 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 | [plans/active/](plans/active/) | Açık slice planı, ≤150 satır |
 | [plans/completed/](plans/completed/) | Kapanmış planlar ve faz doğrulama kayıtları |
 | [runbooks/local-development.md](runbooks/local-development.md) | Yerel geliştirme |
+| [runbooks/operations.md](runbooks/operations.md) | Tek sunucu operasyonu: kaynak bütçesi, yedek, geri yükleme provası |
 | [reviews/README.md](reviews/README.md) | İnceleme adlandırma kuralı ve mevcut incelemeler |
 | [../apps/mobile/README.md](../apps/mobile/README.md) | Mobil analiz demosu |

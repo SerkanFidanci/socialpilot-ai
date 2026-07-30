@@ -1,0 +1,39 @@
+{
+  "id": "horizontal_product_demo",
+  "kind": "media",
+  "qualities": ["horizontal", "multi_product", "before_after", "logo"],
+  "media": {
+    "generator": "ffmpeg_lavfi",
+    "orientation": "horizontal",
+    "duration_ms": 8000,
+    "width": 1280,
+    "height": 720,
+    "spec": {
+      "video": "testsrc2=size=1280x720:rate=30:duration=8",
+      "overlays": ["logo_box_top_right", "split_before_after"],
+      "audio": "none"
+    },
+    "operator_supplied": null
+  },
+  "capabilities": {
+    "video_understanding": {
+      "prompt_version": "video_understanding@2026-07-30.1",
+      "route_revision": "route-vu-r1",
+      "ground_truth": {
+        "scene_labels": ["urun", "karsilastirma"],
+        "objects": ["sise", "kutu", "etiket"],
+        "safety_flags": []
+      },
+      "fake_output": {
+        "provider": "fake-vlm",
+        "model_name": "deterministic-1",
+        "summary": "Iki urunun oncesi ve sonrasi karsilastirmasi.",
+        "visual_description": "Yatay cekim: solda onceki, sagda sonraki urun.",
+        "confidence": 0.8,
+        "labels": ["urun", "karsilastirma"],
+        "objects": ["sise", "kutu"],
+        "safety_flags": []
+      }
+    }
+  }
+}

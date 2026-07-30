@@ -13,6 +13,19 @@ YYYY-MM-DD-konu.md        örn. 2026-07-30-tech-methodology.md
 Tarih incelemenin yapıldığı gündür ve **değişmez**; sonradan güncellenen bir inceleme yeni
 tarihle yeni dosya olur, eskisi yerinde kalır. Konu kısa ve kebab-case yazılır.
 
+### Benchmark sonuç raporları
+
+W08 koşum takımının insan-okunur karşılaştırma tablosu buraya, aynı adlandırmayla yazılır:
+
+```
+YYYY-MM-DD-provider-benchmark-<set>.md     örn. 2026-08-15-provider-benchmark-qwen-vs-deepseek.md
+```
+
+Rapor, ölçülen sağlayıcı setini, prompt sürümünü ve route revizyonunu içerir (makine-okunur
+JSON çıktısı `make benchmark ... --out` ile ayrıca üretilir, depoya girmesi zorunlu değildir).
+Sonuç bir **karar değildir**: sağlayıcı seçimi buradan okunup `docs/adr/` altına ADR olarak
+yazılır. **En iyi skor, veri bölgesi/uygunluk sütunları hukuken elverişsizse kazanan sayılmaz.**
+
 ## Kurallar
 
 - Her dosya başında **tarih, inceleyen, incelenen commit ve kapsam** bulunur. İncelenen

@@ -1,0 +1,22 @@
+{
+  "id": "strategy_cafe_launch",
+  "kind": "text",
+  "qualities": ["turkish_brand_tone", "forbidden_words", "fabricated_facts"],
+  "media": null,
+  "capabilities": {
+    "text_strategy": {
+      "prompt_version": "text_strategy@2026-07-30.1",
+      "route_revision": "route-text-r1",
+      "ground_truth": {
+        "forbidden_words": ["garanti", "bedava", "kesin"],
+        "approved_ctas": ["Profilden incele", "Hemen kesfet", "Baglantiya dokun"],
+        "allowed_facts": {"prices": ["%15"], "dates": []},
+        "brand_tone_note": "Sicak, samimi, abartisiz; kesin/garanti vaadi yok. Otomatik puanlanmaz — manuel/LLM-judge."
+      },
+      "fake_output": {
+        "text": "Sezon Kahvesi hafta sonu %15 indirim, garanti taze aroma! %50 ekstra firsat 1 Agustos'ta.",
+        "cta": "Hemen kesfet"
+      }
+    }
+  }
+}

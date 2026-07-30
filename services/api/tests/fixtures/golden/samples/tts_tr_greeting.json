@@ -1,0 +1,25 @@
+{
+  "id": "tts_tr_greeting",
+  "kind": "tts",
+  "qualities": ["turkish_speech", "prosody"],
+  "media": null,
+  "capabilities": {
+    "tts": {
+      "prompt_version": "tts@2026-07-30.1",
+      "route_revision": "route-tts-r1",
+      "ground_truth": {
+        "segments": [
+          {"text": "Günaydın, sıcak bir kahveyle güne başlayın", "expected_duration_ms": 2000, "turkish_phonemes": ["ı", "ş", "ü"]},
+          {"text": "Özel çekirdeklerimizi bugün keşfedin", "expected_duration_ms": 1800, "turkish_phonemes": ["ö", "ç", "ş"]}
+        ],
+        "prosody_note": "Türkçe özgü sesler (ı, ğ, ş, ç, ö, ü) telaffuzu perceptual olarak değerlendirilir — otomatik puanlanmaz."
+      },
+      "fake_output": {
+        "segments": [
+          {"text": "Günaydın, sıcak bir kahveyle güne başlayın", "estimated_duration_ms": 2200},
+          {"text": "Özel çekirdeklerimizi bugün keşfedin", "estimated_duration_ms": 1700}
+        ]
+      }
+    }
+  }
+}

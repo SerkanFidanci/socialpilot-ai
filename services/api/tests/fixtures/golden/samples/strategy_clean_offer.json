@@ -1,0 +1,22 @@
+{
+  "id": "strategy_clean_offer",
+  "kind": "text",
+  "qualities": ["turkish_brand_tone"],
+  "media": null,
+  "capabilities": {
+    "text_strategy": {
+      "prompt_version": "text_strategy@2026-07-30.1",
+      "route_revision": "route-text-r1",
+      "ground_truth": {
+        "forbidden_words": ["garanti", "bedava", "kesin"],
+        "approved_ctas": ["Profilden incele", "Hemen kesfet", "Baglantiya dokun"],
+        "allowed_facts": {"prices": ["%15"], "dates": []},
+        "brand_tone_note": "Uyumlu ornek: ihlal yok, CTA onayli listeden."
+      },
+      "fake_output": {
+        "text": "Sezon Kahvesi hafta sonu %15 indirim sizi bekliyor. Taze cekirdek, sicak servis.",
+        "cta": "Profilden incele"
+      }
+    }
+  }
+}

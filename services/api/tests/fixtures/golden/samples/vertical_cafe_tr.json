@@ -1,0 +1,59 @@
+{
+  "id": "vertical_cafe_tr",
+  "kind": "media",
+  "qualities": ["vertical", "human_face", "logo", "small_text", "turkish_speech", "multi_product"],
+  "media": {
+    "generator": "ffmpeg_lavfi",
+    "orientation": "vertical",
+    "duration_ms": 6000,
+    "width": 720,
+    "height": 1280,
+    "spec": {
+      "video": "testsrc2=size=720x1280:rate=30:duration=6",
+      "overlays": ["logo_box_top_left", "small_text_bottom:Sezon Kahvesi %15"],
+      "audio": "operator_supplied_or_silence"
+    },
+    "operator_supplied": null
+  },
+  "capabilities": {
+    "asr": {
+      "prompt_version": "asr@2026-07-30.1",
+      "route_revision": "route-asr-r1",
+      "ground_truth": {
+        "language": "tr",
+        "brand_terms": ["Sezon Kahvesi"],
+        "segments": [
+          {"start_ms": 400, "end_ms": 2600, "text": "Gunaydin Sezon Kahvesi ailesi"},
+          {"start_ms": 2600, "end_ms": 5200, "text": "bu hafta yeni cekirdeklerimizi taze ogutuyoruz"}
+        ]
+      },
+      "fake_output": {
+        "provider": "fake-asr",
+        "language": "tr",
+        "segments": [
+          {"start_ms": 450, "end_ms": 2600, "text": "Gunaydin sezon kahvesi ailesi", "confidence": 0.9},
+          {"start_ms": 2600, "end_ms": 5200, "text": "bu hafta yeni cekirdeklerimizi taze ogutuyor", "confidence": 0.88}
+        ]
+      }
+    },
+    "video_understanding": {
+      "prompt_version": "video_understanding@2026-07-30.1",
+      "route_revision": "route-vu-r1",
+      "ground_truth": {
+        "scene_labels": ["kafe", "vitrin", "insan"],
+        "objects": ["tabela", "fincan", "masa"],
+        "safety_flags": []
+      },
+      "fake_output": {
+        "provider": "fake-vlm",
+        "model_name": "deterministic-1",
+        "summary": "Kafe vitrini ve barista goruntusu.",
+        "visual_description": "Dikey cekim: cam vitrin, tabela, tezgahta fincanlar.",
+        "confidence": 0.86,
+        "labels": ["kafe", "vitrin", "insan", "gunes"],
+        "objects": ["tabela", "fincan", "sandalye"],
+        "safety_flags": []
+      }
+    }
+  }
+}
