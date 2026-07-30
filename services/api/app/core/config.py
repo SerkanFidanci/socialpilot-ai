@@ -117,6 +117,29 @@ class Settings(BaseSettings):
     video_understanding_max_attempts: int = Field(default=3, ge=1, le=10)
     ffmpeg_binary: str = Field(default="/usr/bin/ffmpeg", min_length=1, max_length=512)
     ffprobe_binary: str = Field(default="/usr/bin/ffprobe", min_length=1, max_length=512)
+    # --- content render (W11) ---
+    # The render adapter behind RenderPort. `fake` writes placeholder files for tests; `ffmpeg`
+    # encodes for real. Selection mirrors storage_adapter and is refused as `fake` in production.
+    render_adapter: Literal["fake", "ffmpeg"] = "fake"
+    render_max_duration_ms: int = Field(default=180_000, ge=1_000, le=600_000)
+    render_step_timeout_seconds: int = Field(default=120, ge=1, le=3_600)
+    render_job_timeout_seconds: int = Field(default=900, ge=1, le=7_200)
+    render_max_attempts: int = Field(default=3, ge=1, le=10)
+    render_max_output_bytes: int = Field(default=209_715_200, ge=1, le=2_147_483_647)
+    # `veryfast` trades file size for wall-clock. On the single server of ADR-013 the worker is
+    # reniced and CPU-capped, so a slower preset would extend the window during which a render
+    # competes with the API rather than producing a meaningfully better master.
+    render_x264_preset: str = Field(default="veryfast", min_length=1, max_length=16)
+    # DejaVu ships with the container's ffmpeg dependencies and covers the Turkish alphabet. No
+    # brand font is bundled: shipping one requires a licence decision that is not this slice's.
+    render_font_file: str = Field(
+        default="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", min_length=1, max_length=512
+    )
+    render_font_family: str = Field(default="DejaVu Sans", min_length=1, max_length=128)
+    # A source shorter than this fraction of the target's short edge would be visibly upscaled.
+    render_min_resolution_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
+    # How far a parametric cut may be pulled onto a detected scene boundary.
+    render_snap_tolerance_ms: int = Field(default=250, ge=0, le=5_000)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.
@@ -194,7 +217,7 @@ class Settings(BaseSettings):
             raise ValueError("MEDIA_SUPPORTED_VIDEO_CODECS must be non-empty codec names")
         return tuple(codec.strip().lower() for codec in value)
 
-    @field_validator("ffmpeg_binary", "ffprobe_binary")
+    @field_validator("ffmpeg_binary", "ffprobe_binary", "render_font_file")
     @classmethod
     def validate_media_binary(cls, value: str) -> str:
         if not value.startswith("/") or "\x00" in value:
@@ -331,10 +354,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS must be below CELERY_TASK_TIMEOUT_SECONDS"
             )
+        if self.render_job_timeout_seconds < self.render_step_timeout_seconds:
+            raise ValueError("RENDER_JOB_TIMEOUT_SECONDS cannot be below one render step")
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,
             self.scene_speech_job_timeout_seconds,
             self.video_understanding_job_max_timeout_seconds,
+            self.render_job_timeout_seconds,
         )
         if self.celery_task_soft_time_limit_seconds < maximum_job_timeout:
             raise ValueError(
@@ -406,6 +432,7 @@ class Settings(BaseSettings):
                 ("the local identity adapter", self.identity_adapter == "local"),
                 ("the fake storage adapter", self.storage_adapter == "fake"),
                 ("the fake media materializer", self.materializer_adapter == "fake"),
+                ("the fake render adapter", self.render_adapter == "fake"),
             )
             if selected
         ]

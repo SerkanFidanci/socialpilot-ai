@@ -98,6 +98,14 @@ def drain_video_understanding() -> dict[str, object]:
     return context.run(_drain(context, context.video_understanding_service, needs_workdir=True))
 
 
+@celery_app.task(name="content.render.drain")
+def drain_content_render() -> dict[str, object]:
+    """Drain render jobs. `needs_workdir` keeps every render inside the guarded scratch root."""
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.content_render_service, needs_workdir=True))
+
+
 @celery_app.task(name="operations.recovery.drain")
 def recover_stale_jobs() -> dict[str, object]:
     context = get_worker_context()
