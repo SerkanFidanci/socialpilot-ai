@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,7 @@ from app.modules.media.technical import (
 )
 from app.modules.media.video_understanding_service import VideoUnderstandingService
 from app.modules.operations.service import JobRecoveryService, OutboxDispatchService
+from app.worker.scratch import WorkerScratchGuard
 
 
 @dataclass(frozen=True)
@@ -163,12 +165,41 @@ def get_worker_context() -> WorkerContext:
     return _context
 
 
+# On a single server the API must never lose the CPU to a render/analysis burst. Renicing the
+# worker process down (+10) makes FFmpeg and every other subprocess it spawns inherit a lower
+# CPU priority than PostgreSQL and the API, so heavy jobs yield first under contention. This is
+# the process-wide complement to compose.yaml's cpu_shares budget; ionice is left to the host.
+_WORKER_NICE_INCREMENT = 10
+
+
 def start_worker_process() -> None:
     """Initialize after Celery forks, avoiding inherited async-engine pools."""
 
     global _context
     shutdown_worker_process()
+    _lower_worker_cpu_priority()
     _context = build_worker_context(get_settings())
+    # Sweep scratch orphaned by a previous worker generation killed mid-job (OOM, SIGKILL)
+    # before this process starts draining, so a single server does not accumulate dead
+    # scratch across restarts.
+    WorkerScratchGuard(Path(_context.settings.worker_temp_root)).reclaim_stale()
+
+
+def _lower_worker_cpu_priority() -> None:
+    """Renice this worker process so its FFmpeg children cannot starve the API.
+
+    ``os.nice`` is POSIX-only and absent on Windows; on a platform without it the compose
+    ``cpu_shares`` budget still enforces the priority order, so this is a best-effort tightening
+    rather than a hard requirement.
+    """
+
+    if not hasattr(os, "nice"):
+        return
+    try:
+        os.nice(_WORKER_NICE_INCREMENT)
+    except OSError:
+        # Renicing can fail under a restrictive policy; the cpu_shares budget still applies.
+        pass
 
 
 def shutdown_worker_process() -> None:
