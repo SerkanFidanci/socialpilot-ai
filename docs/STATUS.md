@@ -50,13 +50,30 @@ Phase 2 içerik üretimi · Phase 3 abonelik/entitlement · Phase 4 yayınlama �
 
 Protokol: [handoffs/README.md](handoffs/README.md)
 
-| WO | Konu | Durum | Dal | Migration slotu |
-|---|---|---|---|---|
-| [W01](handoffs/W01-object-storage-adapter.md) | MinIO/S3 storage adapter + MIME düzeltmesi | hazır, tetiklenmedi | `slice/1e-object-storage` | — |
-| [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları, ortam | hazır, tetiklenmedi | `slice/0h-platform-hardening` | — |
-| [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | hazır, tetiklenmedi | `slice/doc-restructure` | — |
-| W04 | Marka profili + ürün/hizmet kataloğu modülü | W03 kapanınca yazılacak | `slice/1f-brand-catalog` | **ayrılmış** |
-| W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | — |
+| WO | Konu | Durum | Dal | Model / effort | Migration slotu |
+|---|---|---|---|---|---|
+| [W01](handoffs/W01-object-storage-adapter.md) | MinIO/S3 storage adapter + iOS MIME düzeltmesi | **şimdi** | `slice/1e-object-storage` | Opus 5 / high | — |
+| [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **şimdi** (W01 ile paralel) | `slice/doc-restructure` | Opus 4.8 / medium | — |
+| [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **W01 merge sonrası** | `slice/0h-platform-hardening` | Opus 4.8 / medium | — |
+| W04 | Marka profili + ürün/hizmet kataloğu modülü | W03 kapanınca yazılacak | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** |
+| W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | Opus 4.8 / medium | — |
+| W06 | PostgreSQL 18 + Valkey imaj geçişi | W01 + W02 kapanınca | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
+
+### Dosya sahipliği (çakışma önleme)
+
+Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. Sahibi olmadığın bir dosyaya dokunman gerekiyorsa dur ve raporuna yaz.
+
+| Dosya | Sahibi |
+|---|---|
+| `services/api/app/core/config.py` | W01 |
+| `compose.yaml`, `.env.example` | W01 |
+| `services/api/pyproject.toml` | W01 (yalnızca storage bağımlılığı) → sonra W02 (uv geçişi) |
+| `docs/architecture/media-upload.md` | W01 |
+| `services/api/Dockerfile`, `.github/workflows/verify.yml`, `Makefile` | W02 |
+| `docs/runbooks/local-development.md` | W02 |
+| `docs/index.md`, `docs/adr/README.md` | **W03 tekel** — W01/W02 ADR dosyasını yazar, indekse eklemez |
+| `AGENTS.md`, `CLAUDE.md`, `docs/product/**`, modül `CLAUDE.md`'leri | W03 |
+| `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)
 

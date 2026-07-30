@@ -30,7 +30,9 @@
 - İçerik inspection, malware taraması, proxy üretimi, ffprobe genişletmesi — ayrı slice'lar.
 - Yayın (publish) için gereken **public URL** yüzeyi — ayrı ADR gerektiriyor, PM'de.
 - Migration. Şema değişikliği gerekiyorsa **dur** ve rapora yaz.
-- `app/core/config.py` dışındaki hiçbir W02/W03 dosyası.
+- **`docs/index.md` ve `docs/adr/README.md` — sahibi W03.** ADR-008 dosyasını yaz, ama bu indekslere **ekleme**; raporunda bildir, PM bağlar.
+- Bağımlılık sürümü tazeleme, lockfile, `requirements.txt` — W02'nin. `pyproject.toml`'a yalnızca storage istemcisini ekle.
+- PostgreSQL/Redis imaj sürümleri — W06. `compose.yaml`'a yalnızca minio servisini ekle.
 
 ## Dokunulacak dosyalar (ilan)
 
@@ -60,7 +62,8 @@ docs/adr/ADR-008-<s3-uyumlu-storage-adapter>.md          (yeni ADR)
 6. `image/heic`, `image/heif`, `video/quicktime` kabul edilir; reddedilen tür için hata mesajı tür listesini sızdırmaz.
 7. Adapter seçimi konfigürasyonla; `production` ortamında `fake` adapter reddedilir (mevcut identity adapter'ındaki desenin aynısı).
 8. `make verify` yeşil. Alembic head değişmemiş: `0009_video_understanding`.
-9. ADR-008 yazıldı, `docs/index.md` ve `docs/adr/README.md`'ye eklendi.
+9. ADR-008 yazıldı (indekslere **eklenmedi** — W03'ün sahipliğinde, raporda bildirildi).
+10. `pyproject.toml`'daki tek değişiklik storage istemcisi bağımlılığı; sürüm tazeleme yapılmadı.
 
 ## Bilinmesi gerekenler
 

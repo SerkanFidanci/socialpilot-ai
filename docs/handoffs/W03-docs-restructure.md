@@ -104,7 +104,11 @@ Endpoint başına bir satır tablo (metot, yol, amaç, yetki, idempotency gereki
 - `openapi.json` bütün olarak okunmaz.
 - Dış platform sürümleri/fiyatları `99-external-platform-facts.md`'den okunur, hafızadan yazılmaz.
 
-### 8. `docs/reviews/` klasörü
+### 8. ADR ve doküman indeksleri (bu WO'nun tekel sahipliği)
+
+`docs/index.md` ve `docs/adr/README.md`'nin **tek sahibi sensin**. W01 ve W02 paralel çalışırken yeni ADR dosyaları (ADR-008, ADR-009, ADR-010) üretiyor ama indekslere dokunmuyorlar. Merge sırasında `docs/adr/` dizinini tara ve **o an var olan** tüm ADR'leri (ADR-001…ADR-010) hem router'a hem ADR kataloğuna bağla. Var olmayan ADR için satır yazma.
+
+### 9. `docs/reviews/` klasörü
 
 Oluşturulur; `README.md`'si "tarih-konu" adlandırma kuralını söyler. İçeriği PM doldurur.
 
