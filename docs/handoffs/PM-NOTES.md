@@ -90,8 +90,8 @@ Kullanıcı "en mantıklısı ve en doğrusuyla devam et her zaman" dedi. Bunun 
 
 ## Sıradaki iş (PM kuyruğu, güncel)
 
-1. ~~W04~~ **YAZILDI** → [W04-brand-catalog.md](W04-brand-catalog.md). Migration slotu onda. **Karar:** şema borcu üç kalemi W04'ten çıkarıldı ve W10 oldu — brands diff'i odaklı kalsın, üç ilgisiz kalem karışmasın. W10 slotu W04 kapanınca alır.
-2. ~~W05~~ **YAZILDI** → [W05-opentelemetry.md](W05-opentelemetry.md). Kritik kısım redaksiyon: auto-instrumentation httpx URL'lerini yazdığı için presigned URL span'lere sızabilir; sentinel testi zorunlu kılındı.
+1. ~~W04~~ **KAPANDI** (`5addf69`). Bulgusu: `approver` rolü enum'da yok → W10'a. Yakaladığı regresyon: `AssetResponse` ad çakışması FastAPI'yi iki şemayı da tam nitelikli ada çevirmeye zorluyordu (üretilmiş istemcileri bozan kontrat değişikliği) — yeniden adlandırıldı + `__` içermeme regresyon testi eklendi. Eski özet: → [W04-brand-catalog.md](W04-brand-catalog.md). Migration slotu onda. **Karar:** şema borcu üç kalemi W04'ten çıkarıldı ve W10 oldu — brands diff'i odaklı kalsın, üç ilgisiz kalem karışmasın. W10 slotu W04 kapanınca alır.
+2. ~~W05~~ **KAPANDI** (`5addf69`, ADR-014). Eski özet: → [W05-opentelemetry.md](W05-opentelemetry.md). Kritik kısım redaksiyon: auto-instrumentation httpx URL'lerini yazdığı için presigned URL span'lere sızabilir; sentinel testi zorunlu kılındı.
 3. **W06 — PostgreSQL 18 + Valkey.** W05 sonrası (`compose.yaml` çakışmasın). Dikkat: W07'nin kaynak limitleri ve `cpu_shares` öncelik sırası korunmalı.
 4. **W10 — şema borcu** (yazılacak): `provider_usage` tablosu, `storage_upload_id` genişletmesi, fotoğraf analiz enum'u. W04 slotu boşalınca.
 4. **Codex doğrulaması** `main` üzerinde: W07'nin yedek/geri yükleme döngüsü ve scratch guard'ı, W08'in ground-truth metrik hesabı ve maliyet tavanı. Bunlar iddia edilen ama bağımsız sınanmamış yüzeyler.
@@ -100,6 +100,13 @@ Kullanıcı "en mantıklısı ve en doğrusuyla devam et her zaman" dedi. Bunun 
 ## Oturum yeniden kullanımı
 
 Kural [README.md](README.md)'de. PM için özeti: **slice başına yeni oturum**, aynı oturum yalnızca aynı slice'ın düzeltme turu için. Ve **worktree'yi merge'de değil, doğrulama da bittiğinde sil** — bugün W07/W08'in worktree'lerini Codex bitmeden sildim, o yüzden bulguların düzeltmesi taze oturumla yapılacak.
+
+## Sıradaki iş (2026-07-30 sonu itibarıyla)
+
+- **W10 — şema borcu.** Slot serbest. Dört kalem: `provider_usage` tablosu, `storage_upload_id` genişletmesi (W01'in kontrol-objesi geçici çözümünü kaldırır), fotoğraf analiz durumu enum'u, **`approver` rolü** (`BusinessRole`'a eklenmesi; W04'ün "her rol için cevap tanımlı" testi eşlemeyi zorlayacak). İş emri yazılacak.
+- **W06 — PostgreSQL 18 + Valkey.** `compose.yaml` serbest. W07'nin kaynak limitleri ve `cpu_shares` öncelik sırası korunmalı.
+- **Codex doğrulaması** hâlâ `main` üzerinde bekliyor: W07 (yedek/geri yükleme, scratch guard), W08 (ground-truth metrik, maliyet tavanı). W04 ve W05 de sıraya girdi: cross-tenant, para biriminde kayan nokta, cursor sayfa atlama; telemetride presigned URL sızıntısı ve kapalıyken sıfır maliyet.
+- **Phase 2 kapısı.** Artık teknik önkoşullar hazır (marka/katalog verisi, gözlemlenebilirlik, benchmark aracı, gerçek medya hattı). Girmeden önce: **K3** ve **K4** cevaplanmalı, `RenderPort` ADR'ı yazılmalı (K5 gereği), durable execution (DBOS/Temporal) ve LiteLLM değerlendirilmeli.
 
 ## Öğrenilen dersler (tekrarlanmasın)
 

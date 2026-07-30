@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | `7b9fd35` — W01→W03, W04 hariç W05→W09 hepsi merge edildi, origin ile senkron |
-| Alembic head | `0009_video_understanding` (tek head) |
-| Backend doğrulama | **313 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 121 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | `5addf69` — W01→W09 tamamı merge edildi (W06/W10 hariç), origin ile senkron |
+| Alembic head | `0010_brand_catalog` (tek head) |
+| Backend doğrulama | **392 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 135 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -22,12 +22,13 @@
 - **Phase 0 — Temel platform.** identity/tenant + RBAC, medya multipart upload control-plane, jobs/attempts/outbox/idempotency/audit, RFC 9457 hata kataloğu, CI verify hattı.
 - **Phase 1 A–D — Medya analiz hattı.** ingest güvenlik geçidi (ADR-006), teknik analiz (ffprobe / kalite sinyalleri / dikey medya / sınırlı proxy), sahne tespiti + konuşma çözümleme, video understanding (kontratlar, job akışı, frame budget, FFmpeg frame extraction, sağlayıcı yönlendirme ADR-007), Celery worker composition + outbox publisher + beat, processing-summary API.
 - **Platform temeli.** uv + lockfile, güncel bağımlılıklar (py313), CI'da zafiyet + secret + container taraması (W02). Tek sunucu dayanıklılığı: servis bazlı kaynak limitleri, worker scratch guard, sunucu dışına şifreli yedek + geri yükleme provası (W07, ADR-013).
+- **Marka ve katalog.** `modules/brands` — marka profili, ürün/hizmet kataloğu ve fiyatları, kampanya kayıtları, onaylı/yasak iddia listeleri, onaylı CTA'lar, hedef kitleler. Deterministik marka sağlık skoru (tavsiye, bloke etmez). Cursor pagination primitifi `core/pagination.py` (W04).
+- **Gözlemlenebilirlik.** OpenTelemetry trace + metric, varsayılan **kapalı** ve kapalıyken sıfır maliyet; correlation ID ↔ trace bağı (W05, ADR-014).
 - **Sağlayıcı benchmark aracı.** `app/benchmark/` — golden set + ground truth + kabiliyet başına metrik + maliyet tavanı + veri bölgesi sütunu. Credential'sız koşar (W08). Gerçek sağlayıcı seçimi buna dayanacak.
 - **Mobil uçtan uca demo.** `apps/mobile` — 24 Dart dosyası; işletme seçimi/oluşturma, video seçme, upload progress, 6 adımlı processing checklist, sonuç detayı. Material 3, Türkçe. Config yalnızca `--dart-define`; kaynak kodda token yok.
 
 ### Phase 1'den eksik
 
-- Marka profili + ürün/hizmet kataloğu (PRD §11) → **W04**
 - Sahne kütüphanesi arama + pgvector embedding/retrieval (PRD §16.4–16.5)
 - **Phase 1 çıkış kriteri mekanik olarak karşılandı** (`5ee03d4`): gerçek video yüklenip sahne + transcript + etiket üretiyor, `.mov`/HEVC dahil. **Ama ASR ve VLM hâlâ fake** — yani transcript ve etiketlerin *içeriği* sentetik. Gerçek sağlayıcı bağlanması **W08** benchmark'ından sonra; kriteri "gerçek içerikle karşılandı" saymak için o gerekiyor.
 - Fotoğraf (HEIC/HEIF/JPEG/PNG) analiz hattı yok — K6'nın ikinci yarısı. Şu an HEIC açık kodla reddediliyor (sessiz durma yok).
@@ -108,8 +109,8 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark koşum takımı** | **tamamlandı** · merge edildi · `provider_usage` bulgusu W04 slotuna alındı | merge edildi, dal silindi | Opus 5 / high | — |
 | [W04](handoffs/W04-brand-catalog.md) | **Marka profili + ürün/hizmet kataloğu** — Phase 2'nin ön koşulu | **tamamlandı** · merge edildi | merge edildi, dal silindi | Opus 5 / high | **kullanıldı** (`0010`) |
 | [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **tamamlandı** · merge edildi · ADR-014 | merge edildi, dal silindi | Opus 4.8 / medium | — |
-| W06 | PostgreSQL 18 + Valkey imaj geçişi | W05 sonrası (`compose.yaml`) | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
-| W10 | **Şema borcu:** `provider_usage` tablosu · `storage_upload_id` genişletmesi · fotoğraf analiz enum'u | W04 slotu boşalınca | `slice/0m-schema-debt` | Opus 4.8 / medium | sıradaki slot |
+| W06 | PostgreSQL 18 + Valkey imaj geçişi | **sıradaki** (`compose.yaml` serbest) | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
+| W10 | **Şema borcu:** `provider_usage` tablosu · `storage_upload_id` genişletmesi · fotoğraf analiz enum'u · **`approver` rolü** (`BusinessRole` enum'unda yok, W04 bulgusu) | **sıradaki** (slot boşaldı) | `slice/0m-schema-debt` | Opus 4.8 / medium | **SLOT SERBEST** |
 
 ### Dosya sahipliği (çakışma önleme)
 
