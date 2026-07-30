@@ -4,11 +4,11 @@
 
 | | |
 |---|---|
-| `main` | `5ee03d4` — W01+W02+W03+W09 hepsi merge edildi |
+| `main` | `aea6a18` — W01→W03, W07→W09 hepsi merge edildi, origin ile senkron |
 | Alembic head | `0009_video_understanding` (tek head) |
-| Backend doğrulama | **264 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 105 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 / celery 5.6 / fastapi 0.141 |
+| Backend doğrulama | **313 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 121 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
-| Compose | api + postgres + redis + minio healthy · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir (worktree başına zorunlu) |
+| Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
 
 > **Her oturum İLK bu dosyayı okur.** Bu dosya ile `git log` çelişirse **git kazanır**; çelişkiyi gören oturum bu dosyayı aynı commit'te düzeltir.
@@ -21,6 +21,8 @@
 
 - **Phase 0 — Temel platform.** identity/tenant + RBAC, medya multipart upload control-plane, jobs/attempts/outbox/idempotency/audit, RFC 9457 hata kataloğu, CI verify hattı.
 - **Phase 1 A–D — Medya analiz hattı.** ingest güvenlik geçidi (ADR-006), teknik analiz (ffprobe / kalite sinyalleri / dikey medya / sınırlı proxy), sahne tespiti + konuşma çözümleme, video understanding (kontratlar, job akışı, frame budget, FFmpeg frame extraction, sağlayıcı yönlendirme ADR-007), Celery worker composition + outbox publisher + beat, processing-summary API.
+- **Platform temeli.** uv + lockfile, güncel bağımlılıklar (py313), CI'da zafiyet + secret + container taraması (W02). Tek sunucu dayanıklılığı: servis bazlı kaynak limitleri, worker scratch guard, sunucu dışına şifreli yedek + geri yükleme provası (W07, ADR-013).
+- **Sağlayıcı benchmark aracı.** `app/benchmark/` — golden set + ground truth + kabiliyet başına metrik + maliyet tavanı + veri bölgesi sütunu. Credential'sız koşar (W08). Gerçek sağlayıcı seçimi buna dayanacak.
 - **Mobil uçtan uca demo.** `apps/mobile` — 24 Dart dosyası; işletme seçimi/oluşturma, video seçme, upload progress, 6 adımlı processing checklist, sonuç detayı. Material 3, Türkçe. Config yalnızca `--dart-define`; kaynak kodda token yok.
 
 ### Phase 1'den eksik
@@ -39,7 +41,7 @@ Phase 2 içerik üretimi · Phase 3 abonelik/entitlement · Phase 4 yayınlama �
 | # | Konu | Etki | Çözüm |
 |---|---|---|---|
 | ~~B1~~ | **KAPANDI** (`5ee03d4`). Yükleme yolu gerçek (W01) + worker medyayı gerçekten S3'ten akıtıyor (W09). Fixture byte'ı hattın hiçbir yerinde yok | — | — |
-| B2 | `JAVA_HOME` yok, Android cmdline-tools eksik | APK build edilemiyor | **kısmen kapandı:** W02 runbook'a Windows JDK 17 + cmdline-tools adımlarını yazdı ama o ortamda JDK/Flutter olmadığı için uçtan uca doğrulayamadı. **İlk mobil oturum adımları izleyip sonucu runbook'a yazmalı** |
+| B2 | `JAVA_HOME` yok, Android cmdline-tools eksik | APK build edilemiyor | **kısmen kapandı:** runbook'ta Windows JDK 17 + cmdline-tools adımları var (W02) ama hiçbir ortamda uçtan uca doğrulanamadı. İlk mobil oturum adımları izleyip sonucu runbook'a yazmalı |
 
 ## Geliştirme ortamı
 
