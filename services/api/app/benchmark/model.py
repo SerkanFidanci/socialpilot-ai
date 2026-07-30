@@ -3,9 +3,12 @@
 This module owns the *shape* of a provider-usage record and the cost ledger. It deliberately
 mirrors the fields ADR-007 assigns to ``provider_usage`` (capability, provider/model,
 estimated and actual integer-minor-unit cost, currency, duration, outcome, correlation id)
-plus route/prompt provenance, so that when a persistence layer for provider usage is built it
-can adopt this record instead of the harness growing a second cost model. Nothing here
-persists to a database; the harness is an offline measurement tool.
+plus route/prompt provenance. The ``provider_usage`` table now exists
+(``app.modules.operations.models.ProviderUsage``, migration 0011) and adopts this record's
+measurement fields through ``ProviderUsage.from_measurement`` rather than the harness growing a
+second cost model. Nothing here persists to a database: the harness is an offline measurement
+tool with no tenant, so a real analysis run — not the harness — supplies the tenant/job/asset
+context and writes the row.
 """
 
 from __future__ import annotations
@@ -107,7 +110,8 @@ class ProviderUsageRecord:
     """One attributable provider call. Mirrors ADR-007 ``provider_usage`` fields.
 
     Excludes, by construction, the things ADR-007 keeps out of usage records: tokens, prompts,
-    signed URLs and full provider payloads.
+    signed URLs and full provider payloads. The measurement fields map field for field onto
+    ``operations.models.ProviderUsage.from_measurement``, which persists them under a tenant.
     """
 
     capability: Capability

@@ -59,6 +59,10 @@ client's behalf: this is a server-to-storage read, not a relay.
 
 ### Multipart state lives in a control object, not in the database
 
+> **Superseded by the W10 amendment (migration `0011`) below.** `storage_upload_id` was widened
+> to `String(512)`, so the provider `UploadId` is now persisted directly and the control object
+> is gone. The rest of this section records the original Phase 1E design.
+
 The port identifies an upload by the server-generated `storage_upload_id` persisted in
 `media_upload_sessions.storage_upload_id`, declared `String(128)`. A provider `UploadId` does
 not fit: AWS values routinely exceed 128 characters, and widening the column requires a
@@ -123,3 +127,18 @@ or its parts cannot be verified — so no new error code enters the catalogue.
   control object.
 - **Letting the adapter create buckets:** provisioning is an operations concern, deliberately
   outside the adapter (Compose runs a one-shot `mc mb` for development only).
+
+## Amendment — W10 (migration 0011): control object removed
+
+The migration slot the original decision waited for arrived with W10. `storage_upload_id` was
+widened from `String(128)` to `String(512)`, so `create_upload` now returns the provider's real
+`UploadId` and the caller persists it directly on `media_upload_sessions`. The part-URL,
+completion, and cancellation calls take the object key (already held on the asset) and that
+persisted upload id as explicit arguments, so the adapter stays stateless across processes
+**without** the `_control/uploads/{id}.json` object.
+
+What this removes: one extra provider round-trip per `create_upload`, the control-write failure
+mode (and its compensating abort), and the small server-owned object that had to be cleaned up
+on completion or cancellation. The "Persisting the provider `UploadId` in the existing column
+silently truncates" rejected alternative no longer applies — the column is now wide enough. The
+completion-verification design, the SigV4 approach, and the presigning split above are unchanged.

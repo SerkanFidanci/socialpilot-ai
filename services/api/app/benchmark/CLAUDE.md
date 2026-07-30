@@ -14,8 +14,9 @@ harness ayrı, domain-dışı bir paket olarak yaşar.
   benchmark` CI'da bu şekilde aracın kendisini test eder.
 - **Tek maliyet muhasebesi:** `ProviderUsageRecord` ADR-007'nin `provider_usage` alanlarını
   birebir yansıtır (token/prompt/imzalı URL/ham yanıt taşımaz). Paralel bir maliyet modeli
-  kurulmaz. (Not: `provider_usage` **tablosu henüz kodda yok** — bu kayıt, o kalıcılık
-  geldiğinde benimsenecek nötr şekildir.)
+  kurulmaz. `provider_usage` **tablosu artık var** (`operations.ProviderUsage`, migration
+  `0011`); ölçüm alanları `ProviderUsage.from_measurement` ile benimsenir. Harness yine
+  **DB'ye yazmaz** — tenant'ı yoktur; tenant'ı gerçek analiz koşusu verir.
 - **Maliyet tavanı çağrıdan önce uygulanır:** `CostLedger.reserve` tahmini maliyetle bakar;
   tavan aşılacaksa **çağrı yapılmadan** durur, sessizce para harcamaz.
 - **Provenance zorunlu:** prompt sürümü / route revizyonu olmayan örnek puanlanmaz

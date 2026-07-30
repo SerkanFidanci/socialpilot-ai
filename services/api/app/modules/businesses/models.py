@@ -24,6 +24,11 @@ class BusinessRole(StrEnum):
     ADMIN = "admin"
     EDITOR = "editor"
     VIEWER = "viewer"
+    # Approval-only role (PRD §4, tenant-isolation.md). It sees approval sources and makes
+    # approval decisions — nothing else. The approval resources are Phase 2 work, so today it
+    # maps to no permission at all (businesses.policy). A role that exists but grants nothing is
+    # correct; a role that silently grants breadth would not be.
+    APPROVER = "approver"
 
 
 class MembershipStatus(StrEnum):

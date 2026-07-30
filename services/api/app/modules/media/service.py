@@ -84,18 +84,12 @@ class MediaService:
                 byte_size=byte_size,
                 sha256_checksum=checksum.lower(),
             )
-            upload = MediaUploadSession(
-                business_id=business_id,
-                asset_id=asset_id,
-                storage_upload_id=uuid4().hex,
-                expected_part_count=part_count,
-                expires_at=expires_at,
-            )
             self._repo.add(asset)
-            self._repo.add(upload)
             try:
-                instructions = await self._storage.create_upload(
-                    storage_upload_id=upload.storage_upload_id,
+                # The provider mints the upload id; it is persisted directly on the session
+                # (no server-owned control object). Opened before flush, matching the prior
+                # ordering: a failure here rolls the whole transaction back.
+                created = await self._storage.create_upload(
                     object_key=asset.storage_object_key,
                     content_type=content_type,
                     expires_at=expires_at,
@@ -103,8 +97,16 @@ class MediaService:
                 )
             except (StorageUnavailableError, StoragePermanentError) as error:
                 raise self._storage_error() from error
+            upload = MediaUploadSession(
+                business_id=business_id,
+                asset_id=asset_id,
+                storage_upload_id=created.storage_upload_id,
+                expected_part_count=part_count,
+                expires_at=expires_at,
+            )
+            self._repo.add(upload)
             await self._session.flush()
-            return upload, instructions
+            return upload, created.instructions
 
     async def parts(
         self, *, user_id: UUID, business_id: UUID, session_id: UUID, numbers: tuple[int, ...]
@@ -112,9 +114,11 @@ class MediaService:
         async with self._session.begin():
             await self._authorize(user_id, business_id, Permission.MEDIA_UPLOAD)
             upload = await self._active_session(business_id, session_id)
+            object_key = await self._object_key(business_id, upload)
             self._valid_numbers(numbers, upload.expected_part_count, exact=False)
             try:
                 urls = await self._storage.create_part_urls(
+                    object_key=object_key,
                     storage_upload_id=upload.storage_upload_id,
                     expires_at=upload.expires_at,
                     part_numbers=numbers,
@@ -184,7 +188,9 @@ class MediaService:
                 raise self._checksum_error()
             try:
                 metadata = await self._storage.complete_upload(
-                    storage_upload_id=upload.storage_upload_id, parts=parts
+                    object_key=asset.storage_object_key,
+                    storage_upload_id=upload.storage_upload_id,
+                    parts=parts,
                 )
             except StorageUnavailableError as error:
                 raise self._storage_error() from error
@@ -222,8 +228,11 @@ class MediaService:
         async with self._session.begin():
             await self._authorize(user_id, business_id, Permission.MEDIA_UPLOAD)
             upload = await self._active_session(business_id, session_id)
+            object_key = await self._object_key(business_id, upload)
             try:
-                await self._storage.cancel_upload(storage_upload_id=upload.storage_upload_id)
+                await self._storage.cancel_upload(
+                    object_key=object_key, storage_upload_id=upload.storage_upload_id
+                )
             except (StorageUnavailableError, StoragePermanentError) as error:
                 raise self._storage_error() from error
             upload.status, upload.cancelled_at = UploadSessionStatus.CANCELLED, datetime.now(UTC)
@@ -256,6 +265,18 @@ class MediaService:
                 title="Business is not mutable",
                 detail="Suspended or archived businesses cannot be changed.",
             )
+
+    async def _object_key(self, business_id: UUID, upload: MediaUploadSession) -> str:
+        """Resolve the tenant object key the storage port needs from the session's asset.
+
+        The provider upload id lives on the session; the object key lives on the asset. Both are
+        passed to the adapter explicitly now that the server-owned control object is gone.
+        """
+
+        asset = await self._repo.get_asset(business_id, upload.asset_id)
+        if asset is None:
+            raise self._not_found("MEDIA_ASSET_NOT_FOUND", "Media asset not found")
+        return asset.storage_object_key
 
     async def _active_session(self, business_id: UUID, session_id: UUID) -> MediaUploadSession:
         upload = await self._repo.get_session(business_id, session_id, lock=True)

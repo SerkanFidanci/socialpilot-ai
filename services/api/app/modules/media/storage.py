@@ -15,6 +15,19 @@ class UploadPartInstruction:
 
 
 @dataclass(frozen=True)
+class CreatedUpload:
+    """The result of opening a multipart upload.
+
+    ``storage_upload_id`` is the provider's own multipart identifier; the caller persists it in
+    ``media_upload_sessions.storage_upload_id`` and passes it back — together with the object key
+    — on every later part/complete/cancel call. There is no server-side control object.
+    """
+
+    storage_upload_id: str
+    instructions: tuple[UploadPartInstruction, ...]
+
+
+@dataclass(frozen=True)
 class CompletedPart:
     part_number: int
     etag: str
@@ -40,13 +53,12 @@ class MultipartStoragePort(Protocol):
     async def create_upload(
         self,
         *,
-        storage_upload_id: str,
         object_key: str,
         content_type: str,
         expires_at: datetime,
         part_numbers: tuple[int, ...],
-    ) -> tuple[UploadPartInstruction, ...]:
-        """Open a multipart upload.
+    ) -> CreatedUpload:
+        """Open a multipart upload and return the provider's upload id with the part URLs.
 
         ``content_type`` is the server-validated declaration recorded on the asset. A real
         provider must stamp it on the object at creation time, because completion compares
@@ -55,13 +67,18 @@ class MultipartStoragePort(Protocol):
         ...
 
     async def create_part_urls(
-        self, *, storage_upload_id: str, expires_at: datetime, part_numbers: tuple[int, ...]
+        self,
+        *,
+        object_key: str,
+        storage_upload_id: str,
+        expires_at: datetime,
+        part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]: ...
     async def complete_upload(
-        self, *, storage_upload_id: str, parts: tuple[CompletedPart, ...]
+        self, *, object_key: str, storage_upload_id: str, parts: tuple[CompletedPart, ...]
     ) -> StoredObjectMetadata: ...
     async def get_object_metadata(self, *, object_key: str) -> StoredObjectMetadata: ...
     async def persist_file(
         self, *, object_key: str, source_path: Path, content_type: str
     ) -> StoredObjectMetadata: ...
-    async def cancel_upload(self, *, storage_upload_id: str) -> None: ...
+    async def cancel_upload(self, *, object_key: str, storage_upload_id: str) -> None: ...

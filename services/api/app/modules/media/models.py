@@ -39,6 +39,12 @@ class IngestStatus(StrEnum):
     REJECTED = "rejected"
     FAILED = "failed"
     DEAD = "dead"
+    # Seam for the future photo (HEIC/HEIF) analysis pipeline (K6 second half): a still image
+    # that passed ingest and is ready for technical-metadata + VLM tagging (no scene/ASR).
+    # No code path produces this yet — HEIC/HEIF is still rejected at the ingest gate
+    # (INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE). The value exists only so the photo slice can use
+    # it without another migration; test_photo_ingest_status_is_unreachable guards that.
+    READY_FOR_PHOTO_ANALYSIS = "ready_for_photo_analysis"
 
 
 class MalwareScanStatus(StrEnum):
@@ -140,7 +146,10 @@ class MediaUploadSession(Base):
         ForeignKey("media_assets.id", ondelete="CASCADE"),
         nullable=False,
     )
-    storage_upload_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    # Holds the provider's real multipart ``UploadId`` directly (W10 / migration 0011). AWS and
+    # other S3-compatible providers routinely exceed 128 characters, so the earlier ``String(128)``
+    # forced a server-owned control object (ADR-008); widening the column removed that workaround.
+    storage_upload_id: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
     expected_part_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[UploadSessionStatus] = mapped_column(
         Enum(

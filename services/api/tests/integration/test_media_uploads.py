@@ -23,6 +23,7 @@ from app.infrastructure.storage.fake import FakeMultipartStorage
 from app.main import create_app
 from app.modules.media.storage import (
     CompletedPart,
+    CreatedUpload,
     StoredObjectMetadata,
     UploadPartInstruction,
 )
@@ -52,9 +53,15 @@ class SignedUrlStorage(FakeMultipartStorage):
     """Fake adapter whose part URLs carry a sentinel no log or audit row may contain."""
 
     async def create_part_urls(
-        self, *, storage_upload_id: str, expires_at: datetime, part_numbers: tuple[int, ...]
+        self,
+        *,
+        object_key: str,
+        storage_upload_id: str,
+        expires_at: datetime,
+        part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]:
         await super().create_part_urls(
+            object_key=object_key,
             storage_upload_id=storage_upload_id,
             expires_at=expires_at,
             part_numbers=part_numbers,
@@ -81,23 +88,27 @@ class RefusingStorage:
     async def create_upload(
         self,
         *,
-        storage_upload_id: str,
         object_key: str,
         content_type: str,
         expires_at: datetime,
         part_numbers: tuple[int, ...],
-    ) -> tuple[UploadPartInstruction, ...]:
+    ) -> CreatedUpload:
         self._refuse("create_upload")
         raise AssertionError("unreachable")
 
     async def create_part_urls(
-        self, *, storage_upload_id: str, expires_at: datetime, part_numbers: tuple[int, ...]
+        self,
+        *,
+        object_key: str,
+        storage_upload_id: str,
+        expires_at: datetime,
+        part_numbers: tuple[int, ...],
     ) -> tuple[UploadPartInstruction, ...]:
         self._refuse("create_part_urls")
         raise AssertionError("unreachable")
 
     async def complete_upload(
-        self, *, storage_upload_id: str, parts: tuple[CompletedPart, ...]
+        self, *, object_key: str, storage_upload_id: str, parts: tuple[CompletedPart, ...]
     ) -> StoredObjectMetadata:
         self._refuse("complete_upload")
         raise AssertionError("unreachable")
@@ -112,7 +123,7 @@ class RefusingStorage:
         self._refuse("persist_file")
         raise AssertionError("unreachable")
 
-    async def cancel_upload(self, *, storage_upload_id: str) -> None:
+    async def cancel_upload(self, *, object_key: str, storage_upload_id: str) -> None:
         self._refuse("cancel_upload")
 
 

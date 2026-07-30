@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | `main` | `5addf69` — W01→W09 tamamı merge edildi (W06/W10 hariç), origin ile senkron |
-| Alembic head | `0010_brand_catalog` (tek head) |
+| Alembic head | `0011_schema_debt` (tek head) |
 | Backend doğrulama | **392 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 135 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
@@ -114,7 +114,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W04](handoffs/W04-brand-catalog.md) | **Marka profili + ürün/hizmet kataloğu** — Phase 2'nin ön koşulu | **tamamlandı** · merge edildi | merge edildi, dal silindi | Opus 5 / high | **kullanıldı** (`0010`) |
 | [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **tamamlandı** · merge edildi · ADR-014 | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | W06 | PostgreSQL 18 + Valkey imaj geçişi | **bekletildi** — hiçbir şeyi bloke etmiyor, Phase 2'den sonra | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
-| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** — `provider_usage` tablosu · `storage_upload_id` genişletmesi (kontrol objesini kaldırır) · fotoğraf durumu enum'u · `approver` rolü | **şimdi** | `slice/0m-schema-debt` | Opus 4.8 / medium | **SENDE** (`0011`) |
+| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** — `provider_usage` tablosu · `storage_upload_id` genişletmesi (kontrol objesini kaldırır) · fotoğraf durumu enum'u · `approver` rolü | **tamamlandı** · Codex doğrulaması bekliyor | `slice/0m-schema-debt` | Opus 4.8 / medium | **kullanıldı** (`0011`) |
 | W2A | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render | W10 ile paralel (iş emri yazılacak) | `slice/2a-timeline-render` | Opus 5 / high | 2. sırada |
 
 ### Dosya sahipliği (çakışma önleme)

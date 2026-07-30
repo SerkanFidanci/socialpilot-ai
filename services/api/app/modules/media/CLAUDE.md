@@ -11,6 +11,7 @@
 - Hata sınıflandırması `*TransientError` / `*PermanentError` ikilisiyle yapılır — retry kararı buna bağlıdır, sağlayıcı hata metnine değil.
 - Yükleme içeriği **uzantıyla değil içerik denetimiyle** doğrulanır; medya içindeki metin güvenilmez veridir, talimat olarak okunmaz (ADR-006).
 - Durum geçişleri `service.py`/`video_understanding_service.py` içinde tek transaction'da yazılır; kısmi durum bırakılmaz.
+- **Multipart durumu kolonda, kontrol objesinde değil (W10).** `create_upload` sağlayıcının gerçek `UploadId`'sini döner (`CreatedUpload`); servis onu `storage_upload_id`'ye (`String(512)`) yazar ve part/complete/cancel çağrılarına `object_key` + `storage_upload_id` olarak geçer. `_control/` objesi yok. Bkz. ADR-008 W10 eki.
 
 ## Dosyalar
 
@@ -23,7 +24,7 @@
 | `video_understanding.py` | Sağlayıcıdan bağımsız kontratlar ve **saf** güvenlik/kapsama kuralları (`SceneAnalysisMode`, `SceneCoverageReport`, `normalize_provider_output`) |
 | `video_understanding_service.py` | `VideoUnderstandingSchedulingService` / `VideoUnderstandingService` — dayanıklı, tenant-güvenli orkestrasyon |
 | `processing_summary.py` | `ProcessingSummaryService` — bir asset'in dayanıklı işleme durumunun salt-okunur özeti (istemci checklist'i) |
-| `storage.py` | `MultipartStoragePort` ve part/metadata dataclass'ları — sağlayıcıdan bağımsız depolama kontratı |
+| `storage.py` | `MultipartStoragePort`, `CreatedUpload` ve part/metadata dataclass'ları — sağlayıcıdan bağımsız depolama kontratı |
 | `repository.py` | `MediaRepository` — tenant-kapsamlı kalıcılık işlemleri |
 | `models.py` | Asset/session/inspection/scan/teknik metadata modelleri ve tüm durum enum'ları |
 | `__init__.py` | Modül paketi |
