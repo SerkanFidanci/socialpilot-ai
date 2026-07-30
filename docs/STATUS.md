@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | `5addf69` — W01→W09 tamamı merge edildi (W06/W10 hariç), origin ile senkron |
-| Alembic head | `0011_schema_debt` (tek head) |
-| Backend doğrulama | **392 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 135 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | `258ddc3`+ — W01→W12 tamamı merge edildi (yalnız W06 bekliyor), origin ile senkron |
+| Alembic head | `0012_content_timeline_render` (tek head; zincir 0001→0012 sıfırdan doğrulandı) |
+| Backend doğrulama | **497 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 162 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -114,8 +114,10 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W04](handoffs/W04-brand-catalog.md) | **Marka + katalog** | **kapandı** · merge (`5addf69`) + Codex doğrulaması: 4/5 geçti, **1 yüksek bulgu açık** (integral float parasal alanda kabul ediliyor) → **W12** | dal silindi | Opus 5 / high | `0010` |
 | [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** | **kapandı** · merge (`5addf69`) + Codex doğrulaması: 3/4 geçti (kapalıyken sıfır maliyet, sentinel sızıntısı yok, düşük kardinalite), **trace zinciri worker'a geçmiyor** → **W12** | dal silindi | Opus 4.8 / medium | — |
 | W06 | PostgreSQL 18 + Valkey imaj geçişi **+ compose'a çalıştırılabilir yedek runner'ı** (`pg_dump` taşıyan profil servisi) | **bekletildi** — Phase 2'den sonra | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
-| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** — `provider_usage` tablosu · `storage_upload_id` genişletmesi (kontrol objesini kaldırır) · fotoğraf durumu enum'u · `approver` rolü | **şimdi** | `slice/0m-schema-debt` | Opus 4.8 / medium | **SENDE** (`0011`) |
-| [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render + parametrik düzenleme veri modeli | **tamamlandı** · merge bekliyor · **PM merge'de `0012`'nin `down_revision`'ını `0011_schema_debt`'e çevirmeli** | `slice/2a-timeline-render` | Opus 4.8 / high | **kullanıldı** (`0012`, dalında `0010`'a zincirli) |
+| [W10](handoffs/W10-schema-debt.md) | **Şema borcu** (4 kalem) | **tamamlandı** · merge (`0a44f22`) · `0011` | dal silindi | Opus 4.8 / medium | kullanıldı |
+| [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
+
+| W13 | **Phase 2B** — senaryo üretimi (`script_generation` portu, katı JSON şema, doğrulanmış alan bindirmesi) | iş emri yazılacak | `slice/2b-script-generation` | Opus 5 / high | gerekiyorsa sıradaki |
 
 ### Dosya sahipliği (çakışma önleme)
 

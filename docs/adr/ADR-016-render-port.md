@@ -1,10 +1,9 @@
-# ADR-XXX: `RenderPort` ve render adapter sınırı
+# ADR-016: `RenderPort` ve render adapter sınırı
 
 **Status:** Accepted
 **Date:** 2026-07-30
 **Karar veren:** PM/mimar oturumu (K5 doğrultusunda) · yürüten: W11 (slice 2A)
 
-> **Numara PM tarafından verilecek.** Bu dosya `ADR-XXX` olarak yazıldı ve indekse eklenmedi.
 
 ## Context
 

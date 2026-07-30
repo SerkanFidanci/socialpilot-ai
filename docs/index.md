@@ -82,6 +82,7 @@ Mobil: [apps/mobile](../apps/mobile/CLAUDE.md)
 | [media-analysis.md](architecture/media-analysis.md) | Analiz hattı |
 | [brand-catalog.md](architecture/brand-catalog.md) | Marka profili, ürün kataloğu, kampanya kayıtları |
 | [observability.md](architecture/observability.md) | Ne toplanıyor, ne toplanmıyor, neden |
+| [content-render.md](architecture/content-render.md) | Timeline, doğrulama, RenderPort, parametrik düzenleme |
 | [media-security.md](architecture/media-security.md) | Medya güvenlik geçidi |
 | [ai-provider-routing.md](architecture/ai-provider-routing.md) | AI sağlayıcı yönlendirme |
 | [background-jobs.md](architecture/background-jobs.md) | Arka plan işleri ve dayanıklı event'ler |
@@ -105,7 +106,9 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer ·
 [ADR-012](adr/ADR-012-remove-n8n-from-mvp.md) n8n MVP'den çıkarıldı (ADR-003 supersede) ·
 [ADR-013](adr/ADR-013-single-server-deployment-topology.md) tek sunucu dağıtım topolojisi ·
-[ADR-014](adr/ADR-014-opentelemetry-observability-foundation.md) OpenTelemetry temeli
+[ADR-014](adr/ADR-014-opentelemetry-observability-foundation.md) OpenTelemetry temeli ·
+[ADR-015](adr/ADR-015-parametric-editing-model.md) parametrik düzenleme ·
+[ADR-016](adr/ADR-016-render-port.md) RenderPort sınırı
 
 ## Kontratlar, planlar, runbook'lar
 

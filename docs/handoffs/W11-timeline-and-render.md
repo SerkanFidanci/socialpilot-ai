@@ -83,8 +83,8 @@ services/api/app/worker/tasks.py + composition.py   (render job'ı; W07'nin scra
 services/api/migrations/versions/0012_*.py          (W10 sonrası)
 services/api/tests/unit/ + tests/integration/
 docs/architecture/content-render.md                 (yeni)
-docs/adr/ADR-XXX-parametric-editing-model.md        (yeni)
-docs/adr/ADR-XXX-render-port.md                     (yeni)
+docs/adr/ADR-015-parametric-editing-model.md        (yeni)
+docs/adr/ADR-016-render-port.md                     (yeni)
 ```
 
 ## Kabul kriterleri
@@ -129,7 +129,7 @@ Numarayı **sen seçmiyorsun.** İki dosyayı da `ADR-XXX-<konu>.md` adıyla yaz
 - **API:** `POST/GET .../content/timelines`, `.../patch`, `POST .../renders`, `GET .../renders/{id}`.
   OpenAPI + `endpoints.md` yeniden üretildi.
 - **Worker:** `content.render.drain` task'ı, `WorkerContext.content_render_service`, beat kaydı.
-- İki ADR (`ADR-XXX-render-port.md`, `ADR-XXX-parametric-editing-model.md`),
+- İki ADR (`ADR-016-render-port.md`, `ADR-015-parametric-editing-model.md`),
   `docs/architecture/content-render.md`.
 
 ### Kapsam dışı bıraktıklarım ve nedeni

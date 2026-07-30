@@ -1,10 +1,9 @@
-# ADR-XXX: Parametrik düzenleme veri modeli
+# ADR-015: Parametrik düzenleme veri modeli
 
 **Status:** Accepted
 **Date:** 2026-07-30
 **Karar veren:** PM/mimar oturumu (K4) · yürüten: W11 (slice 2A)
 
-> **Numara PM tarafından verilecek.** Bu dosya `ADR-XXX` olarak yazıldı ve indekse eklenmedi.
 
 ## Context
 

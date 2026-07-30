@@ -44,7 +44,7 @@ tabloları (→ `../operations/`), HTTP taşıma (→ `../../api/routes/content.
 - [40b-scenario-render-lifecycle.md](../../../../../docs/product/requirements/40b-scenario-render-lifecycle.md) (§18, §19) ·
   [99-external-platform-facts.md](../../../../../docs/product/requirements/99-external-platform-facts.md) (Meta AI etiketi, C2PA)
 - [ADR-004](../../../../../docs/adr/ADR-004-provider-adapter-pattern.md) · [ADR-013](../../../../../docs/adr/ADR-013-single-server-deployment-topology.md) ·
-  `ADR-XXX-render-port.md` · `ADR-XXX-parametric-editing-model.md` (numaralandırılmadı)
+  `ADR-016-render-port.md` · `ADR-015-parametric-editing-model.md` (numaralandırılmadı)
 - Mimari: [content-render.md](../../../../../docs/architecture/content-render.md) · [Phase 2 planı](../../../../../docs/plans/active/phase-2-content-generation.md) §2
 
 ## Testler

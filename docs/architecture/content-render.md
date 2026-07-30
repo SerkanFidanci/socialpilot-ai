@@ -3,7 +3,7 @@
 **Kapsam:** timeline dokümanı, render öncesi doğrulama, parametrik düzenleme ve `RenderPort`
 arkasındaki render hattı. Slice 2A (W11) ile geldi.
 **İlgili:** PRD §18, §19 → [40b](../product/requirements/40b-scenario-render-lifecycle.md) ·
-`ADR-XXX-render-port.md` · `ADR-XXX-parametric-editing-model.md` ·
+`ADR-016-render-port.md` · `ADR-015-parametric-editing-model.md` ·
 [ADR-004](../adr/ADR-004-provider-adapter-pattern.md) · [ADR-013](../adr/ADR-013-single-server-deployment-topology.md)
 
 ## Akış
