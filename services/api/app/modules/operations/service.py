@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ProblemException
+from app.core.telemetry import current_trace_carrier
 from app.modules.operations.models import (
     AuditLog,
     BackgroundJob,
@@ -31,6 +34,21 @@ from app.modules.operations.repository import OperationsRepository
 class IdempotencyResult:
     record: IdempotencyKey
     is_replay: bool
+
+
+def event_envelope(**fields: str) -> dict[str, object]:
+    """Build one outbox envelope: the event's own fields plus its W3C trace context (§26.4).
+
+    `traceparent` is a context identifier, exactly like the `correlation_id` the envelope
+    already carries — not a secret and not telemetry payload. It is what lets the worker that
+    later drains this event stay in the trace of the request that caused it, without a new
+    column. `current_trace_carrier()` returns nothing when telemetry is off, so a deployment
+    with no collector writes byte-identical payloads.
+    """
+
+    envelope: dict[str, object] = dict(fields)
+    envelope.update(current_trace_carrier())
+    return envelope
 
 
 def request_fingerprint(value: dict[str, object]) -> str:
@@ -131,7 +149,7 @@ class OperationsService:
                 event_type="media.ingest.requested",
                 aggregate_type="media_asset",
                 aggregate_id=asset_id,
-                payload={"job_id": str(job.id), "asset_id": str(asset_id)},
+                payload=event_envelope(job_id=str(job.id), asset_id=str(asset_id)),
                 correlation_id=correlation_id,
                 status=OutboxStatus.PENDING,
                 max_attempts=3,
@@ -181,7 +199,7 @@ class OperationsService:
                 event_type="media.technical_analysis.requested",
                 aggregate_type="media_asset",
                 aggregate_id=asset_id,
-                payload={"job_id": str(job.id), "asset_id": str(asset_id)},
+                payload=event_envelope(job_id=str(job.id), asset_id=str(asset_id)),
                 correlation_id=correlation_id,
                 status=OutboxStatus.PENDING,
                 max_attempts=job.max_attempts,
@@ -212,7 +230,7 @@ class OperationsService:
                 event_type="media.scene_speech.requested",
                 aggregate_type="media_asset",
                 aggregate_id=asset_id,
-                payload={"job_id": str(job.id), "asset_id": str(asset_id)},
+                payload=event_envelope(job_id=str(job.id), asset_id=str(asset_id)),
                 correlation_id=correlation_id,
                 status=OutboxStatus.PENDING,
                 max_attempts=job.max_attempts,
@@ -250,7 +268,7 @@ class OperationsService:
                 event_type="media.video_understanding.requested",
                 aggregate_type="media_asset",
                 aggregate_id=asset_id,
-                payload={"job_id": str(job.id), "asset_id": str(asset_id)},
+                payload=event_envelope(job_id=str(job.id), asset_id=str(asset_id)),
                 correlation_id=correlation_id,
                 status=OutboxStatus.PENDING,
                 max_attempts=job.max_attempts,
@@ -391,6 +409,15 @@ def calculate_video_understanding_job_timeout(settings: Settings, *, scene_count
     return timeout
 
 
+PublishScope = Callable[[Mapping[str, object]], AbstractContextManager[None]]
+"""A caller-supplied scope opened around one publish, given that event's envelope.
+
+The worker passes the telemetry scope here so the enqueued drain task continues the trace the
+envelope carries. It is a port on purpose: this module stores and forwards the envelope but
+never interprets it, so the domain keeps no knowledge of tracing.
+"""
+
+
 class OutboxDispatchService:
     """Claim, publish, and safely retry outbox events using an injected publisher port."""
 
@@ -399,7 +426,9 @@ class OutboxDispatchService:
         self._repository = OperationsRepository(session)
         self._publisher = publisher
 
-    async def dispatch_one(self) -> OutboxEvent | None:
+    async def dispatch_one(
+        self, *, publish_scope: PublishScope | None = None
+    ) -> OutboxEvent | None:
         async with self._session.begin():
             event = await self._repository.claim_next_outbox_event()
             if event is None:
@@ -409,8 +438,11 @@ class OutboxDispatchService:
             event.attempt_count += 1
             event.last_error_code = None
             event_id = event.id
+            envelope: Mapping[str, object] = dict(event.payload)
+        scope = publish_scope(envelope) if publish_scope is not None else nullcontext()
         try:
-            await self._publisher.publish(event)
+            with scope:
+                await self._publisher.publish(event)
         except TransientPublishError as error:
             return await self._record_failure(event_id, error.code, transient=True)
         except PublishError as error:

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry import context as otel_context
+from opentelemetry import trace
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -257,16 +259,138 @@ def test_metric_labels_are_low_cardinality() -> None:
             assert forbidden.isdisjoint(labels), labels
 
 
+# -------------------------------------------------------- durable envelope trace carrier
+
+
+def _memory_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
+    memory = InMemorySpanExporter()
+    provider = TracerProvider(resource=Resource.create({"service.name": "t"}))
+    provider.add_span_processor(SimpleSpanProcessor(memory))
+    return provider, memory
+
+
+def test_carrier_is_empty_when_no_span_is_recording() -> None:
+    """Telemetry off means the envelope is written exactly as it was before this feature."""
+
+    assert tel.current_trace_carrier() == {}
+
+
+def test_envelope_carries_the_current_trace_and_the_worker_rejoins_it() -> None:
+    """The whole point: an event written under a request is drained inside that same trace."""
+
+    provider, memory = _memory_provider()
+    tracer = provider.get_tracer("t")
+
+    with tracer.start_as_current_span("POST /v1/.../complete") as request_span:
+        carrier = tel.current_trace_carrier()
+        request_trace_id = request_span.get_span_context().trace_id
+
+    assert tel.TRACEPARENT_FIELD in carrier
+    assert f"{request_trace_id:032x}" in carrier[tel.TRACEPARENT_FIELD]
+
+    # A worker process, later, with nothing but the durable envelope.
+    envelope: dict[str, object] = {"job_id": "j", "asset_id": "a", **carrier}
+    with tel.continue_trace(envelope):
+        with tracer.start_as_current_span("operations.outbox.dispatch") as worker_span:
+            assert worker_span.get_span_context().trace_id == request_trace_id
+    provider.force_flush()
+
+    drained = [s for s in memory.get_finished_spans() if s.name == "operations.outbox.dispatch"]
+    assert drained and drained[0].context.trace_id == request_trace_id
+
+
+def test_envelope_carries_trace_context_and_nothing_else() -> None:
+    """`traceparent` is an identifier; no attribute, prompt, URL or baggage may ride along."""
+
+    from opentelemetry import baggage
+
+    provider, _ = _memory_provider()
+    token = otel_context.attach(baggage.set_baggage("presigned_url", "https://minio/x?sig=SECRET"))
+    try:
+        with provider.get_tracer("t").start_as_current_span("GET"):
+            carrier = tel.current_trace_carrier()
+    finally:
+        otel_context.detach(token)
+
+    assert set(carrier) <= {tel.TRACEPARENT_FIELD, tel.TRACESTATE_FIELD}
+    assert "SECRET" not in repr(carrier)
+
+
+@pytest.mark.parametrize(
+    "traceparent",
+    [
+        "not-a-traceparent",
+        "00-00000000000000000000000000000000-0123456789abcdef-01",  # all-zero trace id
+        "00-0123456789abcdef0123456789abcdef-0000000000000000-01",  # all-zero span id
+        "ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01",  # forbidden version
+        "00-0123456789ABCDEF0123456789ABCDEF-0123456789abcdef-01",  # uppercase hex
+        "00-0123456789abcdef0123456789abcdef-0123456789abcdef",  # truncated
+        "",
+        12345,
+    ],
+)
+def test_a_hostile_or_broken_traceparent_never_reaches_the_tracer(traceparent: object) -> None:
+    """Envelopes are durable data: a corrupt or planted value must start a new trace, not join."""
+
+    provider, _ = _memory_provider()
+    assert tel.trace_carrier_from_envelope({tel.TRACEPARENT_FIELD: traceparent}) is None
+    with tel.continue_trace({tel.TRACEPARENT_FIELD: traceparent}):
+        # Nothing was attached, so the drain starts its own trace instead of joining one.
+        assert not trace.get_current_span().get_span_context().is_valid
+        with provider.get_tracer("t").start_as_current_span("drain") as span:
+            assert span.get_span_context().trace_id != 0x0123456789ABCDEF0123456789ABCDEF
+
+
+def test_tracestate_rides_along_only_when_bounded() -> None:
+    valid = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    carrier = tel.trace_carrier_from_envelope(
+        {tel.TRACEPARENT_FIELD: valid, tel.TRACESTATE_FIELD: "vendor=1"}
+    )
+    assert carrier == {tel.TRACEPARENT_FIELD: valid, tel.TRACESTATE_FIELD: "vendor=1"}
+    oversized = tel.trace_carrier_from_envelope(
+        {tel.TRACEPARENT_FIELD: valid, tel.TRACESTATE_FIELD: "x" * 4096}
+    )
+    assert oversized == {tel.TRACEPARENT_FIELD: valid}
+
+
+def test_continue_trace_is_inert_for_an_envelope_without_trace_context() -> None:
+    """The pre-telemetry payload shape still flows through unchanged."""
+
+    before = otel_context.get_current()
+    with tel.continue_trace({"job_id": "j", "asset_id": "a"}):
+        assert otel_context.get_current() is before
+
+
 # ----------------------------------------------------------------- domain stays clean
 
+# Domain code may read the opaque envelope carrier — `traceparent` is request context, stored
+# next to `correlation_id` (§26.4). It may not instrument: no OpenTelemetry import, no tracer,
+# no meter, no span, no metric. This is the single permitted line.
+PERMITTED_TELEMETRY_LINE = "from app.core.telemetry import current_trace_carrier"
+INSTRUMENTATION_MARKERS = (
+    "opentelemetry",
+    "get_tracer",
+    "get_meter",
+    "start_span",
+    "start_as_current_span",
+    "create_histogram",
+    "create_counter",
+    "create_observable",
+    "set_attribute",
+)
 
-def test_no_domain_module_imports_telemetry() -> None:
-    """Instrumentation lives in core/infrastructure; domain code must not call telemetry."""
 
+def test_domain_modules_read_the_carrier_but_never_instrument() -> None:
     modules_root = Path(__file__).resolve().parents[2] / "app" / "modules"
-    offenders = [
-        path.relative_to(modules_root).as_posix()
-        for path in modules_root.rglob("*.py")
-        if "telemetry" in path.read_text(encoding="utf-8")
-    ]
-    assert offenders == []
+    instrumenting: list[str] = []
+    unexpected_telemetry: list[str] = []
+    for path in modules_root.rglob("*.py"):
+        name = path.relative_to(modules_root).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if any(marker in source for marker in INSTRUMENTATION_MARKERS):
+            instrumenting.append(name)
+        for line in source.splitlines():
+            if "app.core.telemetry" in line and line.strip() != PERMITTED_TELEMETRY_LINE:
+                unexpected_telemetry.append(f"{name}: {line.strip()}")
+    assert instrumenting == []
+    assert unexpected_telemetry == []

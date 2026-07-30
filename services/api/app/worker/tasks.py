@@ -12,6 +12,7 @@ from celery.signals import (  # type: ignore[import-untyped]
     worker_process_shutdown,
 )
 
+from app.core.telemetry import continue_trace
 from app.infrastructure.celery_app import celery_app
 from app.worker.composition import (
     WorkerContext,
@@ -67,7 +68,12 @@ async def _dispatch_outbox(context: WorkerContext) -> dict[str, object]:
     processed = 0
     for _ in range(context.settings.worker_drain_batch_size):
         async with context.database.session_factory() as session:
-            event = await context.outbox_dispatcher(session).dispatch_one()
+            # The envelope carries the `traceparent` of the request that wrote the event, so
+            # publishing inside that context puts the drain task this wakes into the same trace
+            # instead of starting a second island at the beat tick. Inert when telemetry is off.
+            event = await context.outbox_dispatcher(session).dispatch_one(
+                publish_scope=continue_trace
+            )
         if event is None:
             break
         processed += 1

@@ -12,11 +12,15 @@ from uuid import UUID
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry import trace
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
+from app.core.telemetry import TRACEPARENT_FIELD, continue_trace
 from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.infrastructure.storage.fake import FakeMultipartStorage
 from app.main import create_app
@@ -394,3 +398,123 @@ def test_stale_running_jobs_finalize_attempts_and_retry_or_dead_letter() -> None
     assert retry_status == JobStatus.FAILED and dead_status == JobStatus.DEAD
     assert all(attempt.status == JobAttemptStatus.FAILED for attempt in attempts)
     assert all(attempt.error_code == "JOB_TIMEOUT" for attempt in attempts)
+
+
+# ------------------------------------------------------- durable trace continuity (W12)
+
+
+def telemetry_config() -> Settings:
+    settings = config()
+    return settings.model_copy(update={"otel_exporter_otlp_endpoint": "http://collector:4318"})
+
+
+class TraceRecordingPublisher:
+    """A publisher that records nothing but the trace it was called in."""
+
+    def __init__(self) -> None:
+        self.trace_ids: list[int] = []
+
+    async def publish(self, event: OutboxEvent) -> None:
+        self.trace_ids.append(trace.get_current_span().get_span_context().trace_id)
+
+
+def complete_one_upload(client: TestClient, owner: dict[str, str], name: str) -> None:
+    business_id = client.post(
+        "/v1/businesses", headers=owner, json={"name": name, "timezone": "UTC"}
+    ).json()["id"]
+    upload = create_upload(client, business_id, owner)
+    mark_uploaded(client, str(upload["id"]))
+    assert (
+        client.post(
+            complete_path(business_id, str(upload["id"])),
+            headers={**owner, "Idempotency-Key": f"trace-{name}"},
+            json=complete_body(),
+        ).status_code
+        == 200
+    )
+
+
+async def outbox_payload() -> dict[str, object]:
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    try:
+        async with engine.connect() as connection:
+            row = await connection.scalar(text("SELECT payload FROM outbox_events"))
+            return cast(dict[str, object], row)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_worker_continues_the_trace_of_the_request_that_wrote_the_event() -> None:
+    """API and worker stop being two islands: the durable envelope is what carries the link.
+
+    Work crosses to the worker through the outbox and a Beat tick, not a direct enqueue, so
+    in-process propagation cannot reach it. The envelope carries `traceparent` (§26.4) and the
+    drain re-attaches it before publishing, which is what puts the enqueued task in the trace
+    of the request that caused it.
+    """
+
+    memory = InMemorySpanExporter()
+    app = create_app(
+        telemetry_config(),
+        telemetry_span_exporter=memory,
+        telemetry_metric_reader=InMemoryMetricReader(),
+    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        complete_one_upload(client, auth("trace-owner", "trace-owner@example.com"), "Traced")
+        app.state.telemetry.tracer_provider.force_flush()
+        request_spans = [s for s in memory.get_finished_spans() if s.name.endswith("/complete")]
+        assert request_spans, [s.name for s in memory.get_finished_spans()]
+        request_trace_id = request_spans[0].context.trace_id
+
+    payload = asyncio.run(outbox_payload())
+    assert TRACEPARENT_FIELD in payload, payload
+    assert f"{request_trace_id:032x}" in str(payload[TRACEPARENT_FIELD])
+    # The envelope gained trace context and nothing else.
+    assert set(payload) == {"job_id", "asset_id", TRACEPARENT_FIELD}
+
+    async def dispatch() -> list[int]:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        try:
+            publisher = TraceRecordingPublisher()
+            async with factory() as session:
+                dispatched = await OutboxDispatchService(session, publisher).dispatch_one(
+                    publish_scope=continue_trace
+                )
+                assert dispatched is not None
+            return publisher.trace_ids
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(dispatch()) == [request_trace_id]
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_telemetry_disabled_writes_the_same_envelope_it_always_wrote() -> None:
+    """W05's zero-cost promise covers the envelope too: no endpoint, no field, no side effect."""
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        complete_one_upload(client, auth("plain-owner", "plain-owner@example.com"), "Plain")
+
+    payload = asyncio.run(outbox_payload())
+    assert set(payload) == {"job_id", "asset_id"}
+
+    async def dispatch() -> list[int]:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        try:
+            publisher = TraceRecordingPublisher()
+            async with factory() as session:
+                assert (
+                    await OutboxDispatchService(session, publisher).dispatch_one(
+                        publish_scope=continue_trace
+                    )
+                    is not None
+                )
+            return publisher.trace_ids
+        finally:
+            await engine.dispose()
+
+    # No provider, no span: the invalid span context reports trace id 0.
+    assert asyncio.run(dispatch()) == [0]

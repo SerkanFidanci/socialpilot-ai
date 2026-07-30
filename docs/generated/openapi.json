@@ -688,6 +688,7 @@
           "discount_amount_minor": {
             "anyOf": [
               {
+                "maximum": 1000000000000.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -830,6 +831,8 @@
           "discount_amount_minor": {
             "anyOf": [
               {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -1345,7 +1348,7 @@
       },
       "PricePayload": {
         "additionalProperties": false,
-        "description": "Money crosses the wire as an integer count of minor units, never as a decimal.",
+        "description": "Money crosses the wire as an integer count of minor units, never as a decimal.\n\n`MinorUnits` is strict on purpose: a JSON float is rejected even when its value is integral,\nso a client that computes an amount in floating point fails on its first request instead of\non the one value that does not round cleanly (see `core/money.py`).",
         "properties": {
           "currency": {
             "maxLength": 3,
@@ -1354,6 +1357,7 @@
             "type": "string"
           },
           "price_minor": {
+            "maximum": 1000000000000.0,
             "minimum": 0.0,
             "title": "Price Minor",
             "type": "integer"
@@ -1872,6 +1876,8 @@
           "price_minor": {
             "anyOf": [
               {
+                "maximum": 1000000000000.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {

@@ -60,21 +60,48 @@ is untouched. The bridge is two-directional:
   onto the server span as the `correlation_id` attribute (read from the request header, so it is
   present for the client-supplied case).
 
-### Worker jobs and trace continuity — a deliberate break
+### Worker jobs and trace continuity — the durable carrier
 
-A job started by an API request does **not** currently appear in the same trace as that request,
-and this is by design, not a bug:
+Work does not cross to the worker through a direct enqueue. Domain writes go to a transactional
+outbox and durable `jobs` rows; Celery **Beat** fires drain tasks on a timer, and each drain
+**self-selects** an eligible job from PostgreSQL rather than trusting a message payload id
+(worker invariant, [ADR-005](../adr/ADR-005-transactional-outbox.md)). In-process propagation
+therefore cannot reach the worker: there is no edge to propagate across.
 
-- Domain writes go to a transactional outbox and durable `jobs` rows. Celery **Beat** fires
-  drain tasks on a timer; each drain **self-selects** an eligible job from PostgreSQL and never
-  trusts a message payload id (worker invariant, [ADR-005](../adr/ADR-005-transactional-outbox.md)).
-- So there is no direct API→worker enqueue edge to carry trace context across. Celery
-  instrumentation still links **beat → drain task → DB/redis spans**, but that trace originates
-  at the beat tick, not the originating request.
+The link is carried by the **event envelope** instead. The envelope already transports
+`correlation_id` (PRD §26.4); it now also transports the W3C
+[`traceparent`](https://www.w3.org/TR/trace-context/) — and `tracestate` when one exists — of
+whatever caused the event. This needed **no schema change**: the envelope is `payload_json`.
 
-To join the full chain, the originating `traceparent` would have to be persisted on the durable
-job/outbox row and restored when the drain claims it. That is a **schema change** (a new column)
-and is out of scope for this slice (no migration slot). Recorded as follow-up in the ADR.
+| Step | What happens | Where |
+|---|---|---|
+| API request writes an event | `current_trace_carrier()` renders the active span as `traceparent`; `event_envelope()` stores it beside `job_id`/`asset_id` | `core/telemetry.py`, `modules/operations/service.py` |
+| Beat tick drains the outbox | `continue_trace(envelope)` validates the value and re-attaches it as the parent context around the publish | `worker/tasks.py`, `modules/operations/service.py` |
+| Publisher enqueues the drain task | Celery instrumentation injects the *attached* context into the message, so the drain task span is a child of the originating request | `infrastructure/celery_publisher.py` |
+| The drain writes the next event | It runs inside that trace, so `event_envelope()` stamps the same trace onto the successor event and the whole ingest → analysis → understanding pipeline stays in one trace | `modules/media/*` |
+
+Guarantees this has to keep, each pinned by a test:
+
+- **Off means off.** With no endpoint there is no recording span, the carrier is empty, and the
+  envelope is byte-identical to the pre-telemetry payload.
+- **The envelope is not a telemetry sink.** Only `traceparent`/`tracestate` are written. The W3C
+  propagator is used directly rather than the configured global one, so baggage cannot ride
+  along, and no attribute, prompt, or URL is ever placed in an envelope.
+- **A durable value is untrusted input.** A corrupt, truncated, or planted `traceparent` — wrong
+  version, all-zero trace or span id, uppercase hex, non-string — is dropped, and the consumer
+  starts a fresh trace instead of joining or poisoning someone else's.
+
+#### Where the chain still stops
+
+- **The wake-up is the causal link, not the record.** A drain woken by event A processes
+  *whatever* eligible job it finds, which under concurrency may be job B (that is the invariant
+  that makes duplicate messages harmless). The trace therefore answers "this request's publish
+  woke this drain", not "this request's job ran here". `correlation_id` remains the exact
+  per-record link, and it is on every span and log line.
+- **Recovery starts a new trace.** `operations.recovery.drain` reclaims timed-out `jobs` rows,
+  which carry no envelope; a recovered job's retry begins at the beat tick.
+- **An idle tick has no parent.** A drain that finds nothing has no originating request, so its
+  trace starts at the tick. That is correct — nothing caused it.
 
 ## Metric
 
@@ -141,5 +168,6 @@ services stay portable and testable; telemetry is a cross-cutting concern applie
 - **Sentry** — a separate adapter/slice.
 - Adding OTLP variables to `compose.yaml`/`.env.example` — those files belong to other work
   orders (W06 / W01); the variables are documented here in the meantime.
-- Persisting `traceparent` on durable jobs for full API→worker trace continuity — needs a
-  migration; see the trace section above.
+- Carrying trace context on durable **`jobs`** rows. Only the event envelope carries it today,
+  which is what restores the API→worker chain without a migration; a job recovered after a
+  timeout still starts a new trace (see above).
