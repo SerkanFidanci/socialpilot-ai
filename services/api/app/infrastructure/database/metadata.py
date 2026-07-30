@@ -14,12 +14,19 @@ from __future__ import annotations
 from sqlalchemy import MetaData
 from sqlalchemy.orm import configure_mappers
 
+from app.modules.brands import models as brand_models
 from app.modules.businesses import models as business_models
 from app.modules.identity import models as identity_models
 from app.modules.media import models as media_models
 from app.modules.operations import models as operations_models
 
-MODEL_MODULES = (business_models, identity_models, media_models, operations_models)
+MODEL_MODULES = (
+    brand_models,
+    business_models,
+    identity_models,
+    media_models,
+    operations_models,
+)
 
 metadata: MetaData = identity_models.Base.metadata
 

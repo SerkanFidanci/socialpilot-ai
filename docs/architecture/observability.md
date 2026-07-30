@@ -1,0 +1,145 @@
+# Observability — OpenTelemetry Trace + Metric
+
+This is the implementation reality behind PRD §37 ([95-observability.md](../product/requirements/95-observability.md)).
+The requirement lists log fields, metrics, the trace chain, and alerts; this document records
+what the code actually collects, what it deliberately does **not** collect and why, how to turn
+it on, and the redaction guarantees. Alerting and the collector/dashboards are out of scope
+(see [Not in scope](#not-in-scope)).
+
+Source: [`app/core/telemetry.py`](../../services/api/app/core/telemetry.py) ·
+ADR: [ADR-014](../adr/ADR-014-opentelemetry-observability-foundation.md).
+
+## Default OFF
+
+Telemetry is inert unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. With no endpoint, the setup
+functions return `None`: no OTLP exporter is constructed, no `BatchSpanProcessor` thread and no
+`PeriodicExportingMetricReader` thread start, no global tracer/meter provider is installed, and
+the OpenTelemetry API stays on its built-in no-op providers. The `add_trace_context` log
+processor still runs but sees the no-op `INVALID_SPAN` and adds nothing.
+
+This is a requirement, not a convenience:
+
+- **Single server (ADR-013).** The idle CPU/RAM budget is tight; telemetry must cost zero when
+  no one is collecting it.
+- **CI stays green with no collector or credentials.** `make verify` never needs an endpoint.
+
+When the endpoint *is* set, the exporter uses the **OTLP http/protobuf** transport to a single
+collector endpoint. gRPC is deliberately avoided so `grpcio` never enters the image.
+
+### Settings
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` (OFF) | Collector base URL, e.g. `http://otel-collector:4318`. Signal paths (`/v1/traces`, `/v1/metrics`) are appended. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `""` | Optional OTLP auth, `key=value,key2=value2`. Held as a secret; passed to the exporter, never placed on a span. |
+| `OTEL_SERVICE_NAME` | `service_name` | `service.name` resource value. |
+| `OTEL_METRIC_EXPORT_INTERVAL_MILLIS` | `60000` | Periodic metric export interval. |
+
+## Trace
+
+When enabled, these are auto-instrumented, giving the PRD §37.3 chain
+`mobile request → API → DB → queue → worker → provider → storage`:
+
+| Layer | Instrumentation | Where wired |
+|---|---|---|
+| FastAPI (server spans) | `FastAPIInstrumentor` | API — `main.create_app` |
+| SQLAlchemy (DB spans) | `SQLAlchemyInstrumentor` on the async engine's `sync_engine` | API lifespan + worker composition |
+| httpx (provider/storage client spans) | `HTTPXClientInstrumentor` | API + worker |
+| redis | `RedisInstrumentor` | API + worker |
+| Celery (task spans) | `CeleryInstrumentor` | worker composition (`start_worker_process`, after fork) |
+
+### Correlation ID ↔ trace
+
+The existing `X-Correlation-ID` mechanism ([`correlation.py`](../../services/api/app/core/correlation.py))
+is untouched. The bridge is two-directional:
+
+- **trace → log:** the `add_trace_context` structlog processor stamps `trace_id` and `span_id`
+  (hex) onto every log event that occurs inside a span, next to the existing `correlation_id`.
+  From any log line you can pivot to its trace and back.
+- **correlation → trace:** the FastAPI server-request hook copies the request correlation id
+  onto the server span as the `correlation_id` attribute (read from the request header, so it is
+  present for the client-supplied case).
+
+### Worker jobs and trace continuity — a deliberate break
+
+A job started by an API request does **not** currently appear in the same trace as that request,
+and this is by design, not a bug:
+
+- Domain writes go to a transactional outbox and durable `jobs` rows. Celery **Beat** fires
+  drain tasks on a timer; each drain **self-selects** an eligible job from PostgreSQL and never
+  trusts a message payload id (worker invariant, [ADR-005](../adr/ADR-005-transactional-outbox.md)).
+- So there is no direct API→worker enqueue edge to carry trace context across. Celery
+  instrumentation still links **beat → drain task → DB/redis spans**, but that trace originates
+  at the beat tick, not the originating request.
+
+To join the full chain, the originating `traceparent` would have to be persisted on the durable
+job/outbox row and restored when the drain claims it. That is a **schema change** (a new column)
+and is out of scope for this slice (no migration slot). Recorded as follow-up in the ADR.
+
+## Metric
+
+Produced when enabled. The instrument is created once; adding a metric in a later module is a
+one-line `meter.create_*` call plus a `record`.
+
+| Metric | Kind | Source / measurement point | Labels (all low-cardinality) |
+|---|---|---|---|
+| `http.server.duration` | histogram | FastAPI auto-instrumentation — **API latency**, and its `http.status_code` attribute is the **API error-rate** source | method, templated route, status code |
+| `http.client.request.duration` | histogram | httpx auto-instrumentation — provider/storage client latency | method, status code |
+| `job.duration` | histogram | worker: Celery `task_prerun`/`task_postrun` signals timed in `telemetry._install_job_metrics` | `task` (the ~6 drain task names), `status` |
+| `queue.depth` | observable gauge | worker: broker `LLEN` of the routed queue, read best-effort in the gauge callback | `queue` (`default` today) |
+
+Note on queue depth: only the `default` queue is routed today; the per-queue split (§38.2) has
+not landed, so the gauge reads that one list. When routing lands, the callback extends to the
+queue set — still a bounded label.
+
+### Cardinality rule
+
+Metric labels must stay low-cardinality. **Asset id, job id, upload id, correlation id, and
+user id are never metric labels** (they may be span attributes). `job.duration` is labelled by
+task *name*, not task id. A test (`test_metric_labels_are_low_cardinality`) asserts these keys
+never appear on any emitted metric.
+
+## Redaction — what is NOT collected, and why
+
+Span attributes and metric labels are collected automatically, so they leak more easily than a
+hand-written log line. The following never leave the process:
+
+- **Tokens, credentials, secrets** — any attribute whose key contains `authorization`,
+  `token`, `secret`, `credential`, `password`, `cookie`, `api_key`, or `x-amz-` is replaced with
+  `[REDACTED]`.
+- **Signed object-storage URLs** — httpx records the full request URL, which for storage is a
+  *presigned* URL whose query string is a valid credential. Every URL-valued attribute is
+  reduced to `scheme://host/path`: the query, fragment, and userinfo are dropped. Bare
+  query-string attributes (`url.query`, `http.target`) are dropped whole.
+- **Raw prompts, raw provider responses, media-extracted text** — these live only in domain
+  code, which is never instrumented (see below), so they are never placed on a span.
+- **High-cardinality ids as metric labels** — see the cardinality rule above.
+- **`user_id`** — masked if ever needed; **`business_id`** is allowed.
+
+Two layers enforce URL/secret redaction:
+
+1. the httpx request/response hooks strip the URL **while the span is still recording**, so the
+   signature never sits on a span even briefly;
+2. `_RedactingSpanExporter` is the guaranteed net on the export path — it scrubs **every** span
+   from **every** instrumentation right before it is handed to the OTLP exporter, and a span it
+   cannot scrub is dropped rather than exported.
+
+Tests `test_redacting_exporter_scrubs_presigned_url_and_token` and `test_httpx_hook_redacts_recording_span`
+pin this with a sentinel signature and token (the W01 sentinel pattern).
+
+## Instrumentation boundary
+
+Instrumentation is wired **only in `core` and the composition roots** (`app/core/telemetry.py`,
+`app/main.py`, `app/worker/composition.py`). No `app/modules/**` domain file imports telemetry
+or emits a span/metric; a test (`test_no_domain_module_imports_telemetry`) enforces this. Domain
+services stay portable and testable; telemetry is a cross-cutting concern applied from the edges.
+
+## Not in scope
+
+- The **collector, Prometheus/Grafana/Loki, dashboards, and alerts** (PRD §37.4). The exporter
+  talks to one endpoint; standing that endpoint up is separate operations work.
+- **Sentry** — a separate adapter/slice.
+- Adding OTLP variables to `compose.yaml`/`.env.example` — those files belong to other work
+  orders (W06 / W01); the variables are documented here in the meantime.
+- Persisting `traceparent` on durable jobs for full API→worker trace continuity — needs a
+  migration; see the trace section above.

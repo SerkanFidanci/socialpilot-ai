@@ -10,6 +10,8 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
+from opentelemetry.sdk.metrics.export import MetricReader
+from opentelemetry.sdk.trace.export import SpanExporter
 from starlette.responses import Response
 
 from app.api.routes import register_routes
@@ -23,6 +25,11 @@ from app.core.errors import (
 )
 from app.core.logging import configure_logging
 from app.core.protocols import DatabaseClient, RedisClient
+from app.core.telemetry import (
+    TelemetryHandle,
+    instrument_database,
+    setup_api_telemetry,
+)
 from app.infrastructure.database import create_database
 from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.infrastructure.media.fake_ingest import FakeContentInspector, FakeMalwareScanner
@@ -87,6 +94,8 @@ def create_app(
     content_inspector_factory: ContentInspectorFactory = FakeContentInspector,
     malware_scanner_factory: MalwareScannerFactory = FakeMalwareScanner,
     include_test_routes: bool = False,
+    telemetry_span_exporter: SpanExporter | None = None,
+    telemetry_metric_reader: MetricReader | None = None,
 ) -> FastAPI:
     """Build an app with injectable infrastructure for deterministic tests."""
 
@@ -97,6 +106,9 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         database = database_factory(resolved_settings)
         redis_client = redis_factory(resolved_settings)
+        # The SQLAlchemy engine only exists now, so bind its instrumentation here. No-op when
+        # telemetry is disabled (handle is None).
+        instrument_database(application.state.telemetry, database)
         application.state.database = database
         application.state.redis = redis_client
         application.state.settings = resolved_settings
@@ -110,6 +122,8 @@ def create_app(
         finally:
             await redis_client.aclose()
             await database.dispose()
+            if application.state.telemetry is not None:
+                application.state.telemetry.shutdown()
             logger.info("application_stopped", environment=resolved_settings.app_env)
 
     application = FastAPI(
@@ -123,6 +137,17 @@ def create_app(
     application.add_middleware(CorrelationIdMiddleware)
     configure_openapi(application)
     register_routes(application)
+
+    # Default OFF: returns None unless OTEL_EXPORTER_OTLP_ENDPOINT is set, in which case it
+    # instruments FastAPI/httpx/redis. Stored so the lifespan can instrument the DB engine and
+    # tear everything down. The SQLAlchemy engine is bound later, once it exists.
+    telemetry_handle: TelemetryHandle | None = setup_api_telemetry(
+        application,
+        resolved_settings,
+        span_exporter=telemetry_span_exporter,
+        metric_reader=telemetry_metric_reader,
+    )
+    application.state.telemetry = telemetry_handle
 
     if include_test_routes:
 

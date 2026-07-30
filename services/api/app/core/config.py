@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     service_name: str = Field(default="socialpilot-api", min_length=1, max_length=64)
     log_level: str = Field(default="INFO", min_length=1, max_length=16)
+    # OpenTelemetry (W05, ADR-014). Default OFF: an empty endpoint means no exporter, no
+    # background thread, no spans/metrics — the single-server idle cost stays zero (ADR-013)
+    # and CI stays green without a collector. Setting the endpoint turns the whole stack on.
+    otel_exporter_otlp_endpoint: str = Field(default="", max_length=512)
+    # Optional OTLP auth as a comma-separated header list ("key=value,key2=value2"). Held as a
+    # secret so it is never echoed; it is handed to the exporter and never placed on a span.
+    otel_exporter_otlp_headers: SecretStr = SecretStr("")
+    otel_service_name: str = Field(default="", max_length=128)
+    otel_metric_export_interval_millis: int = Field(default=60_000, ge=1_000, le=600_000)
     database_url: str = Field(min_length=1)
     postgres_port: int = Field(default=5432, ge=1, le=65535)
     database_pool_size: int = Field(default=5, ge=1, le=100)
@@ -199,6 +208,24 @@ class Settings(BaseSettings):
             raise ValueError("WORKER_TEMP_ROOT must be an absolute path")
         return value
 
+    @field_validator("otel_exporter_otlp_endpoint")
+    @classmethod
+    def validate_otel_endpoint(cls, value: str) -> str:
+        """Accept an http(s) OTLP base endpoint; the signal paths are appended by the exporter."""
+
+        candidate = value.strip().rstrip("/")
+        if not candidate:
+            return ""
+        parsed = urlsplit(candidate)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without a query")
+        return candidate
+
     @field_validator("s3_endpoint_url", "s3_presign_endpoint_url")
     @classmethod
     def validate_s3_endpoint(cls, value: str) -> str:
@@ -337,6 +364,18 @@ class Settings(BaseSettings):
                 "video-understanding frame limits exceed the worker temporary-disk budget"
             )
         return self
+
+    @property
+    def telemetry_enabled(self) -> bool:
+        """True when an OTLP endpoint is configured; all telemetry setup keys off this flag."""
+
+        return bool(self.otel_exporter_otlp_endpoint)
+
+    @property
+    def otel_resource_service_name(self) -> str:
+        """The ``service.name`` resource value, defaulting to the app service name."""
+
+        return self.otel_service_name or self.service_name
 
     @property
     def video_understanding_supported_scene_count(self) -> int:

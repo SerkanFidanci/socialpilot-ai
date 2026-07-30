@@ -80,6 +80,8 @@ Mobil: [apps/mobile](../apps/mobile/CLAUDE.md)
 | [media-upload.md](architecture/media-upload.md) | Doğrudan object storage yükleme |
 | [media-ingest-pipeline.md](architecture/media-ingest-pipeline.md) | Ingest hattı |
 | [media-analysis.md](architecture/media-analysis.md) | Analiz hattı |
+| [brand-catalog.md](architecture/brand-catalog.md) | Marka profili, ürün kataloğu, kampanya kayıtları |
+| [observability.md](architecture/observability.md) | Ne toplanıyor, ne toplanmıyor, neden |
 | [media-security.md](architecture/media-security.md) | Medya güvenlik geçidi |
 | [ai-provider-routing.md](architecture/ai-provider-routing.md) | AI sağlayıcı yönlendirme |
 | [background-jobs.md](architecture/background-jobs.md) | Arka plan işleri ve dayanıklı event'ler |
@@ -102,7 +104,8 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-010](adr/ADR-010-valkey-runtime-evaluation.md) Valkey değerlendirmesi (önerildi) ·
 [ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer ·
 [ADR-012](adr/ADR-012-remove-n8n-from-mvp.md) n8n MVP'den çıkarıldı (ADR-003 supersede) ·
-[ADR-013](adr/ADR-013-single-server-deployment-topology.md) tek sunucu dağıtım topolojisi
+[ADR-013](adr/ADR-013-single-server-deployment-topology.md) tek sunucu dağıtım topolojisi ·
+[ADR-014](adr/ADR-014-opentelemetry-observability-foundation.md) OpenTelemetry temeli
 
 ## Kontratlar, planlar, runbook'lar
 

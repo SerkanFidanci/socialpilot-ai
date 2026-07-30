@@ -26,6 +26,7 @@ resolve an ADR identifier.
 | [ADR-011](ADR-011-real-media-materializer.md) | Real Media Materializer and `.mov`/HEVC Analysis Gate | Accepted | 2026-07-30 |
 | [ADR-012](ADR-012-remove-n8n-from-mvp.md) | n8n'i MVP Kapsamından Çıkarma (ADR-003'ün yerini alır) | Accepted | 2026-07-30 |
 | [ADR-013](ADR-013-single-server-deployment-topology.md) | Tek Sunucu Dağıtım Topolojisi | Accepted | 2026-07-30 |
+| [ADR-014](ADR-014-opentelemetry-observability-foundation.md) | OpenTelemetry Observability Foundation | Accepted | 2026-07-30 |
 
 Paralel work order'lar bu katalogu ve router'i degistirmeden daha yuksek numarali ADR
 dosyalari ekleyebilir; merge eden bu dizini tarar ve satirlari merge commit'inde ekler. Var

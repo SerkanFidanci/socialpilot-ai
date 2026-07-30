@@ -27,6 +27,7 @@ TAG_TITLES = {
     "health": "health — canlılık ve bağımlılık hazırlığı",
     "identity": "identity — kimlik",
     "businesses": "businesses — işletme ve üyelik",
+    "brands": "brands — marka, katalog, kampanya",
     "media": "media — yükleme control-plane'i ve analiz okuması",
 }
 
