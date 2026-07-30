@@ -100,7 +100,8 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-008](adr/ADR-008-s3-compatible-storage-adapter.md) S3-uyumlu storage adapter ·
 [ADR-009](adr/ADR-009-dependency-and-runtime-baseline.md) bağımlılık ve runtime temeli ·
 [ADR-010](adr/ADR-010-valkey-runtime-evaluation.md) Valkey değerlendirmesi (önerildi) ·
-[ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer
+[ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer ·
+[ADR-012](adr/ADR-012-remove-n8n-from-mvp.md) n8n MVP'den çıkarıldı (ADR-003 supersede)
 
 ## Kontratlar, planlar, runbook'lar
 

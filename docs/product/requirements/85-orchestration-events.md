@@ -1,5 +1,7 @@
 **n8n sınırı ve event-driven tasarım** · PRD bölümleri: §26, §27
 
+> **Taşıyıcı değişti — [ADR-012](../../adr/ADR-012-remove-n8n-from-mvp.md).** n8n MVP kapsamından çıkarıldı; §26'nın workflow kataloğu iptal değil, Celery Beat + kuyruklar + outbox tüketicileri olarak backend'de karşılığını buluyor. §27'nin event-driven tasarımı (outbox, idempotency, event zarfı) **aynen geçerli**.
+
 > Bu dosyadaki bölümler `docs/product/product-requirements.md`'den **birebir** taşındı. Metin değiştirilmez, bölüm numaraları korunur.
 > İndeks: [product-requirements.md](../product-requirements.md) · Router: [docs/index.md](../../index.md)
 

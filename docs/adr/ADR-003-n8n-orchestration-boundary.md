@@ -1,5 +1,7 @@
 # ADR-003: n8n Orchestration Boundary
 
+> **SUPERSEDED by [ADR-012](ADR-012-remove-n8n-from-mvp.md) (2026-07-30).** n8n MVP kapsamından çıkarıldı; zamanlama ve bildirim backend'in kendi işi. Bu belge tarihsel kayıt olarak korunuyor — sınır mantığı hâlâ doğru, taşıyıcı değişti.
+
 **Status:** Accepted for Phase 0 planning
 **Date:** 2026-07-27
 

@@ -42,9 +42,9 @@ Bunu karıştırmamak önemli:
 
 | # | Konu | Durum |
 |---|---|---|
-| P1 | **`main` origin'e push edilmemiş** (Sprint 0 itibarıyla ~19 commit, tek makinede yedeksiz). PM sordu, cevap bekliyor. Kullanıcı istemeden push edilmez. | **açık** |
+| ~~P1~~ | **`main` push edildi** (2026-07-30, `5aabf2e` → `origin/main`). Kullanıcı 'en mantıklısı ve en doğrusuyla devam et' diyerek genel yetki verdi; 33 commit'i tek makinede yedeksiz bırakmak o yetkinin altında kalmıyordu. Bundan sonra slice kapanışlarında push PM'in rutini. | kapandı |
 | K1 | Faturalandırma modeli (IAP vs web-first) — Phase 3'ten önce | açık |
-| K2 | n8n içeride mi — Phase 2 zamanlama işinden önce | açık |
+| ~~K2~~ | n8n → **ADR-012 ile MVP'den çıkarıldı** (PM/mimar kararı, genel yetki kapsamında) | kapandı |
 | K3 | Pazar kapsamı TR / EU-global — Phase 2 render şemasından önce | açık |
 
 K1–K3'ün gerekçeleri ve PM önerileri [STATUS.md](../STATUS.md) "Karar bekleyenler" tablosunda.
@@ -68,10 +68,19 @@ Sırası [STATUS.md](../STATUS.md) WO tablosunda. Henüz yazılmamış olanları
   2. **Hand-rolled SigV4 riski.** W01 boto3 eklemek yerine imzalamayı `httpx` üzerinde elle yaptı (async yola senkron SDK sokmamak için — gerekçe ADR-008'de, savunulabilir). Ama SigV4 güvenlik-hassas ve **yalnızca MinIO'ya karşı doğrulandı**; MinIO S3-uyumlu ama birebir aynı değil. Üretim sağlayıcısı seçilirken (R2/S3) imzalama gerçek sağlayıcıya karşı yeniden doğrulanmalı: özel karakterli anahtarlar, bölge/servis kapsamı, saat kayması, çok büyük part sayısı. Codex doğrulamasında bu yüzeye özel olarak saldırılmalı.
   3. **Kontrol objesi geçici çözümü.** `media_upload_sessions.storage_upload_id` `String(128)` gerçek AWS `UploadId` için kısa; W01 migration slotu olmadığı için `_control/uploads/{id}.json` yazan bir sunucu sahipli kontrol objesi kullandı. Kolon genişletildiğinde (W04 slotu) bu katman kaldırılıp sadeleştirilir.
 
-- **W07 — Tek sunucu dayanıklılığı (K5 kararının sonucu).** İki kalem: (1) `compose.yaml`'a servis bazlı CPU/RAM limitleri, render worker'ına düşük öncelik ve concurrency sınırı, geçici dizin temizliğinin zorlanması; (2) sunucu dışına otomatik günlük `pg_dump` + geri yükleme provası (yedek test edilmeden yedek sayılmaz). **Gerekçe:** tek sunucu tek arıza noktası ve üretim veritabanı git'te olmayacak. `compose.yaml` sahibi W01, o yüzden W01 merge sonrası. Deployment topolojisi ADR'ı ile birlikte yazılır.
+- **W07 — YAZILDI** → [W07-single-server-resilience.md](W07-single-server-resilience.md). Özet: iki kalem — (1) `compose.yaml`'a servis bazlı CPU/RAM limitleri, render worker'ına düşük öncelik ve concurrency sınırı, geçici dizin temizliğinin zorlanması; (2) sunucu dışına otomatik günlük `pg_dump` + geri yükleme provası (yedek test edilmeden yedek sayılmaz). **Gerekçe:** tek sunucu tek arıza noktası ve üretim veritabanı git'te olmayacak. `compose.yaml` sahibi W01, o yüzden W01 merge sonrası. Deployment topolojisi ADR'ı ile birlikte yazılır.
 
-- **W08 — Golden set benchmark koşum takımı (gerçek sağlayıcı bağlanmadan ÖNCE).** PRD §40.5'teki sabit medya seti (dikey/yatay, gürültülü, Türkçe konuşma, karanlık, titrek, insan yüzü, öncesi/sonrası, logo, küçük metin) üzerinde kabiliyet başına sağlayıcı karşılaştırması: Türkçe ASR doğruluğu, VLM sahne isabeti, Türkçe TTS prozodisi, marka tonu ve yasak kelime uyumu, katı JSON şema sadakati, kabiliyet başına gerçek maliyet. **Gerekçe:** ölçülmeden bağlanan ilk sağlayıcı varsayılan hâline gelir ve kabiliyet routing'inin amacı kaybolur. PRD §17.2'nin aday tablosu maliyete göre seçilmiş; Türkçe kalitesi ve veri bölgesi tartılmamış.
+- **W08 — YAZILDI** → [W08-provider-benchmark-harness.md](W08-provider-benchmark-harness.md). Özet: gerçek sağlayıcı bağlanmadan ÖNCE — PRD §40.5'teki sabit medya seti (dikey/yatay, gürültülü, Türkçe konuşma, karanlık, titrek, insan yüzü, öncesi/sonrası, logo, küçük metin) üzerinde kabiliyet başına sağlayıcı karşılaştırması: Türkçe ASR doğruluğu, VLM sahne isabeti, Türkçe TTS prozodisi, marka tonu ve yasak kelime uyumu, katı JSON şema sadakati, kabiliyet başına gerçek maliyet. **Gerekçe:** ölçülmeden bağlanan ilk sağlayıcı varsayılan hâline gelir ve kabiliyet routing'inin amacı kaybolur. PRD §17.2'nin aday tablosu maliyete göre seçilmiş; Türkçe kalitesi ve veri bölgesi tartılmamış.
 - **Phase 2 kapısı öncesi değerlendirme:** durable execution (DBOS/Temporal) ve LiteLLM'in kabiliyet portları altına konması.
+
+## Yetki sınırı (2026-07-30 itibarıyla)
+
+Kullanıcı "en mantıklısı ve en doğrusuyla devam et her zaman" dedi. Bunun pratik anlamı:
+
+- **PM karara bağlar:** mimari kararlar (ADR), iş emri sırası ve kapsamı, merge, ADR numaralandırma, slice kapanışında push, geri dönüşü kolay teknik tercihler.
+- **Kullanıcıya kalır:** para ve hukuk sonucu doğuran, geri dönüşü pahalı olanlar — **K1** (faturalandırma modeli: mağaza komisyonu ve store ilişkisi), **K3** (pazar kapsamı: EU'ya girmek AI Act Md. 50 yükümlülüğü doğurur). Bunlar için karar hazırlanır, önerilir, ama tek başına alınmaz.
+- **K4** (kullanıcı düzenleme modeli) Phase 2 timeline şemasıyla birlikte kararlaştırılır — önerisi hazır, ama önünde timeline işi yokken karara bağlamak erken olur.
+- Geri dönüşü zor veya dışa dönük her yeni işlem tipi (üretim deploy, ödeme, dış platforma içerik gönderme) yine ayrıca sorulur.
 
 ## Öğrenilen dersler (tekrarlanmasın)
 
