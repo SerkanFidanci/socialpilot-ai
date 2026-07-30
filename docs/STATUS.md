@@ -62,6 +62,13 @@ docker compose --profile worker up -d        # worker gerekiyorsa
 
 **Ortaya çıkan açık:** elle oluşturulmuş "Demo Isletme" + analiz edilmiş asset seed'i **yeniden üretilemedi** — seed script'i yoktu. `services/api/scripts/seed_dev.py` **W01** kapsamına eklendi. Kural: dev ortamında elle veri oluşturan hiçbir akış script'siz bırakılmaz.
 
+## Dağıtım kapıları (üretime çıkmadan zorunlu)
+
+| # | Kapı | Neden |
+|---|---|---|
+| D1 | **`make backup` ve `make restore-check` gerçek sunucuda çalıştırılıp doğrulanmalı.** | Codex yedek/geri yükleme *parçalarını* gerçek MinIO ve gerçek PostgreSQL ile doğruladı (satır sayıları birebir) ama `make backup` tek komut olarak bizim stack'imizde koşamıyor: stateless API imajı `pg_dump`/`openssl` taşımıyor — [operations.md](runbooks/operations.md) bunu önkoşul olarak yazıyor ve doğru tasarım, ama **hiç egzersiz edilmemiş bir yol.** W06 compose'a `pg_dump` taşıyan bir profil servisi ekleyecek; o gelene kadar bu kapı açık. |
+| D2 | İlk mobil oturum runbook'taki JDK adımlarını izleyip `flutter build apk --debug` sonucunu runbook'a yazmalı (B2). | Adımlar yazıldı, hiçbir ortamda uçtan uca doğrulanamadı. |
+
 ## Karar bekleyenler
 
 | # | Karar | Ne zaman gerekli | PM önerisi |
@@ -109,13 +116,13 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **tamamlandı** (`8b74f5c`) · merge edildi | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **tamamlandı** (`3aad208`) · merge edildi | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | [W09](handoffs/W09-real-media-materializer.md) | **Gerçek medya materializer + `.mov`/HEVC analiz kapısı** | **tamamlandı** · merge edildi · ADR **011**'e numaralandırıldı (009 W02'de) | merge edildi, dal silindi | Opus 4.8 / high | — |
-| [W07](handoffs/W07-single-server-resilience.md) | **Tek sunucu dayanıklılığı** — kaynak limitleri + scratch guard + sunucu dışına yedek + geri yükleme provası | **tamamlandı** (`c199b86`) · merge edildi · ADR-013 | merge edildi, dal silindi | Opus 4.8 / medium | — |
-| [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark koşum takımı** | **tamamlandı** · merge edildi · `provider_usage` bulgusu W04 slotuna alındı | merge edildi, dal silindi | Opus 5 / high | — |
+| [W07](handoffs/W07-single-server-resilience.md) | **Tek sunucu dayanıklılığı** | **kapandı** · merge (`c199b86`) + **Codex doğrulaması geçti** (gerçek restore: satır sayıları 1/1/4 birebir, head doğru; CPU doygunluğunda `/health/ready` 10/10 × 200) | dal silindi | Opus 4.8 / medium | — |
+| [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark** | **kapandı** · merge (`aea6a18`) + **Codex doğrulaması geçti** (metrikler bağımsız stdlib hesabıyla birebir; maliyet tavanı koşuyu çağrıdan önce durdurdu, exit 2) | dal silindi | Opus 5 / high | — |
 | [W04](handoffs/W04-brand-catalog.md) | **Marka profili + ürün/hizmet kataloğu** — Phase 2'nin ön koşulu | **tamamlandı** · merge edildi | merge edildi, dal silindi | Opus 5 / high | **kullanıldı** (`0010`) |
 | [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **tamamlandı** · merge edildi · ADR-014 | merge edildi, dal silindi | Opus 4.8 / medium | — |
-| W06 | PostgreSQL 18 + Valkey imaj geçişi | **bekletildi** — hiçbir şeyi bloke etmiyor, Phase 2'den sonra | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
+| W06 | PostgreSQL 18 + Valkey imaj geçişi **+ compose'a çalıştırılabilir yedek runner'ı** (`pg_dump` taşıyan profil servisi) | **bekletildi** — Phase 2'den sonra | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
 | [W10](handoffs/W10-schema-debt.md) | **Şema borcu** — `provider_usage` tablosu · `storage_upload_id` genişletmesi (kontrol objesini kaldırır) · fotoğraf durumu enum'u · `approver` rolü | **şimdi** | `slice/0m-schema-debt` | Opus 4.8 / medium | **SENDE** (`0011`) |
-| W2A | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render | W10 ile paralel (iş emri yazılacak) | `slice/2a-timeline-render` | Opus 5 / high | 2. sırada |
+| [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline şeması + `RenderPort` + AI'sız gerçek render + parametrik düzenleme veri modeli | **şimdi** (W10 ile paralel; migration W10'dan sonra `0012`) | `slice/2a-timeline-render` | Opus 5 / high | 2. sırada |
 
 ### Dosya sahipliği (çakışma önleme)
 

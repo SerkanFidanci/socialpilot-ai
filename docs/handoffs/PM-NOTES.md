@@ -104,10 +104,11 @@ Kural [README.md](README.md)'de. PM için özeti: **slice başına yeni oturum**
 
 ## Sıradaki iş (2026-07-30 sonu itibarıyla)
 
-- **W10 — şema borcu.** Slot serbest. Dört kalem: `provider_usage` tablosu, `storage_upload_id` genişletmesi (W01'in kontrol-objesi geçici çözümünü kaldırır), fotoğraf analiz durumu enum'u, **`approver` rolü** (`BusinessRole`'a eklenmesi; W04'ün "her rol için cevap tanımlı" testi eşlemeyi zorlayacak). İş emri yazılacak.
+- ~~W10~~ **YAZILDI** → [W10-schema-debt.md](W10-schema-debt.md). Özet: şema borcu — Slot serbest. Dört kalem: `provider_usage` tablosu, `storage_upload_id` genişletmesi (W01'in kontrol-objesi geçici çözümünü kaldırır), fotoğraf analiz durumu enum'u, **`approver` rolü** (`BusinessRole`'a eklenmesi; W04'ün "her rol için cevap tanımlı" testi eşlemeyi zorlayacak). İş emri yazılacak.
 - **W06 — PostgreSQL 18 + Valkey. BEKLETİLDİ.** `compose.yaml` serbest ama hiçbir şeyi bloke etmiyor; `uuidv7()` ve Valkey lisansı gerçek kazançlar ama Phase 2'nin önüne geçmeyi hak etmiyorlar. Phase 2'den sonra. W07'nin kaynak limitleri ve `cpu_shares` sırası korunmalı.
-- **Codex doğrulaması** hâlâ `main` üzerinde bekliyor: W07 (yedek/geri yükleme, scratch guard), W08 (ground-truth metrik, maliyet tavanı). W04 ve W05 de sıraya girdi: cross-tenant, para biriminde kayan nokta, cursor sayfa atlama; telemetride presigned URL sızıntısı ve kapalıyken sıfır maliyet.
-- **Phase 2 kapısı.** Artık teknik önkoşullar hazır (marka/katalog verisi, gözlemlenebilirlik, benchmark aracı, gerçek medya hattı). Girmeden önce: **K3** ve **K4** cevaplanmalı, `RenderPort` ADR'ı yazılmalı (K5 gereği), durable execution (DBOS/Temporal) ve LiteLLM değerlendirilmeli.
+- **Codex doğrulaması: W07 ve W08 GEÇTİ** (ikisi de "teslim edilebilir"). Değerli olan yöntemi: W08'de metrikleri harness'ın fonksiyonlarını **çağırmadan** kendi stdlib betiğiyle yeniden hesaplayıp birebir eşleşme aldı; W07'de yedeği gerçekten geri yükleyip satır sayılarını kaynakla karşılaştırdı. **Sırada W04 ve W05'in doğrulaması var** — cross-tenant, para biriminde kayan nokta, cursor sayfa atlama; telemetride presigned URL sızıntısı ve kapalıyken sıfır maliyet.
+- ~~Phase 2 kapısı~~ **AÇILDI.** Plan yazıldı, K4 karara bağlandı, K3 çerçevelemesi düzeltildi. İlk slice iş emri: [W11](W11-timeline-and-render.md) (Phase 2A). Sıradaki iş emirleri 2B (senaryo) → 2C (TTS) → 2D (QC) → 2E (yaşam döngüsü + entitlement) → 2F (onay + revizyon) → 2G (planlayıcı); her biri öncekinin merge'inden sonra yazılır.
+- **Eski not:** Artık teknik önkoşullar hazır (marka/katalog verisi, gözlemlenebilirlik, benchmark aracı, gerçek medya hattı). Girmeden önce: **K3** ve **K4** cevaplanmalı, `RenderPort` ADR'ı yazılmalı (K5 gereği), durable execution (DBOS/Temporal) ve LiteLLM değerlendirilmeli.
 
 ## Öğrenilen dersler (tekrarlanmasın)
 
