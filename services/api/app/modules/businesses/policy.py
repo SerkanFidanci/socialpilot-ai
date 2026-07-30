@@ -16,6 +16,11 @@ class Permission(StrEnum):
     MEMBERS_UPDATE = "members.update"
     MEDIA_READ = "media.read"
     MEDIA_UPLOAD = "media.upload"
+    # Producing content is its own permission because PRD §4 gives it to a role that holds no
+    # other write: an editor "içerik üretir" but cannot change the business, and an approver can
+    # do neither. Folding generation into `business.update` would lock editors out; folding it
+    # into `media.upload` would make the table lie about what the permission means.
+    CONTENT_GENERATE = "content.generate"
 
 
 ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
@@ -29,10 +34,16 @@ ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
             Permission.MEMBERS_UPDATE,
             Permission.MEDIA_READ,
             Permission.MEDIA_UPLOAD,
+            Permission.CONTENT_GENERATE,
         }
     ),
     BusinessRole.EDITOR: frozenset(
-        {Permission.BUSINESS_READ, Permission.MEDIA_READ, Permission.MEDIA_UPLOAD}
+        {
+            Permission.BUSINESS_READ,
+            Permission.MEDIA_READ,
+            Permission.MEDIA_UPLOAD,
+            Permission.CONTENT_GENERATE,
+        }
     ),
     BusinessRole.VIEWER: frozenset({Permission.BUSINESS_READ, Permission.MEDIA_READ}),
     # Approver holds no permission yet: the approval sources it would read and decide on do not

@@ -99,9 +99,147 @@ Değişmez testlerinde **denenecek girdiler sayılıdır** — "test var" yetmez
 10. Üretim + fake kombinasyonu gerçek içerik üretemiyor (seçtiğin mekanizmayla, testli); boot çökmüyor.
 11. `make verify` yeşil; test sayısı azalmıyor (şu an 497); kontrat drift yok; `content` CLAUDE.md güncellendi.
 
-## Rapor
+## Rapor — 2026-07-31 · Claude Opus 5 / high
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/2b-script-generation` · **Commit:** `e44e3cb` (+ bu rapor) · **Durum:** tamamlandı,
+**merge bekliyor**
+
+> **Merge neden yapılmadı:** protokolün 7. adımı slice kapanınca `main`'e merge diyor, ama
+> `main` worktree'sinde şu anda Codex'in **commit'lenmemiş** W10/W11/W12 doğrulama yazımı
+> duruyor (`git status`: üç handoff dosyası `M`). `main` orada checkout edilmiş durumda; ref'i
+> altından fast-forward etmek o oturumun çalışma ağacını kendi index'iyle tutarsız bırakırdı —
+> WO'nun eşzamanlılık uyarısının önlemek istediği şeyin ta kendisi. Dal hazır ve `main`'in
+> tepesinden (`3cafc12`) lineer; Codex'in yazımı commit'lendiği an merge tek `git merge`
+> komutu. Çakışma yüzeyi yok: W13 o üç dosyaya dokunmuyor.
+
+### Yapılanlar
+
+- **`ScriptGenerationPort` + fake/disabled adapter.** Port `modules/content/script.py`'de,
+  adapter'lar `infrastructure/ai/`'da, seçim `create_script_generator` fabrikasında
+  (`create_storage`/`create_materializer`/`create_render` deseni). Ücretli çağrı disiplini
+  bugünden: route snapshot çağrıdan **önce commit ediliyor**, maliyet tavanı çağrıdan önce
+  uygulanıyor, `provider_usage` çağrıdan sonra — **başarısızlıkta da**, çünkü zaman aşımına
+  uğrayan çağrı da faturalanmış olabilir. Politika hatasında fallback yok (`fallbacks=()`).
+- **Senaryo contract'ı (§18.1) + katı şema.** `parse_script_output` JSON'u **bizim tarafımızda**
+  ve byte tavanı altında çözüyor (bozuk JSON dokümante bir ret, adapter'a özgü bir istisna
+  değil), `parse_script` §18.1'in anahtarlarını kabul edip geri kalanını reddediyor — sağlayıcı
+  yanıtındaki `tool_calls` bu kurala düşüyor.
+- **Doğrulanmış alan bindirmesi — üç bağımsız katman.** (1) Model fiyatı/tarihi **hiç görmüyor**:
+  prompt'a yalnızca slot token'ı giriyor. (2) Slotu kod çözüyor, tenant-kapsamlı, **sonuçlanma
+  anında yeniden okuyarak**. (3) `find_fabrication` `literal` metindeki para/oran/tarih kalıbını
+  deterministik yakalıyor — sağlayıcıya güvenmeden. Çözülmüş değere asla uygulanmıyor.
+- **Prompt injection savunması yapısal.** Medyadan çıkarılmış metin `input_data`'nın
+  `untrusted_media_notes` kabında **veri** olarak gidiyor, `system_prompt`/`instruction`
+  string'lerine birleştirilmiyor. Modelin ürettiği URL fetch edilmiyor — **saklanmıyor bile**
+  (`SCRIPT_LITERAL_URL_REJECTED`); iki modülde HTTP istemcisi olmadığını test tokenize ederek
+  zorluyor.
+- **Kalıcılık + prompt versiyonlama (`0013`).** `content_scripts` (route snapshot, prompt
+  sürümü, usage referansı, `template` + `document`) ve `prompt_templates` (§17.6, `business_id`
+  yok, append-only, kod başına tek aktif sürüm kısmi unique index ile). Migration ilk sürümü
+  seed ediyor.
+- **API.** `POST/GET /v1/businesses/{id}/scripts` + cursor'lı liste (W04 primitifi).
+  İstek gövdesi **yalnızca kayıt id'si** taşıyor: fiyat/tarih/CTA metni yazılabilecek alan yok.
+
+### Bilinçli tasarım kararları (gerekçeleriyle)
+
+- **İki transaction, arada çağrı.** Route snapshot çağrıdan önce commit edilmezse "faturalanmış
+  ama sonuçlanmamış çağrı" kaydı, süreç düşerse geri alınır. Sonucu bilinçli: `pending`'de
+  takılı satır görünür bir gerçektir. Tek transaction ayrıca ağ turu boyunca bir PostgreSQL
+  bağlantısını ve snapshot'ı tutardı.
+- **Üretim davranışı (WO §1'in istediği mekanizma):** üretim `DisabledScriptGenerationAdapter`
+  alıyor, boot **çökmüyor**, çağrı `503 SCRIPT_GENERATION_NOT_CONFIGURED` ile reddediliyor.
+  Gerekçe: diğer fake'ler `Settings` doğrulamasında reddediliyor çünkü yanlış yapılandırılmış
+  bir kurulum zaten ilk istekte bozuk. Bu kabiliyet bir yönüyle farklı — **fake senaryo
+  yayınlanabilir**: fake render açıkça yer tutucu bir dosya yazar, fake senaryo bir insanın
+  onaylayıp paylaşabileceği akıcı Türkçe reklam metni yazar. Bir kabiliyet yüzünden tüm
+  uygulamayı düşürmek yerine o kabiliyeti reddetmek doğru takas. `script_generation_adapter`
+  bu yüzden `reject_non_production_adapters` listesinde **yok** ve bir test bunu doğruluyor.
+  **ADR yazılmadı** — WO açıkça "gerekçesini ADR'a değil rapora yaz" diyor.
+- **Kampanya bitiş tarihi kapsayıcı son gündür.** Pencere yarı açık `[starts_at, ends_at)`;
+  `ends_at` doğrudan basılsaydı ücretli bir gönderide bir gün fazla vaat edilirdi. Son kapsayıcı
+  an işletme saat diliminde biçimlendiriliyor (`businesses.timezone`, boundary'de dönüştürme).
+- **Yüzde işareti fiyat sayılıyor.** Üretilen reklam metnindeki bir oran ya indirimdir
+  (doğrulanmış alan) ya iddiadır (`approved_claims`); ikisi de modelin yazacağı şey değil.
+- **CTA serbest metni ifade edilemiyor.** §18.1'in `cta.text` alanını kod dolduruyor; modelin
+  yazabileceği alan şemada yok — reddedilen değil, var olmayan bir yol.
+- **Senaryo dayanıklı bir job değil**, istek-yanıt döngüsünde sınırlı timeout ile koşuyor. Metin
+  üretimi saniyeler sürer ve 2E zaten yaşam döngüsü orkestrasyonunu sahiplenecek. Bedeli:
+  `pending`'de takılı satırları süpüren kurtarma taraması yok — 2E'ye bırakıldı.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Gerçek AI sağlayıcısı** — W08 sonrası, ayrı karar (WO kapsam dışı).
+- **TTS, senaryodan timeline kurma, sahne seçimi/pgvector** — 2C/2E (WO kapsam dışı).
+- **`docs/index.md` ve `docs/adr/README.md`** — W03 tekelinde, dokunulmadı. İndekse eklenecek
+  yeni dosya yok (ADR yazılmadı); `content-render.md` ve `error-handling.md` zaten indekste.
+- **`.env.example`** — W01'in dosyası. On bir yeni `SCRIPT_GENERATION_*` ayarının hepsi güvenli
+  varsayılana sahip, dolayısıyla eksikliği hiçbir ortamı bozmuyor. PM'e bırakıldı.
+- **`docs/architecture/ai-provider-routing.md`** — mevcut ama WO'nun dosya listesinde yok;
+  senaryo route'u oraya değil `content-render.md`'ye yazıldı. PM birleştirmek isteyebilir.
+- **`W10/W11/W12` handoff dosyaları** — Codex yazıyor, dokunulmadı.
+
+### Dosya listesi dışına çıktığım üç yer (protokol gereği bildiriyorum)
+
+| Dosya | Neden | Risk |
+|---|---|---|
+| `app/modules/businesses/policy.py` | Kabul kriteri 9 "editor üretebilir" istiyor; **editor `BUSINESS_UPDATE` tutmuyor** (W11 timeline'ı ona bağlamış). PRD §4: "Editor … İçerik üretir". Doğru düzeltme yeni bir `Permission.CONTENT_GENERATE` (owner/admin/editor). Alternatif — üretimi `media.upload`'a bağlamak — matrisi tutturur ama tabloyu yalancı yapardı | Yok: paralel WO yok, dosya sahiplik tablosunda listeli değil, mevcut testler bozulmadı (`test_identity_and_business_policy.py` geçiyor) |
+| `app/modules/content/policy.py` | `ContentAction` enum'u orada; `SCRIPT_READ`/`SCRIPT_GENERATE` eklenmeden yetki eşlemesi yapılamıyor. Modülün kendi dosyası, "yetki yeniden yazılmaz" değişmezi korundu (yalnızca eşleme) | Yok |
+| `app/infrastructure/CLAUDE.md` | AGENTS.md: "modülün dosyaları değiştiğinde o modülün `CLAUDE.md`'si aynı değişiklikte güncellenir". `ai/` alt paketi eklendi | Yok. **Not:** bu dosya W11'den beri bayat — `render/fake.py`, `render/ffmpeg.py`, `storage/s3.py` satırları eksik; onları eklemedim (W11'in işi), PM kuyruğuna |
+
+`docs/generated/openapi.json` + `docs/api/endpoints.md` üretilmiş dosyalar; `make verify`'ın
+`check-openapi` kapısı gereği yeniden üretildi (29 → 32 endpoint).
+
+### Doğrulama
+
+Araç zinciri: `ruff 0.16.0` · `mypy 2.3.0` · `Python 3.13.14` · konteynerde,
+`COMPOSE_PROJECT_NAME=sp-w13`, worktree kökünden.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | ✅ All checks passed |
+| `ruff format --check` | ✅ 181 files already formatted |
+| `mypy .` (strict) | ✅ 169 dosya, hata yok |
+| `pytest` (RUN_INTEGRATION_TESTS=1, gerçek PostgreSQL + MinIO) | ✅ **591 passed** (önceki 497 → +94) |
+| `check-openapi` (kontrat drift) | ✅ yeniden üretildi, 32 endpoint |
+| migration `0013` up → down(base) → up | ✅ tek head (`0013_script_generation`), seed satırı yerinde |
+
+Kabul kriterleri:
+
+| # | Kriter | Sonuç |
+|---|---|---|
+| 1 | Migration up/down/up, tek head | ✅ |
+| 2 | Uçtan uca `product_reels`; §18.1 şeması; prompt sürümü + route/usage dolu; `provider_usage`'da satır | ✅ `test_a_product_reel_script_is_generated_validated_and_attributed` |
+| 3 | Katı şema: eksik alan · yanlış enum · aşırı uzun · **fazladan alan** · bozuk JSON — beşi ayrı ayrı, dokümante kodla, fallback yok | ✅ unit + integration, beş parametre |
+| 4 | Fiyat/tarih icadı: `165 TL` · `₺1.650,00` · `%20 indirim` · `1 Ağustos'a kadar` · `31.08.2026` reddediliyor; `3 dakikada hazır` geçiyor | ✅ + varyantlar (`165TL`, `1.650,00 TRY`, `20 dolar`, `yüz altmış beş lira`, `20% indirim`, `165 ₺`) ve beş ayrı yanlış-pozitif kontrolü |
+| 5 | `verified_field`: geçerli referans `tr-TR` biçiminde basıyor (`149,90 TRY`, minor unit'ten); olmayan referans → hata; süresi geçmiş kampanya → hata; serbest CTA → hata | ✅ (serbest CTA **şema** hatası: alan yok) |
+| 6 | Yasak kelime, büyük/küçük harf varyantı dahil | ✅ `Sağlığa iyi gelir` / `sağlığa iyi gelir` / `SAĞLIĞA İYİ GELİR`; kelime sınırı kontrolü ayrı test |
+| 7 | Prompt injection: transcript'e gömülü talimat etkisiz; URL fetch edilmiyor | ✅ **itaatkâr sağlayıcı** modu (enjekte cümleyi senaryoya kopyalıyor) yine de reddediliyor; metnin yalnızca `untrusted_media_notes` altında geçtiği, `system_prompt`/`instruction`'da geçmediği doğrulanıyor; iki modülde HTTP istemcisi yokluğu tokenize testiyle |
+| 8 | Tenant izolasyonu, varlık ifşası yok | ✅ ürün/kampanya/CTA/asset dördü için 404 + gövdede id yok; başka tenant'ın ürününü slot'la çözdürme denemesi de reddediliyor |
+| 9 | Roller (editor 201, viewer 403, approver 403) + idempotency | ✅ okuma tarafı da: viewer okuyabiliyor, approver okuyamıyor. Aynı key aynı sonucu döndürüyor (tek çağrı, tek usage satırı) **ve başarısız üretim aynı hatayla replay ediliyor** |
+| 10 | Üretim + fake gerçek içerik üretemiyor, boot çökmüyor | ✅ üç test: fabrika disabled adapter veriyor, fake adapter üretimde construct edilemiyor, `503` dönerken `/health/live` `200` |
+| 11 | `make verify` yeşil, test sayısı azalmıyor, kontrat drift yok, `content` CLAUDE.md güncel | ✅ 591 test; `content` + `infrastructure` CLAUDE.md güncellendi |
+
+### Açıkça belirtmem gerekenler
+
+1. **`Settings(app_env="production")` bugün hiç kurulamıyor** — `identity_adapter` tek değere
+   sahip (`local`) ve üretimde reddediliyor. Üretim dallarını test edebilmek için testte alan
+   doğrulama sonrası set ediliyor; gerekçesi test içinde yazılı. Gerçek üretim dağıtımından önce
+   bir kimlik adapter'ı gerekiyor — bu W13'ün işi değil ama PM'in bilmesi gereken bir kapı.
+2. **`SCRIPT_GENERATION_MAX_COST_MINOR` varsayılanı `0`.** Fake sıfır maliyet tahmin ettiği için
+   bugün hiçbir şeyi engellemiyor; gerçek sağlayıcı takıldığı gün bütçe **açıkça** verilene kadar
+   her çağrı reddedilecek. Bilinçli: unutulmuş bir knob'ın güvenli yönü budur.
+3. **Telefon numarası tespiti yok.** §17.5 "fiyat/tarih/telefon" diyor ama doğrulanmış bir
+   telefon kaydı yok (`brand_profiles`'ta alan yok), dolayısıyla yerine koyacak değer de yok.
+   Yanlış pozitif riski yüksek bir dedektörü kaynaksız eklemedim. Marka iletişim bilgisi kaydı
+   geldiğinde `{{phone:...}}` slotu ve kalıbı birlikte eklenmeli.
+4. **`forbidden_matcher` `validation.py`'deki `_forbidden_matcher` ile mantıkça eşleniyor**
+   ama ayrı duruyor: `validation.py` WO'nun dosya listesinde yok, ve senaryo tarafı Türkçe
+   `İ`/`I` katlaması yapıyor (`re.IGNORECASE` bunu yapmıyor). Birleştirme — timeline tarafını da
+   katlamalı eşleştirmeye geçirerek — takip işi.
+5. **W11'in `TIMELINE_*` kodları hâlâ `error-handling.md` kataloğunda yok.** Kendi kodlarımı
+   ekledim; W11'inkileri eklemek onların raporunun konusu, dokunmadım.
+6. **Dal ve worktree duruyor.** README'nin dersi gereği (W07/W08) bağımsız doğrulama bitmeden
+   silinmiyor; bulgu gelirse sıcak oturum burada.
 
 ## Doğrulama
 

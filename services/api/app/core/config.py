@@ -140,6 +140,27 @@ class Settings(BaseSettings):
     render_min_resolution_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     # How far a parametric cut may be pulled onto a detected scene boundary.
     render_snap_tolerance_ms: int = Field(default=250, ge=0, le=5_000)
+    # --- script generation (W13, PRD §17) ---
+    # The `script_generation` adapter. `fake` is a fixture writer; `disabled` declines every
+    # call with a documented code. Deliberately absent from `reject_non_production_adapters`:
+    # fixture marketing copy is publishable in a way a placeholder video file is not, so the
+    # factory swaps production onto the disabled adapter instead of refusing to boot. See
+    # `app/infrastructure/ai/__init__.py`.
+    script_generation_adapter: Literal["fake", "disabled"] = "fake"
+    script_generation_timeout_seconds: int = Field(default=60, ge=1, le=600)
+    # The per-call ceiling checked *before* the provider is called, in the adapter's own minor
+    # units. Zero by default: a route that costs money is refused until someone sets a budget
+    # for it, which is the safe direction for a knob nobody remembered to turn.
+    script_generation_max_cost_minor: int = Field(default=0, ge=0, le=10_000_000)
+    script_generation_route_revision: int = Field(default=1, ge=1, le=1_000_000)
+    script_generation_quality_tier: Literal["draft", "standard", "professional"] = "standard"
+    script_generation_data_region: str = Field(default="unspecified", min_length=1, max_length=32)
+    script_generation_max_output_bytes: int = Field(default=16_384, ge=1_024, le=262_144)
+    script_generation_max_source_assets: int = Field(default=5, ge=1, le=50)
+    script_generation_max_notes: int = Field(default=20, ge=1, le=200)
+    script_generation_max_note_chars: int = Field(default=400, ge=50, le=4_000)
+    script_generation_max_brief_chars: int = Field(default=400, ge=50, le=4_000)
+    script_generation_target_duration_ms: int = Field(default=20_000, ge=5_000, le=90_000)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.

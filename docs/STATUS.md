@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | `258ddc3`+ — W01→W12 tamamı merge edildi (yalnız W06 bekliyor), origin ile senkron |
-| Alembic head | `0012_content_timeline_render` (tek head; zincir 0001→0012 sıfırdan doğrulandı) |
-| Backend doğrulama | **497 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 162 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | `3cafc12` — W01→W12 merge edildi (yalnız W06 bekliyor). **W13 `slice/2b-script-generation`'da hazır, merge edilmedi:** `main` worktree'sinde Codex'in commit'lenmemiş W10/W11/W12 doğrulama yazımı var, altından ref oynatılmaz |
+| Alembic head | dalda `0013_script_generation`, `main`'de `0012_content_timeline_render` (her ikisi tek head; zincir 0001→0013 sıfırdan doğrulandı) |
+| Backend doğrulama | dalda **591 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 169 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 (`main`: 497) |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -117,7 +117,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W10](handoffs/W10-schema-debt.md) | **Şema borcu** (4 kalem) | **tamamlandı** · merge (`0a44f22`) · `0011` | dal silindi | Opus 4.8 / medium | kullanıldı |
 | [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
 
-| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi: `script_generation` portu (fake), katı JSON şema, **doğrulanmış alan bindirmesi** (model fiyat/tarih yazamaz, kod yerleştirir), prompt versiyonlama | **şimdi** | `slice/2b-script-generation` | Opus 5 / high | **SENDE** (`0013`) |
+| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi: `script_generation` portu (fake), katı JSON şema, **doğrulanmış alan bindirmesi** (model fiyat/tarih yazamaz, kod yerleştirir), prompt versiyonlama | **tamamlandı** (`e44e3cb`) · `make verify` yeşil (591 test) · **merge bekliyor** — Codex `main` worktree'sinde çalışırken ref oynatılmadı | `slice/2b-script-generation` (dal + worktree duruyor) | Opus 5 / high | kullanıldı (`0013`) |
 
 ### Dosya sahipliği (çakışma önleme)
 
