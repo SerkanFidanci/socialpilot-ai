@@ -78,4 +78,12 @@ Sırası [STATUS.md](../STATUS.md) WO tablosunda. Henüz yazılmamış olanları
 1. **Çift iş.** İki oturum `258439d` base'inden aynı slice'ı yaptı; `c43ccad` silinmek zorunda kaldı. Panzehir: WO'da "dokunulacak dosyalar" ilanı + [STATUS.md](../STATUS.md) dosya sahipliği tablosu + tetiklemeden önce durumun `tetiklenmedi` olduğunu doğrulama.
 2. **İş emirleri yan yana okunmadan dağıtılmaz.** İlk üç WO'yu yazdıktan sonra `pyproject.toml`, `compose.yaml` ve `docs/index.md` üzerinde üç çakışma çıktı; W02 sıraya alındı, W06 ayrıldı, indeks sahipliği W03'e verildi.
 3. **Dal isimleri içerikle uyuşmalı.** `feature/mobile-e2e-demo` medya özet API'si içeriyordu; worktree adı ile checkout edilen dal farklıydı. Kural: `slice/<faz><harf>-<domain>`, slice kapanınca merge + dal silinir.
-4. **Doküman durumu git'i yansıtmıyorsa git kazanır.** `main` 16 commit gerideyken dokümanlar Phase 0'ı anlatıyordu. [STATUS.md](../STATUS.md) her slice kapanışında aynı commit'te güncellenir.
+4. **Compose proje adı paylaşılıyorsa paralel doğrulama güvenilmez.** W02 kendi worktree'sinde `--build` yapınca `main`'in konteynerini kendi imajıyla değiştirdi; Codex de `main`'in kaynağını W02'nin araç zincirinden geçirip W01'e ait olmayan 21 hata bildirdi. Düzeltme: `compose.yaml` artık `${COMPOSE_PROJECT_NAME:-socialpilot-ai}`, kural [README.md](README.md)'de. **Ders:** bir doğrulama raporu, hangi araç zinciri sürümleriyle koştuğunu yazmıyorsa yeniden üretilemez.
+
+5. **Paralel WO'lar aynı ADR numarasını alır.** W02 ve W09 ikisi de ADR-009'u aldı; W09'un dosyası merge sırasında ADR-011'e taşındı. WO'daki "dizini tara" uyarısı yetmiyor çünkü paralel dallar birbirinin dosyasını göremiyor. **Ders:** ADR numarasını **PM merge sırasında** verir; WO'lar dosyayı geçici bir adla yazıp raporda bildirir.
+
+6. **Araç zinciri yükseltmesi ile kod slice'ı paralel çalışırsa birleşimi kimse doğrulamamış olur.** W09 py312/mypy 1.13/ruff 0.8'de yazıldı, W02 py313/mypy 2.3/ruff 0.16'ya taşıdı; ikisi de kendi dalında yeşildi ama birleşik durum kırmızıydı. **Ders:** platform yükseltmesi ile aynı anda kod slice'ı koşturuluyorsa merge sonrası uzlaştırma turu plana baştan yazılır — ya da yükseltme tek başına koşar.
+
+7. **Kapı kapsamı tek tip olmalı.** `mypy .` `scripts/` dizinini denetliyordu ama `ruff check app tests migrations` denetlemiyordu; `scripts/` sessizce sapabiliyordu. Makefile'ın lint/format hedeflerine `scripts` eklendi. **Ders:** yeni bir üst düzey dizin eklendiğinde tüm kapıların kapsamı aynı anda güncellenir.
+
+8. **Doküman durumu git'i yansıtmıyorsa git kazanır.** `main` 16 commit gerideyken dokümanlar Phase 0'ı anlatıyordu. [STATUS.md](../STATUS.md) her slice kapanışında aynı commit'te güncellenir.

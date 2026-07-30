@@ -27,6 +27,24 @@ Bu klasör, oturumlar arası iş devri yüzeyidir. Her dosya bir **work order (W
 - **Aynı base'den aynı işi yapma:** WO'yu tetiklemeden önce `STATUS.md`'de durumunun `tetiklenmedi` olduğunu doğrula. `yürütülüyor` ise dokunma.
 - **`main` her zaman çalışan gerçek.** Doğrulaması geçmemiş iş merge edilmez.
 
+## Doğrulama ortamı (zorunlu)
+
+`docker compose` proje adını worktree'den **türetmez**. Sabit bir proje adıyla herhangi bir
+worktree'de `docker compose up --build` çalıştırmak **paylaşılan konteynerleri ele geçirir** ve
+başka oturumların doğrulamasını sessizce geçersiz kılar. 2026-07-30'da bu bir kez oldu: W02'nin
+yükseltilmiş imajı `main`'in konteynerini değiştirdi, Codex de `main`'in kaynağını W02'nin araç
+zincirinden geçirip W01'e ait olmayan 21 hata bildirdi.
+
+**Kural:** kendi worktree'nde compose çalıştırıyorsan proje adını ayır:
+
+```
+COMPOSE_PROJECT_NAME=sp-<worktree-adi> docker compose up -d --build
+```
+
+Doğrulama sonucunu rapora yazarken **hangi araç zinciri sürümleriyle** koştuğunu da yaz
+(`python -m mypy --version`, `ruff --version`). Kapı yeşil/kırmızı bilgisi, sürüm bağlamı
+olmadan yeniden üretilemez.
+
 ## Dal adlandırma
 
 ```

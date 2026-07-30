@@ -4,11 +4,11 @@
 
 | | |
 |---|---|
-| `main` | W01 `8d055b7` üzerinde — feat: add S3-compatible object storage adapter and dev seed (+ rapor commit'i) |
+| `main` | `5ee03d4` — W01+W02+W03+W09 hepsi merge edildi |
 | Alembic head | `0009_video_understanding` (tek head) |
-| Backend doğrulama | 244 pytest (gerçek PostgreSQL + MinIO) · ruff + ruff format · mypy strict — 101 dosyada temiz |
+| Backend doğrulama | **264 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 105 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 / celery 5.6 / fastapi 0.141 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
-| Compose | api + postgres + redis + minio healthy · `/health/ready` → postgresql + redis ready |
+| Compose | api + postgres + redis + minio healthy · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir (worktree başına zorunlu) |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
 
 > **Her oturum İLK bu dosyayı okur.** Bu dosya ile `git log` çelişirse **git kazanır**; çelişkiyi gören oturum bu dosyayı aynı commit'te düzeltir.
@@ -27,8 +27,8 @@
 
 - Marka profili + ürün/hizmet kataloğu (PRD §11) → **W04**
 - Sahne kütüphanesi arama + pgvector embedding/retrieval (PRD §16.4–16.5)
-- **Phase 1 çıkış kriteri henüz karşılanmadı:** *"10 video yüklenir; sahneler, transcript ve etiketler görünür"* — yükleme yolu artık gerçek (W01), ama worker medyayı fixture'dan okuduğu için analiz gerçek byte görmüyor; bkz. **B1**.
-- `video/quicktime` ve HEIC yüklemede kabul ediliyor ama analiz hattına girmiyor — `ingest.py` teknik analizi yalnızca `video/mp4` için kuyruğa alıyor (W01 raporu, madde 4: karar gerekiyor).
+- **Phase 1 çıkış kriteri mekanik olarak karşılandı** (`5ee03d4`): gerçek video yüklenip sahne + transcript + etiket üretiyor, `.mov`/HEVC dahil. **Ama ASR ve VLM hâlâ fake** — yani transcript ve etiketlerin *içeriği* sentetik. Gerçek sağlayıcı bağlanması **W08** benchmark'ından sonra; kriteri "gerçek içerikle karşılandı" saymak için o gerekiyor.
+- Fotoğraf (HEIC/HEIF/JPEG/PNG) analiz hattı yok — K6'nın ikinci yarısı. Şu an HEIC açık kodla reddediliyor (sessiz durma yok).
 
 ### Başlamadı
 
@@ -38,8 +38,8 @@ Phase 2 içerik üretimi · Phase 3 abonelik/entitlement · Phase 4 yayınlama �
 
 | # | Konu | Etki | Çözüm |
 |---|---|---|---|
-| B1 | ~~`FakeMultipartStorage` byte kabul etmiyor~~ (yükleme yarısı `8d055b7`) → ~~worker fixture materializer~~ **tamamen çözüldü** (W09, `slice/1g-real-materializer`, merge bekliyor). Gerçek `S3MediaMaterializer` depodan akışlı indiriyor; `.mov`/HEVC analiz hattına giriyor; 3 gerçek video (biri `.mov`, biri dikey, biri sesli) gerçek MinIO'ya karşı uçtan uca sahne+transcript+etiket üretti | **Phase 1 çıkış kriteri W09 dalında karşılandı** (merge sonrası main'de kapanır) | W09 tamamlandı; PM doğrulama + merge |
-| B2 | `JAVA_HOME` yok, Android cmdline-tools eksik | APK build edilemiyor (Dart kodunun derlendiği `flutter test` ile doğrulanmış) | **W02** ortam adımı |
+| ~~B1~~ | **KAPANDI** (`5ee03d4`). Yükleme yolu gerçek (W01) + worker medyayı gerçekten S3'ten akıtıyor (W09). Fixture byte'ı hattın hiçbir yerinde yok | — | — |
+| B2 | `JAVA_HOME` yok, Android cmdline-tools eksik | APK build edilemiyor | **kısmen kapandı:** W02 runbook'a Windows JDK 17 + cmdline-tools adımlarını yazdı ama o ortamda JDK/Flutter olmadığı için uçtan uca doğrulayamadı. **İlk mobil oturum adımları izleyip sonucu runbook'a yazmalı** |
 
 ## Geliştirme ortamı
 
@@ -64,7 +64,7 @@ docker compose --profile worker up -d        # worker gerekiyorsa
 | K3 | **Pazar kapsamı:** yalnız TR mi, EU/global roadmap'te mi? | Phase 2 render şeması | EU roadmap'teyse C2PA/provenance alanları şimdi şemaya girsin |
 | K4 | **Kullanıcı düzenleme modeli:** "ufak editler" (metin taşı, sticker ekle, stil değiştir) nasıl yapılacak? PRD §18.2 bildirimsel overlay'i, §21.3 revizyonu tanımlıyor; §3.3 manuel editörü kapsam dışı bırakıyor — arada karar verilmemiş bir boşluk var | Phase 2 timeline şeması | **Parametrik düzenleme:** timeline JSON patch'i — metin içeriği (yasak-kelime doğrulamalı, fiyat/tarih yalnızca doğrulanmış kayıttan), 9'lu ızgara konum çapaları, stil token'ı, marka onaylı sticker kütüphanesi, segment sınırına snap. Serbest x/y ve kare kare montaj yok. Saf yeniden render **yeni hak tüketmez**, revizyon kotasından düşer. Platformun etkileşimli sticker'ları (anket/konum/mention) API ile eklenemez — ürün tarafında açıkça anlatılmalı |
 
-| K6 | **iOS medya formatlarının analizi.** ~~`.mov` sessizce duruyor~~ **video yarısı W09'da çözüldü** (merge bekliyor): `.mov`/`video/quicktime` artık analiz hattına giriyor, codec ffprobe'dan doğrulanıyor, desteklenmeyen codec `rejected`. HEIC/HEIF ingest'te **açıkça reddediliyor** (`INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE`) — sessiz çıkmaz sokak yok. **Kalan (ikinci yarı):** HEIC/HEIF *fotoğraf* analiz hattı (teknik metadata + VLM etiketleme; sahne/ASR yok) tanımlanıp inşa edilmeli — ayrı slice, enum durumu için migration slotu ister | fotoğraf hattı Phase 2'den önce | **Video yarısı uygulandı** (ADR-009). Fotoğraf hattı: bir "fotoğraf hazır/analiz" durumu + VLM etiketleme; landing'de HEIC→JPEG transcode gerekir (platform uyumu). Bu geldiğinde W09'un geçici HEIC reddi kalkar |
+| K6 | **iOS medya formatlarının analizi.** ~~`.mov` sessizce duruyor~~ **video yarısı W09'da çözüldü** (`5ee03d4` merge edildi): `.mov`/`video/quicktime` artık analiz hattına giriyor, codec ffprobe'dan doğrulanıyor, desteklenmeyen codec `rejected`. HEIC/HEIF ingest'te **açıkça reddediliyor** (`INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE`) — sessiz çıkmaz sokak yok. **Kalan (ikinci yarı):** HEIC/HEIF *fotoğraf* analiz hattı (teknik metadata + VLM etiketleme; sahne/ASR yok) tanımlanıp inşa edilmeli — ayrı slice, enum durumu için migration slotu ister | fotoğraf hattı Phase 2'den önce | **Video yarısı uygulandı** (ADR-011). Fotoğraf hattı: bir "fotoğraf hazır/analiz" durumu + VLM etiketleme; landing'de HEIC→JPEG transcode gerekir (platform uyumu). Bu geldiğinde W09'un geçici HEIC reddi kalkar |
 
 ### K5 — Dağıtım ve maliyet modeli
 
@@ -102,7 +102,6 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **tamamlandı** (`8b74f5c`) · merge edildi | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **tamamlandı** (`3aad208`) · merge edildi | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | [W09](handoffs/W09-real-media-materializer.md) | **Gerçek medya materializer + `.mov`/HEVC analiz kapısı** | **tamamlandı** · merge edildi · ADR **011**'e numaralandırıldı (009 W02'de) | merge edildi, dal silindi | Opus 4.8 / high | — |
-| [W10](handoffs/W10-toolchain-reconciliation.md) | **Araç zinciri uzlaştırma** — W09'un kodu W02'nin mypy 2.3 / ruff 0.16 / py313 setinden hiç geçmedi | **şimdi** | `slice/0k-toolchain-reconciliation` | Opus 4.8 / medium | — |
 | W04 | Marka profili + ürün/hizmet kataloğu modülü | W09 sonrası | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** — `storage_upload_id` kolonunu `String(128)`'den genişletme işi de bu slota bindirilir (W01'in kontrol-objesi geçici çözümünü kaldırır) |
 | W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | Opus 4.8 / medium | — |
 | W06 | PostgreSQL 18 + Valkey imaj geçişi | W01 + W02 kapanınca | `slice/0j-runtime-images` | Opus 4.8 / medium | — |

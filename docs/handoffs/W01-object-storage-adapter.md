@@ -160,4 +160,24 @@ Ek olarak `services/api/scripts/__init__.py` eklendi: `mypy .`, `scripts/seed_de
 
 ## Doğrulama
 
-_(test eden oturum doldurur)_
+### Doğrulama — 2026-07-30 · Codex test oturumu
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Kabul 8 karşılanmıyor: Windows hostta `make` kurulu değil; Makefile’daki eşdeğer kapılar API konteynerinde çalıştırıldığında `ruff check` temiz olsa da `ruff format --check` `tests/integration/test_media_ingest.py:377` için başarısız, `mypy .` 7 dosyada 21 hata veriyor. Çalışma ağacı temizdi; bu test oturumu kod değiştirmedi. | orta | `docker compose exec -T api python -m ruff format --check app tests migrations`; `docker compose exec -T api python -m mypy .` | açık |
+| 2 | Gerçek MinIO completion sınırları saldırıya dayanıklı: uydurma ETag `409 UPLOAD_CHECKSUM_MISMATCH`; eksik/fazla part `422 UPLOAD_METADATA_INVALID`; süresi geçmiş session yeni URL üretmiyor; checksum uyuşmazlığında asset `uploading` kalıyor ve ingest işi oluşmuyor. | — | `docker compose exec -T -e RUN_INTEGRATION_TESTS=1 api pytest tests/integration/test_media_uploads_minio.py -vv` → 5 geçti | kabul edildi |
+| 3 | SigV4 sınırları: sunucunun ürettiği güvenli key alanı dışındaki `+`, `%`, boşluk ve Unicode içeren key adapter tarafından imzalanmadan `StoragePermanentError` ile reddediliyor; 1.000 part URL’si üretildi; decoded credential scope `eu-west-1/s3/aws4_request`; 20 dakika eski imza MinIO’dan `403` aldı. | — | `S3MultipartStorage` ile doğrudan key/part/scope/expired-signature probu (MinIO) | kabul edildi |
+
+**Karar:** düzeltme gerekiyor — W01 davranış saldırıları kabul edildi, ancak zorunlu `make verify` kapısı şu an yeşil değil.
+
+### PM değerlendirmesi — 2026-07-30
+
+**Bulgu 2 ve 3 kabul edildi ve değerlidir.** SigV4 sınır saldırıları (özel karakterli key, 1.000 part, credential scope, süresi geçmiş imza) ve completion sınır saldırıları (uydurma ETag, eksik/fazla part, checksum uyuşmazlığında asset durumu) W01'in en riskli iki yüzeyini bağımsız olarak doğruladı. Bunlar W01'i kabul etme kararının dayanağıdır.
+
+**Bulgu 1, W01'e ait değil — ortam kirlenmesi.** Kırmızı kapı gerçekti ama nedeni W01'in kodu değil, testin **yanlış araç zincirinde** koşmasıydı. Kanıt: doğrulama sırasında çalışan API konteynerinde mypy 2.3.0, ruff 0.16.0, celery 5.6.3, fastapi 0.141.1, Python 3.13.14 vardı — oysa o commit'teki `pyproject.toml` mypy `<1.14`, ruff `<0.9`, celery `<5.5`, fastapi `<0.116`, Python `<3.13` istiyordu. Yani `main`'in kaynağı **W02'nin yükseltilmiş araç zincirinden** geçirilmiş. Bildirilen 21 mypy hatası ve format hatası W02'nin sürüm yükseltmesinin beklenen sonucudur ve W02 kendi dalında zaten düzeltmişti.
+
+**Kök neden ve kalıcı düzeltme:** `compose.yaml` sabit `name: socialpilot-ai` kullanıyordu; Docker Compose proje adını worktree'den türetmediği için **herhangi bir worktree'de `docker compose up --build` çalıştırmak paylaşılan konteynerleri ele geçiriyordu**. W02 kendi dalında doğrulama yaparken `main`'in konteynerini kendi imajıyla değiştirdi. Proje adı `${COMPOSE_PROJECT_NAME:-socialpilot-ai}` yapıldı (`5ee03d4`) ve kural [handoffs/README.md](README.md)'ye yazıldı.
+
+**Bu yüzden bulgu 1 kapatılıyor** — W01'de düzeltilecek bir şey yok. Ama Codex'in raporu bunu bulmamızı sağladı: paralel doğrulamayı sessizce geçersiz kılan gerçek bir altyapı hatasıydı ve tek bir oturum bunu göremezdi. Yanlış nedene bağlanmış doğru bir gözlem, değersiz bir rapor değildir.
+
+**Birleşik durumun gerçek sonucu** (`5ee03d4`, W01+W02+W03+W09 hep birlikte, W02'nin araç zinciriyle): lint yeşil · format yeşil · mypy 105 dosya yeşil · **264 pytest** geçti · migration up/down/up head değişmedi · kontrat drift'i yok.
