@@ -61,6 +61,23 @@ docker compose --profile worker up -d        # worker gerekiyorsa
 | K1 | **Faturalandırma modeli:** mağaza IAP mı, web-first + refakatçi mobil mi? Türkiye alternatif faturalandırma programlarında **yok** → %15–30 komisyon kaçınılmaz | Phase 3'ten önce | Web-first satış, mobilde satın alma yok (Apple 3.1.3(a)) |
 | K2 | **n8n içeride mi?** Sustainable Use License ticari platform motoru olmayı kısıtlıyor; iş mantığı zaten yasak, geriye kalan zamanlamayı Celery Beat şu an yapıyor | Phase 2 zamanlama işinden önce | MVP'den çıkar |
 | K3 | **Pazar kapsamı:** yalnız TR mi, EU/global roadmap'te mi? | Phase 2 render şeması | EU roadmap'teyse C2PA/provenance alanları şimdi şemaya girsin |
+| K4 | **Kullanıcı düzenleme modeli:** "ufak editler" (metin taşı, sticker ekle, stil değiştir) nasıl yapılacak? PRD §18.2 bildirimsel overlay'i, §21.3 revizyonu tanımlıyor; §3.3 manuel editörü kapsam dışı bırakıyor — arada karar verilmemiş bir boşluk var | Phase 2 timeline şeması | **Parametrik düzenleme:** timeline JSON patch'i — metin içeriği (yasak-kelime doğrulamalı, fiyat/tarih yalnızca doğrulanmış kayıttan), 9'lu ızgara konum çapaları, stil token'ı, marka onaylı sticker kütüphanesi, segment sınırına snap. Serbest x/y ve kare kare montaj yok. Saf yeniden render **yeni hak tüketmez**, revizyon kotasından düşer. Platformun etkileşimli sticker'ları (anket/konum/mention) API ile eklenemez — ürün tarafında açıkça anlatılmalı |
+
+### K5 — Dağıtım ve maliyet modeli
+
+**Kısıt (kullanıcı, 2026-07-30):** kendi altyapısına ağır sabit maliyet istemiyor; ürün bir SaaS aracı olacak, kullanıcılardan ücret alınacak, kendi makinesi yüklenmeyecek.
+
+**Maliyet sıralaması (büyükten küçüğe):** AI sağlayıcı çağrıları → egress → depolama birikimi → render/transcode CPU → veritabanı/API → mağaza komisyonu (her şeyin üstünden %15-30, bkz. K1). **Sunucu bu listenin dördüncüsü; asıl COGS AI çağrıları.**
+
+**Şimdi alınacak karar:** `RenderPort` / `TranscodePort` birinci sınıf kabiliyet portu olmalı — AI sağlayıcılarıyla aynı muamele (ADR-004). FFmpeg çağrıları render worker'ının içine gömülürse seçenek kaybedilir. Port arkasında üç dağıtım seçeneği konfigürasyonla değişebilir: yönetilen render servisi (sıfır idle) → sıfıra ölçeklenen burst compute (sıfır idle) → ucuz dedike/spot CPU (hacim eşiği sonrası). PRD §17.2 bunu zaten öngörüyor ("Montaj: FFmpeg | alternatif: Yönetilen render servisi").
+
+**PM önerisi:** MVP'de yönetilen render servisi; timeline JSON'u (§18.2) bu servislerin girdi formatıyla büyük ölçüde örtüşüyor. Hacim eşiği geçince kendi burst worker'ına geçilir.
+
+**Bağlı açıklar:**
+- **Egress:** Instagram videoyu bizim URL'imizden kendisi çekiyor → her yayın egress. Egress'i sıfır olan object storage (R2 tipi) seçilmeli; PRD zaten listelemiş.
+- **Maliyet odaklı yaşam döngüsü politikası yok.** Orijinaller süresiz saklanıyor → tenant başına sınırsız büyüyen maliyet. Gerekli: render sonrası proxy silme, orijinali N gün sonra soğuk katmana indirme, plan bazlı depolama kotası. PRD §34'te imha politikası var ama maliyet boyutu yok.
+- **Kredi puan tablosu (§12.4) ölçülmüş sağlayıcı maliyetine kalibre edilmemiş.** W08 benchmark'ı bu yüzden aynı zamanda fiyatlandırma girdisi.
+- **Üretim kendi makinesinde barındırılamaz:** Instagram'ın çekebileceği genel erişilebilir, sürekli ayakta adres gerekiyor.
 
 ## Açık work order'lar
 
