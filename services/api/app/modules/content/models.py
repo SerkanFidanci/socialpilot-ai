@@ -11,6 +11,12 @@ overwritten in place, and both are free if history is the storage model.
 are `none` and `stripped_pending_reattach`. They exist now because a record written from the
 first render is trustworthy and a column back-filled after the fact is not — see the notes on
 each enum in `render.py`.
+
+Slice 2B adds two more (migration `0013`). `content_scripts` keeps a generation's provenance —
+which prompt version, which route, which usage row — beside the script itself, because a script
+whose origin is unknown cannot be audited when a customer disputes what a post said.
+`prompt_templates` (PRD §17.6) is platform configuration rather than tenant data and therefore
+carries no `business_id`; it is the one table here a tenant filter would be meaningless on.
 """
 
 from __future__ import annotations
@@ -28,14 +34,17 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
+from app.modules.content.script import ScenarioCode, ScriptStatus
 from app.modules.identity.models import Base
 
 
@@ -153,6 +162,114 @@ class RenderOutput(Base):
     provenance_manifest_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     failure_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PromptTemplate(Base):
+    """One versioned prompt (PRD §17.6). Platform configuration, not tenant data.
+
+    Rows are append-only: a new prompt is a new version, never an edit, because a stored script
+    names the row it was produced from and editing that row would rewrite history for every
+    script already generated with it. A partial unique index keeps exactly one active version per
+    code, so "which prompt is live" is a database fact rather than a convention.
+    """
+
+    __tablename__ = "prompt_templates"
+    __table_args__ = (
+        UniqueConstraint("code", "version", name="uq_prompt_template_version"),
+        Index(
+            "uq_prompt_template_active",
+            "code",
+            unique=True,
+            postgresql_where=text("active"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    user_template: Mapped[str] = mapped_column(Text, nullable=False)
+    # What we *ask* the provider for. What we *accept* is `parse_script`; the two are compared
+    # by a test rather than assumed to agree.
+    output_schema: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    experiment_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ContentScript(Base):
+    """One generation attempt and, when it succeeded, the validated script (PRD §18.1).
+
+    The row is written and committed **before** the provider is called, carrying the route
+    snapshot (ADR-007). That ordering is the point: a call that is billed and never returns
+    still leaves a `pending` row naming the provider, the model and the ceiling it ran under.
+    Settling the attempt afterwards fills in the document, the usage reference and the outcome.
+
+    Both `template` and `document` are kept. `template` is the provider's output with
+    `{{price:…}}` slots intact — the evidence that the model referenced a record rather than
+    writing a figure — and `document` is §18.1's contract with those slots resolved by code.
+    A rejected generation stores neither: text that invented a price must not be persisted just
+    because it was interesting.
+    """
+
+    __tablename__ = "content_scripts"
+    __table_args__ = (
+        Index("ix_content_scripts_business_created", "business_id", "created_at", "id"),
+        Index("ix_content_scripts_business_status", "business_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    scenario_code: Mapped[ScenarioCode] = mapped_column(
+        _enum(ScenarioCode, "content_scenario_code")
+    )
+    status: Mapped[ScriptStatus] = mapped_column(_enum(ScriptStatus, "content_script_status"))
+
+    # The verified records this generation was allowed to reference. RESTRICT, not CASCADE:
+    # deleting a product must not silently erase the record of what was said about it.
+    product_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
+    )
+    campaign_offer_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("campaign_offers.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    cta_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("approved_ctas.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    source_asset_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+
+    template: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    document: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+
+    prompt_template_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("prompt_templates.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    prompt_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    route_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    provider_usage_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("provider_usage.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    failure_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
     correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

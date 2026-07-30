@@ -28,6 +28,8 @@ buradaki hiçbir sınıf domain kararı vermez.
 | `media/fake_ingest.py` | Byte'sız içerik denetimi / malware tarama / materialize fake'leri |
 | `media/fake_scene_speech.py` | Deterministik sahne tespiti, ses çıkarma ve ASR fake'leri |
 | `media/fake_video_understanding.py` | Deterministik frame çıkarma ve video-understanding fake'leri |
+| `ai/__init__.py` | `create_script_generator` — `SCRIPT_GENERATION_ADAPTER`'a göre fake/disabled seçimi; **üretim `fake` yerine disabled alır**, boot düşürülmez (gerekçe dosyanın içinde) |
+| `ai/fake_script.py` | `FakeScriptGenerationAdapter` (fixture senaryo yazarı; düşman çıktıları için `output_json`/`failure`/`echo_untrusted_notes`) + `DisabledScriptGenerationAdapter` |
 | `__init__.py` (ve alt paket `__init__`'leri) | Paket sınırları |
 
 ## Gereksinim, karar, mimari
@@ -39,4 +41,5 @@ buradaki hiçbir sınıf domain kararı vermez.
 ## Testler
 
 `tests/unit/test_frame_extraction.py` · `tests/unit/test_celery_publisher.py` ·
-`tests/integration/test_alembic.py` · ilgili modül testleri
+`tests/unit/test_content_script_unit.py` · `tests/integration/test_alembic.py` ·
+ilgili modül testleri

@@ -1,9 +1,13 @@
-"""Timeline and render HTTP transport only; every rule lives in the service.
+"""Timeline, render and script HTTP transport only; every rule lives in the service.
 
 The request models here are deliberately thin. A timeline document is *not* modelled as a
 Pydantic tree: it arrives as an opaque object and `parse_timeline` validates it, because that
 same parser has to run in the worker and inside the patch path where no Pydantic model is in
 play. Modelling it twice would create two schemas that agree until the day they do not.
+
+The script endpoints carry the same idea one step further: no request model describes a script
+at all. A script is produced by a provider and validated by `parse_script`, so the only thing a
+client sends is which verified records the generation may draw on.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from datetime import datetime
 from typing import Annotated, Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,21 +24,46 @@ from app.api.dependencies import get_current_user
 from app.core.config import Settings
 from app.core.correlation import get_correlation_id
 from app.core.errors import ProblemException
+from app.core.pagination import MAX_PAGE_SIZE, decode_cursor
+from app.infrastructure.ai import create_script_generator
 from app.infrastructure.database.session import get_session
 from app.infrastructure.render import create_render
-from app.modules.content.models import RenderOutput, RenderStatus, RenderTrigger
+from app.modules.content.models import ContentScript, RenderOutput, RenderStatus, RenderTrigger
 from app.modules.content.patch import MAX_PATCH_OPERATIONS, parse_patch
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
+from app.modules.content.script import ScenarioCode, ScriptGenerationPort, ScriptStatus
+from app.modules.content.script_service import ScriptGenerationService, ScriptRequest
 from app.modules.content.service import ContentTimelineService, TimelineView
 from app.modules.content.timeline import TimelineSchemaError
 from app.modules.identity.models import User
 
 router = APIRouter(prefix="/v1", tags=["content"])
 
+MAX_SOURCE_ASSETS = 50
+
 
 def service(session: AsyncSession, request: Request) -> ContentTimelineService:
     settings = cast(Settings, request.app.state.settings)
     return ContentTimelineService(session, settings, create_render(settings))
+
+
+def get_script_generator(request: Request) -> ScriptGenerationPort:
+    """The capability port, resolved through FastAPI so a test can substitute one adapter.
+
+    The render port is built inline in `service()` above because nothing needs to replace it —
+    the fake and the real adapter declare identical capabilities. A script adapter is different:
+    the interesting cases are hostile *responses*, so the suite has to be able to hand the
+    service a provider that returns exactly one.
+    """
+
+    return create_script_generator(cast(Settings, request.app.state.settings))
+
+
+def script_service(
+    session: AsyncSession, request: Request, generator: ScriptGenerationPort
+) -> ScriptGenerationService:
+    settings = cast(Settings, request.app.state.settings)
+    return ScriptGenerationService(session, settings, generator)
 
 
 def correlation() -> str:
@@ -255,3 +284,157 @@ async def get_render(
         user_id=user.id, business_id=business_id, render_id=render_id
     )
     return RenderResponse.make(render)
+
+
+class ScriptGenerateRequest(BaseModel):
+    """Which verified records the generation may draw on — never any content.
+
+    There is no field here for text, a price, a date or a CTA string. The caller names records;
+    the model writes prose around slots; code fills the slots from those records. A request body
+    that could carry a price would be the shortest path around the rule this slice exists for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_code: ScenarioCode
+    product_id: UUID
+    cta_id: UUID
+    campaign_offer_id: UUID | None = None
+    source_asset_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCE_ASSETS)
+    target_duration_ms: int | None = Field(default=None, ge=5_000, le=90_000)
+
+
+class ScriptResponse(BaseModel):
+    id: UUID
+    business_id: UUID
+    scenario_code: ScenarioCode
+    status: ScriptStatus
+    product_id: UUID | None
+    campaign_offer_id: UUID | None
+    cta_id: UUID | None
+    source_asset_ids: list[UUID]
+    # The resolved §18.1 contract, and the provider's output with `{{price:…}}` slots intact.
+    # Both are returned: the template is the evidence that a figure in the script came from a
+    # record rather than from the model.
+    document: dict[str, Any] | None
+    template: dict[str, Any] | None
+    prompt_code: str
+    prompt_version: int
+    provider: str | None
+    model_name: str | None
+    failure_code: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+    @classmethod
+    def make(cls, script: ContentScript) -> ScriptResponse:
+        route = script.route_snapshot or {}
+        return cls(
+            id=script.id,
+            business_id=script.business_id,
+            scenario_code=script.scenario_code,
+            status=script.status,
+            product_id=script.product_id,
+            campaign_offer_id=script.campaign_offer_id,
+            cta_id=script.cta_id,
+            source_asset_ids=[UUID(value) for value in script.source_asset_ids],
+            document=dict(script.document) if script.document else None,
+            template=dict(script.template) if script.template else None,
+            prompt_code=script.prompt_code,
+            prompt_version=script.prompt_version,
+            # Provider and model only. The rest of the route snapshot — the cost ceiling, the
+            # data region — is operational and stays out of a tenant-facing body.
+            provider=_route_text(route, "provider"),
+            model_name=_route_text(route, "model"),
+            failure_code=script.failure_code,
+            created_at=script.created_at,
+            completed_at=script.completed_at,
+        )
+
+
+class ScriptPageResponse(BaseModel):
+    items: list[ScriptResponse]
+    next_cursor: str | None
+
+
+def _route_text(route: dict[str, Any], key: str) -> str | None:
+    value = route.get(key)
+    return value if isinstance(value, str) else None
+
+
+@router.post(
+    "/businesses/{business_id}/scripts",
+    response_model=ScriptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_script(
+    business_id: UUID,
+    payload: ScriptGenerateRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    generator: Annotated[ScriptGenerationPort, Depends(get_script_generator)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ScriptResponse:
+    """Generate one script (PRD §18.1) from verified records, synchronously."""
+
+    script = await script_service(session, request, generator).generate(
+        user_id=user.id,
+        business_id=business_id,
+        request=ScriptRequest(
+            scenario_code=payload.scenario_code,
+            product_id=payload.product_id,
+            cta_id=payload.cta_id,
+            campaign_offer_id=payload.campaign_offer_id,
+            source_asset_ids=tuple(payload.source_asset_ids),
+            target_duration_ms=payload.target_duration_ms,
+        ),
+        idempotency_key=idempotency_key,
+        correlation_id=correlation(),
+    )
+    return ScriptResponse.make(script)
+
+
+@router.get("/businesses/{business_id}/scripts", response_model=ScriptPageResponse)
+async def list_scripts(
+    business_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    generator: Annotated[ScriptGenerationPort, Depends(get_script_generator)],
+    cursor: Annotated[str | None, Query(max_length=256)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
+    scenario_code: Annotated[ScenarioCode | None, Query()] = None,
+    script_status: Annotated[ScriptStatus | None, Query(alias="status")] = None,
+) -> ScriptPageResponse:
+    """List this business's scripts newest first, with an opaque cursor"""
+
+    page = await script_service(session, request, generator).list_scripts(
+        user_id=user.id,
+        business_id=business_id,
+        cursor=decode_cursor(cursor),
+        limit=limit,
+        scenario_code=scenario_code,
+        status=script_status,
+    )
+    return ScriptPageResponse(
+        items=[ScriptResponse.make(script) for script in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.get("/businesses/{business_id}/scripts/{script_id}", response_model=ScriptResponse)
+async def get_script(
+    business_id: UUID,
+    script_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    generator: Annotated[ScriptGenerationPort, Depends(get_script_generator)],
+) -> ScriptResponse:
+    """Read one script: the resolved contract, the slot template, and its provenance"""
+
+    script = await script_service(session, request, generator).get_script(
+        user_id=user.id, business_id=business_id, script_id=script_id
+    )
+    return ScriptResponse.make(script)

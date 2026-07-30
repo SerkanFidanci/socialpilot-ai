@@ -1,12 +1,93 @@
-# İçerik render mimarisi
+# İçerik üretim ve render mimarisi
 
-**Kapsam:** timeline dokümanı, render öncesi doğrulama, parametrik düzenleme ve `RenderPort`
-arkasındaki render hattı. Slice 2A (W11) ile geldi.
-**İlgili:** PRD §18, §19 → [40b](../product/requirements/40b-scenario-render-lifecycle.md) ·
+**Kapsam:** senaryo üretimi (`script_generation` portu), timeline dokümanı, render öncesi
+doğrulama, parametrik düzenleme ve `RenderPort` arkasındaki render hattı. Slice 2A (W11) render
+yolunu, slice 2B (W13) senaryo yolunu getirdi.
+**İlgili:** PRD §17, §18, §19 → [35](../product/requirements/35-ai-routing-cost.md) ·
+[40a](../product/requirements/40a-content-planning-scenarios.md) ·
+[40b](../product/requirements/40b-scenario-render-lifecycle.md) ·
 `ADR-016-render-port.md` · `ADR-015-parametric-editing-model.md` ·
-[ADR-004](../adr/ADR-004-provider-adapter-pattern.md) · [ADR-013](../adr/ADR-013-single-server-deployment-topology.md)
+[ADR-004](../adr/ADR-004-provider-adapter-pattern.md) · [ADR-007](../adr/ADR-007-media-analysis-provider-routing.md) ·
+[ADR-013](../adr/ADR-013-single-server-deployment-topology.md)
 
-## Akış
+## Senaryo üretimi (slice 2B)
+
+```
+İstemci ──POST /scripts──► ScriptGenerationService
+   (yalnızca kayıt id'leri:      │ yetki (content.generate), aktif işletme
+    product/cta/campaign/asset)  │ girdileri doğrula (tenant-kapsamlı, yoksa 404)
+                                 │ aktif prompt sürümünü oku (§17.6)
+                                 │ maliyet tavanı — AŞILIRSA ÇAĞRI YOK
+                                 ├─ T1 COMMIT: content_scripts(pending) + route snapshot
+                                 │
+                                 │  ScriptGenerationPort.generate(...)   ◄── fake adapter
+                                 │  (sistem prompt + talimat + AYRI input_data)
+                                 │
+                                 └─ T2 COMMIT: provider_usage
+                                    │ parse_script_output (katı şema)
+                                    │ resolve_script (yasak kelime, uydurma fiyat/tarih,
+                                    │   slot çözümü — DEĞERLER YENİDEN OKUNUR)
+                                    └─► generated (template + document) | failed (failure_code)
+```
+
+**Model fiyatı ve tarihi hiç görmez.** `input_data` yalnızca *slot token'ı* taşır
+(`{{price:<product-id>}}`, `{{campaign_end:<offer-id>}}`, `{{cta:<cta-id>}}`); değerin kendisi
+prompt'a girmez. Görmediği bir sayıyı kopyalayamaz — savunmanın ilk katmanı bu.
+
+**İkinci katman: slotu kod çözer.** `product_prices` / `campaign_offers` / `approved_ctas`'tan,
+tenant-kapsamlı sorguyla. Çözülemeyen referans ile başka tenant'ın kaydı **aynı** kurala düşer:
+sorgudan satır dönmez.
+
+**Üçüncü katman: `literal` metinde sayı aramak.** `find_fabrication` deterministik kalıp
+eşlemedir ve yalnızca modelden gelen düz metne uygulanır — çözülmüş değere asla, çünkü
+doğrulanmış bir fiyatın rakam içermesi *beklenir*. Kalıplar bilerek geniş: `165 TL`, `₺1.650,00`,
+`165TL`, `20 dolar`, `yüz altmış beş lira`, `%20`, `31.08.2026`, `1 Ağustos`. `3 dakikada hazır`
+geçer; yanlış pozitif kontrolü testte sayılı girdiyle duruyor. Bu katman **sağlayıcıya
+güvenmez**: sağlayıcı değişse, ele geçirilse ya da (bugün olduğu gibi) fake olsa da çalışır.
+
+**Prompt injection (§17.5).** Kullanıcı videosundan çıkarılmış transcript/sahne metni
+`input_data.untrusted_media_notes` altında **veri** olarak gider; `system_prompt` ve
+`instruction` string'lerine hiç birleştirilmez. Savunma modelin itaat etmemesine dayanmıyor:
+fake sağlayıcının "itaatkâr" modu enjekte edilen cümleyi senaryoya kopyalıyor ve senaryo yine de
+`SCRIPT_FABRICATED_PRICE` ile reddediliyor. Modelin ürettiği URL fetch **edilmiyor** — daha
+katısı, saklanmıyor bile (`SCRIPT_LITERAL_URL_REJECTED`); `script.py`/`script_service.py` içinde
+HTTP istemcisi olmadığını bir test tokenize ederek doğruluyor.
+
+**Neden iki transaction?** Route snapshot çağrıdan **önce** commit edilir (ADR-007). Tek
+transaction daha derli görünürdü ve iki kez yanlış olurdu: ağ turu boyunca bir PostgreSQL
+bağlantısını ve snapshot'ı tutardı, ve çağrı sırasında düşen süreç faturalanmış çağrının tek
+kaydını geri alırdı. Sonucu bilinçli: `pending`'de takılı satır "çağrı yapılmış olabilir,
+sonuçlanmadı" demektir — görülebilir olması gereken bir gerçek.
+
+**Değerler sonuçlanma anında yeniden okunur.** Sağlayıcı düşünürken fiyat satırı kapanabilir,
+kampanya bitebilir. Saklanan senaryoda ancak saklandığı anda doğru olan değer bulunur — worker'ın
+render öncesi yeniden doğrulamasıyla aynı disiplin.
+
+**CTA yalnızca `approved_ctas`'tan.** Serbest CTA metni ifade **edilemiyor**: §18.1'in
+`cta.text` alanını kod dolduruyor, modelin yazabileceği bir alan şemada yok.
+
+**Kampanya bitiş tarihi kapsayıcı son gündür.** Pencere yarı açık `[starts_at, ends_at)`, yani
+`ends_at` kampanyanın bittiği ilk andır. Doğrudan basılsaydı reklamda bir gün fazla vaat
+edilirdi; bu yüzden son kapsayıcı an işletme saat diliminde `31.08.2026` olarak biçimlendirilir.
+
+**Prompt versiyonlama (§17.6).** `prompt_templates` platform konfigürasyonudur (`business_id`
+yok), append-only, ve kısmi unique index kod başına tek aktif sürüm garantiler. `0013` ilk
+sürümü seed eder. Hangi prompt'la üretildiği bilinmeyen senaryo **var olamaz**: sütun `NOT NULL`
+ve tabloya referans veriyor.
+
+**Sağlayıcı fake, yol gerçek.** Ücretli çağrı disiplini bugünden yerinde: route snapshot, maliyet
+tavanı (çağrıdan önce), `provider_usage` satırı (başarısızlıkta da — zaman aşımına uğrayan çağrı
+da faturalanmış olabilir). Politika hatasında **fallback yok**: "model fiyat uydurdu" geçici bir
+hata değil, ve ikinci sağlayıcı ikinci bir görüş değil.
+
+**Üretimde fake yok, ama boot da çökmüyor.** Diğer fake adapter'lar üretimde `Settings`
+doğrulamasında reddediliyor. Bu kabiliyet bir yönüyle farklı: **fake senaryo yayınlanabilir.**
+Fake render açıkça yer tutucu bir dosya yazar; fake senaryo bir insanın onaylayıp
+paylaşabileceği akıcı Türkçe reklam metni yazar. Bu yüzden üretim, uygulamayı düşürmek yerine
+`DisabledScriptGenerationAdapter` alıyor: `503 SCRIPT_GENERATION_NOT_CONFIGURED`, diğer tüm
+endpoint'ler çalışmaya devam ediyor.
+
+## Render akışı
 
 ```
 İstemci ──POST /content/timelines──► ContentTimelineService
@@ -134,9 +215,15 @@ verildiğinde konfigürasyon değişikliğidir.
 
 Katılık K3 (pazar kapsamı) ile ölçeklenir; alanların varlığı K3'e bağlı değil.
 
-## Bu slice'ın taşımadıkları
+## Bu iki slice'ın taşımadıkları
 
-Senaryo üretimi (2B), TTS ve ses hizalama (2C), otomatik QC (2D), yaşam döngüsü ve entitlement
-tüketimi (2E), onay/revizyon akışı (2F), planlayıcı (2G). Yayınlama Phase 4. Gerçek C2PA
-manifest yazımı ayrı iş. `fade` geçişi ve voiceover/music ses kaynakları adapter kabiliyetinde
-**bildirilmiyor**, dolayısıyla doğrulama onları temiz biçimde reddediyor.
+TTS ve ses hizalama (2C), otomatik QC (2D), yaşam döngüsü ve entitlement tüketimi (2E),
+onay/revizyon akışı (2F), planlayıcı (2G). Yayınlama Phase 4. Gerçek C2PA manifest yazımı ayrı
+iş. `fade` geçişi ve voiceover/music ses kaynakları adapter kabiliyetinde **bildirilmiyor**,
+dolayısıyla doğrulama onları temiz biçimde reddediyor.
+
+Senaryo tarafında ayrıca: **gerçek AI sağlayıcısı yok** (W08 benchmark'ı + route politikası
+ADR'ından sonra), senaryodan timeline **otomatik kurulmuyor** (senaryo `required_scene_tags`
+taşır ama sahne ataması yapmaz — 2C/2E), ve senaryo üretimi **dayanıklı bir job değil**:
+istek-yanıt döngüsünde, sınırlı timeout ile koşuyor. `pending`'de takılı kalan satırları
+süpüren bir kurtarma taraması 2E'nin işi.

@@ -15,6 +15,12 @@ repository. Two reasons: `job_type` is a plain string column, so a new durable j
 no schema change and no shared enum; and work-order file exclusivity puts
 `modules/operations/` outside this slice. The query is the same SKIP LOCKED shape the media
 drains use, and the report flags promoting it to a shared helper as follow-up work.
+
+`ScriptFactsReader` (slice 2B) is the second such window, and the reason it is separate from
+`ContentFactsReader` is not tidiness: a timeline resolves verified references keyed by PRD
+§18.2's dotted `text_source`, while a script resolves them keyed by its own slot kinds. Merging
+the two would mean one mapping serving two key spaces, which is how a `verified_product.price`
+and a `{{price:…}}` end up silently resolving through each other's rules.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from uuid import UUID
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.pagination import Cursor, apply_cursor, fetch_size
 from app.modules.brands.domain import CampaignActivity, evaluate_campaign_activity
 from app.modules.brands.models import (
     ApprovedCta,
@@ -35,10 +42,22 @@ from app.modules.brands.models import (
     BrandProfile,
     CampaignOffer,
     ForbiddenClaim,
+    Product,
     ProductPrice,
 )
 from app.modules.content.domain import format_money
-from app.modules.content.models import ContentTimeline, RenderOutput
+from app.modules.content.models import ContentScript, ContentTimeline, PromptTemplate, RenderOutput
+from app.modules.content.script import (
+    BrandBrief,
+    CampaignBrief,
+    ProductBrief,
+    ScenarioCode,
+    ScriptStatus,
+    SlotKind,
+    UntrustedNote,
+    format_campaign_end,
+    sanitize_untrusted,
+)
 from app.modules.content.timeline import TextSource
 from app.modules.content.validation import AssetFacts, VerifiedValue
 from app.modules.media.models import (
@@ -46,6 +65,7 @@ from app.modules.media.models import (
     MediaAsset,
     MediaAssetStatus,
     MediaScene,
+    MediaSceneUnderstanding,
     MediaTechnicalMetadata,
     Transcript,
     TranscriptSegment,
@@ -62,7 +82,7 @@ class ContentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def add(self, value: ContentTimeline | RenderOutput) -> None:
+    def add(self, value: ContentScript | ContentTimeline | RenderOutput) -> None:
         self._session.add(value)
 
     # --- timelines -----------------------------------------------------------------------
@@ -135,6 +155,57 @@ class ContentRepository:
             .limit(1)
         )
         return cast(BackgroundJob | None, await self._session.scalar(statement))
+
+    # --- scripts -------------------------------------------------------------------------
+
+    async def get_script(
+        self, business_id: UUID, script_id: UUID, *, lock: bool = False
+    ) -> ContentScript | None:
+        statement = select(ContentScript).where(
+            ContentScript.business_id == business_id, ContentScript.id == script_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(ContentScript | None, await self._session.scalar(statement))
+
+    async def list_scripts(
+        self,
+        business_id: UUID,
+        *,
+        cursor: Cursor | None,
+        limit: int,
+        scenario_code: ScenarioCode | None = None,
+        status: ScriptStatus | None = None,
+    ) -> list[ContentScript]:
+        """Return at most `limit + 1` rows so the caller can detect a next page."""
+
+        statement: Select[tuple[ContentScript]] = select(ContentScript).where(
+            ContentScript.business_id == business_id
+        )
+        if scenario_code is not None:
+            statement = statement.where(ContentScript.scenario_code == scenario_code)
+        if status is not None:
+            statement = statement.where(ContentScript.status == status)
+        paged = apply_cursor(
+            statement,
+            created_at=ContentScript.created_at,
+            identifier=ContentScript.id,
+            cursor=cursor,
+        ).limit(fetch_size(limit))
+        return list((await self._session.scalars(paged)).all())
+
+    async def active_prompt_template(self, code: str) -> PromptTemplate | None:
+        """The one live version of a prompt. No tenant filter: §17.6 is platform configuration.
+
+        A generation with no active template is refused rather than run with a hard-coded
+        fallback, because "which prompt produced this" is a question the record has to be able
+        to answer for every script that exists.
+        """
+
+        statement = select(PromptTemplate).where(
+            PromptTemplate.code == code, PromptTemplate.active.is_(True)
+        )
+        return cast(PromptTemplate | None, await self._session.scalar(statement))
 
 
 class ContentFactsReader:
@@ -318,6 +389,197 @@ class ContentFactsReader:
                     text=cta.value, within_window=True
                 )
         return resolved
+
+
+class ScriptFactsReader:
+    """Script generation's read-only window onto brands and media.
+
+    Every method takes `business_id` and constrains its statement with it, so another tenant's
+    product, campaign, CTA or asset produces *no row*. The service turns that absence into a
+    `404` for a declared input and into `SCRIPT_VERIFIED_FIELD_NOT_FOUND` for a slot the model
+    emitted — one query shape, two honest answers, no cross-tenant comparison to forget.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def brand_brief(self, business_id: UUID) -> BrandBrief | None:
+        statement = select(BrandProfile).where(BrandProfile.business_id == business_id)
+        profile = cast(BrandProfile | None, await self._session.scalar(statement))
+        if profile is None:
+            return None
+        return BrandBrief(
+            name=profile.display_name,
+            tone=profile.tone,
+            language=profile.communication_language,
+        )
+
+    async def product_brief(self, business_id: UUID, product_id: UUID) -> ProductBrief | None:
+        statement = select(Product).where(
+            Product.business_id == business_id, Product.id == product_id
+        )
+        product = cast(Product | None, await self._session.scalar(statement))
+        if product is None:
+            return None
+        return ProductBrief(
+            product_id=product.id,
+            name=product.name,
+            category=product.category,
+            description=product.description,
+        )
+
+    async def campaign_brief(
+        self, business_id: UUID, campaign_id: UUID, *, now: datetime
+    ) -> CampaignBrief | None:
+        statement = select(CampaignOffer).where(
+            CampaignOffer.business_id == business_id, CampaignOffer.id == campaign_id
+        )
+        offer = cast(CampaignOffer | None, await self._session.scalar(statement))
+        if offer is None:
+            return None
+        return CampaignBrief(
+            campaign_id=offer.id,
+            name=offer.name,
+            ends_at=offer.ends_at,
+            # W04's deterministic verdict, reused rather than re-derived. A second definition of
+            # "active" is a second answer waiting to disagree with the first.
+            active=evaluate_campaign_activity(
+                status=offer.status,
+                approval_status=offer.approval_status,
+                starts_at=offer.starts_at,
+                ends_at=offer.ends_at,
+                now=now,
+            )
+            is CampaignActivity.ACTIVE,
+        )
+
+    async def cta_text(self, business_id: UUID, cta_id: UUID) -> str | None:
+        statement = select(ApprovedCta.value).where(
+            ApprovedCta.business_id == business_id, ApprovedCta.id == cta_id
+        )
+        return cast(str | None, await self._session.scalar(statement))
+
+    async def current_price(self, business_id: UUID, product_id: UUID) -> str | None:
+        """The open price row, formatted. A superseded price can never reach a script."""
+
+        statement = select(ProductPrice).where(
+            ProductPrice.business_id == business_id,
+            ProductPrice.product_id == product_id,
+            ProductPrice.effective_to.is_(None),
+        )
+        price = cast(ProductPrice | None, await self._session.scalar(statement))
+        if price is None:
+            return None
+        return format_money(amount_minor=price.price_minor, currency=price.currency)
+
+    async def known_asset_ids(
+        self, business_id: UUID, asset_ids: Sequence[UUID]
+    ) -> frozenset[UUID]:
+        if not asset_ids:
+            return frozenset()
+        statement = select(MediaAsset.id).where(
+            MediaAsset.business_id == business_id, MediaAsset.id.in_(tuple(asset_ids))
+        )
+        return frozenset((await self._session.scalars(statement)).all())
+
+    async def media_notes(
+        self,
+        business_id: UUID,
+        asset_ids: Sequence[UUID],
+        *,
+        max_notes: int,
+        max_chars: int,
+    ) -> tuple[UntrustedNote, ...]:
+        """Transcript lines and scene descriptions for the named assets, sanitized.
+
+        This text came out of a customer's video. It is the single most likely place for an
+        injection attempt to enter the pipeline (ADR-006, §17.5), so it is flattened to one
+        bounded line each here and handed to the prompt builder as *data*. Nothing downstream
+        reads it as an instruction, and nothing acts on what it says.
+        """
+
+        if not asset_ids or max_notes < 1:
+            return ()
+        ids = tuple(asset_ids)
+        notes: list[UntrustedNote] = []
+
+        transcripts = (
+            select(Transcript.asset_id, TranscriptSegment.text)
+            .join(TranscriptSegment, TranscriptSegment.transcript_id == Transcript.id)
+            .where(Transcript.business_id == business_id, Transcript.asset_id.in_(ids))
+            .order_by(Transcript.asset_id, TranscriptSegment.segment_index)
+            .limit(max_notes)
+        )
+        for asset_id, text_value in (await self._session.execute(transcripts)).all():
+            notes.append(
+                UntrustedNote(
+                    source="transcript",
+                    asset_id=asset_id,
+                    text=sanitize_untrusted(text_value, max_chars=max_chars),
+                )
+            )
+
+        remaining = max_notes - len(notes)
+        if remaining > 0:
+            scenes = (
+                select(MediaSceneUnderstanding.asset_id, MediaSceneUnderstanding.summary)
+                .where(
+                    MediaSceneUnderstanding.business_id == business_id,
+                    MediaSceneUnderstanding.asset_id.in_(ids),
+                )
+                .order_by(MediaSceneUnderstanding.asset_id, MediaSceneUnderstanding.id)
+                .limit(remaining)
+            )
+            for asset_id, summary in (await self._session.execute(scenes)).all():
+                notes.append(
+                    UntrustedNote(
+                        source="scene_summary",
+                        asset_id=asset_id,
+                        text=sanitize_untrusted(summary, max_chars=max_chars),
+                    )
+                )
+        return tuple(note for note in notes if note.text)
+
+    async def slot_values(
+        self,
+        business_id: UUID,
+        *,
+        product_id: UUID | None,
+        campaign_offer_id: UUID | None,
+        cta_id: UUID | None,
+        timezone_name: str,
+        now: datetime,
+    ) -> dict[tuple[str, UUID], VerifiedValue]:
+        """Resolve exactly the slots the *request* declared, and nothing else.
+
+        Only the inputs the caller named are resolvable. A model that emits a slot pointing at
+        some other record — another tenant's product, a campaign nobody asked for — finds no
+        entry here, so it is rejected by the same rule that catches an invented id. The tenant
+        filter below is the second gate, not the only one.
+        """
+
+        values: dict[tuple[str, UUID], VerifiedValue] = {}
+        if product_id is not None:
+            price = await self.current_price(business_id, product_id)
+            if price is not None:
+                values[(SlotKind.PRICE.value, product_id)] = VerifiedValue(
+                    text=price, within_window=True
+                )
+        if campaign_offer_id is not None:
+            campaign = await self.campaign_brief(business_id, campaign_offer_id, now=now)
+            if campaign is not None:
+                values[(SlotKind.CAMPAIGN_TITLE.value, campaign_offer_id)] = VerifiedValue(
+                    text=campaign.name, within_window=campaign.active
+                )
+                values[(SlotKind.CAMPAIGN_END.value, campaign_offer_id)] = VerifiedValue(
+                    text=format_campaign_end(campaign.ends_at, timezone_name=timezone_name),
+                    within_window=campaign.active,
+                )
+        if cta_id is not None:
+            cta = await self.cta_text(business_id, cta_id)
+            if cta is not None:
+                values[(SlotKind.CTA.value, cta_id)] = VerifiedValue(text=cta, within_window=True)
+        return values
 
 
 def references_in(
