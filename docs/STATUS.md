@@ -4,11 +4,11 @@
 
 | | |
 |---|---|
-| `main` | `7d78c6e` — feat: add flutter media analysis demo |
+| `main` | W01 `8d055b7` üzerinde — feat: add S3-compatible object storage adapter and dev seed (+ rapor commit'i) |
 | Alembic head | `0009_video_understanding` (tek head) |
-| Backend doğrulama | 180 pytest (gerçek PostgreSQL) · ruff + ruff format · mypy strict — 95 dosyada temiz |
+| Backend doğrulama | 244 pytest (gerçek PostgreSQL + MinIO) · ruff + ruff format · mypy strict — 101 dosyada temiz |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
-| Compose | api healthy · `/health/ready` → postgresql + redis ready |
+| Compose | api + postgres + redis + minio healthy · `/health/ready` → postgresql + redis ready |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
 
 > **Her oturum İLK bu dosyayı okur.** Bu dosya ile `git log` çelişirse **git kazanır**; çelişkiyi gören oturum bu dosyayı aynı commit'te düzeltir.
@@ -27,7 +27,8 @@
 
 - Marka profili + ürün/hizmet kataloğu (PRD §11) → **W04**
 - Sahne kütüphanesi arama + pgvector embedding/retrieval (PRD §16.4–16.5)
-- **Phase 1 çıkış kriteri henüz karşılanmadı:** *"10 video yüklenir; sahneler, transcript ve etiketler görünür"* — upload byte yolu bloke, bkz. **B1**.
+- **Phase 1 çıkış kriteri henüz karşılanmadı:** *"10 video yüklenir; sahneler, transcript ve etiketler görünür"* — yükleme yolu artık gerçek (W01), ama worker medyayı fixture'dan okuduğu için analiz gerçek byte görmüyor; bkz. **B1**.
+- `video/quicktime` ve HEIC yüklemede kabul ediliyor ama analiz hattına girmiyor — `ingest.py` teknik analizi yalnızca `video/mp4` için kuyruğa alıyor (W01 raporu, madde 4: karar gerekiyor).
 
 ### Başlamadı
 
@@ -37,7 +38,7 @@ Phase 2 içerik üretimi · Phase 3 abonelik/entitlement · Phase 4 yayınlama �
 
 | # | Konu | Etki | Çözüm |
 |---|---|---|---|
-| B1 | `FakeMultipartStorage` byte kabul etmiyor; part URL'leri kasıtlı olarak erişilemez `fake-storage.invalid` host'una gidiyor, `complete_upload` yalnızca in-process test hook'uyla çalışıyor | Gerçek PUT çalışmıyor → mobil demo 3. adımı ve Phase 1 çıkış kriteri kapanamıyor | **W01** — MinIO/S3 adapter |
+| B1 | ~~`FakeMultipartStorage` byte kabul etmiyor~~ → **yükleme yarısı çözüldü** (`8d055b7`). Gerçek multipart PUT → complete → `uploaded` + ingest job, MinIO'ya karşı test edildi. **Kalan yarı:** worker medyayı hâlâ fixture tabanlı `FakeMediaMaterializer` ile okuyor, yani ffprobe gerçek byte görmüyor | Mobil demo 3. adımı çalışıyor; **Phase 1 çıkış kriteri hâlâ kapanmıyor** | W01 kapandı → **gerçek materializer adapter'ı için yeni WO gerekiyor** (W01 raporu, madde 3) |
 | B2 | `JAVA_HOME` yok, Android cmdline-tools eksik | APK build edilemiyor (Dart kodunun derlendiği `flutter test` ile doğrulanmış) | **W02** ortam adımı |
 
 ## Geliştirme ortamı
@@ -95,7 +96,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 
 | WO | Konu | Durum | Dal | Model / effort | Migration slotu |
 |---|---|---|---|---|---|
-| [W01](handoffs/W01-object-storage-adapter.md) | MinIO/S3 storage adapter + iOS MIME düzeltmesi | **şimdi** | `slice/1e-object-storage` | Opus 5 / high | — |
+| [W01](handoffs/W01-object-storage-adapter.md) | MinIO/S3 storage adapter + iOS MIME düzeltmesi | **tamamlandı** (`8d055b7`) · doğrulama bekliyor | merge edildi, dal silindi | Opus 5 / high | — |
 | [W03](handoffs/W03-docs-restructure.md) | Doküman yapısı + navigasyon katmanı | **şimdi** (W01 ile paralel) | `slice/doc-restructure` | Opus 4.8 / medium | — |
 | [W02](handoffs/W02-platform-hardening.md) | Bağımlılık tazeleme, lockfile, CI güvenlik kapıları | **W01 merge sonrası** | `slice/0h-platform-hardening` | Opus 4.8 / medium | — |
 | W04 | Marka profili + ürün/hizmet kataloğu modülü | W03 kapanınca yazılacak | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** |
