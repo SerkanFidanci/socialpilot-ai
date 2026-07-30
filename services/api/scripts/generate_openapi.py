@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.main import create_app  # noqa: E402
 
-from generate_endpoints_doc import write as write_endpoints_doc  # noqa: E402
+# Resolved at runtime through the sys.path insert above; mypy cannot follow that.
+from generate_endpoints_doc import write as write_endpoints_doc  # type: ignore[import-not-found]  # noqa: E402
 
 
 def main() -> None:

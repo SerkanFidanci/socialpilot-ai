@@ -32,6 +32,25 @@ Each arrow that advances durable work is written as an outbox row in the same Po
 
 Before any FFprobe, derivative, ASR, or VLM work, the worker checks the immutable server-generated object identity, `business_id`, expected size, SHA-256, detected type/container, policy limits, and malware result. A mismatch/unsupported format is rejected; infected or security-indeterminate media is quarantined. A transient scanner outage may retry but may not bypass the gate.
 
+## Materialization and the analysis gate
+
+Workers never receive bytes from FastAPI; each analysis stage streams the object it needs
+(the original, or the proxy) from storage to a bounded scratch directory through the
+`MediaMaterializerPort`. The real adapter (`S3MediaMaterializer`, ADR-009) reuses the storage
+adapter's signing, checks size with `HeadObject` before streaming, and always removes its
+partial file on error, cancellation, or timeout (§19.3). Selection mirrors the storage adapter
+(`MATERIALIZER_ADAPTER=fake|s3`); `production` refuses the fixture fake.
+
+After a clean security gate, ingest schedules technical analysis for the supported video
+*containers* (`MEDIA_ANALYZABLE_VIDEO_TYPES`: `video/mp4`, `video/quicktime`). Container
+admission is not codec admission: technical analysis validates the ffprobe-resolved codec
+against `MEDIA_SUPPORTED_VIDEO_CODECS` (`h264`, `hevc`) and rejects an unsupported codec with a
+documented code (`TECHNICAL_VIDEO_CODEC_UNSUPPORTED`) rather than stopping silently. HEVC input
+is proxied to H.264 (§15.5). HEIC/HEIF photos are admitted at upload but have no analysis
+pipeline yet, so ingest declines them explicitly (`INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE`,
+asset `rejected`) instead of leaving them in a silent dead end; JPEG/PNG and audio keep their
+accepted-no-video-analysis contract (ADR-009).
+
 ## States
 
 The asset progresses `uploaded → validating → processing → ready`. Unsupported, corrupt, checksum-mismatched, or permanently disallowed media becomes `rejected`; infected or security-indeterminate media becomes `quarantined`. Retriable work remains visible in the durable job state rather than inventing a second asset failure state. Deletion follows `purging → deleted` and prevents new effects.

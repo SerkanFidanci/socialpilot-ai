@@ -15,10 +15,10 @@ from app.infrastructure.celery_app import celery_app
 from app.infrastructure.celery_publisher import CeleryOutboxPublisher
 from app.infrastructure.database.metadata import verify_mapping_is_complete
 from app.infrastructure.database.session import Database, create_database
+from app.infrastructure.media import create_materializer
 from app.infrastructure.media.fake_ingest import (
     FakeContentInspector,
     FakeMalwareScanner,
-    FakeMediaMaterializer,
 )
 from app.infrastructure.media.fake_scene_speech import (
     FakeAudioExtractor,
@@ -36,6 +36,7 @@ from app.modules.media.storage import MultipartStoragePort
 from app.modules.media.technical import (
     FFmpegDerivativeAdapter,
     FFprobeAdapter,
+    MediaMaterializerPort,
     TechnicalAnalysisService,
 )
 from app.modules.media.video_understanding_service import VideoUnderstandingService
@@ -51,7 +52,7 @@ class WorkerContext:
     loop: asyncio.AbstractEventLoop
     outbox_publisher: CeleryOutboxPublisher
     storage: MultipartStoragePort
-    materializer: FakeMediaMaterializer
+    materializer: MediaMaterializerPort
     content_inspector: FakeContentInspector
     malware_scanner: FakeMalwareScanner
     scene_detector: FakeSceneDetector
@@ -144,7 +145,7 @@ def build_worker_context(settings: Settings) -> WorkerContext:
         loop=loop,
         outbox_publisher=CeleryOutboxPublisher(celery_app),
         storage=create_storage(settings),
-        materializer=FakeMediaMaterializer(allow_missing_for_testing=True),
+        materializer=create_materializer(settings),
         content_inspector=FakeContentInspector(),
         malware_scanner=FakeMalwareScanner(),
         scene_detector=FakeSceneDetector(),

@@ -416,6 +416,51 @@ class S3MultipartStorage:
         await self._abort_multipart(control.object_key, control.upload_id)
         await self._delete_quietly(_control_key(storage_upload_id))
 
+    async def download_to_path(self, *, object_key: str, destination: Path, max_bytes: int) -> int:
+        """Stream an object to a worker file in bounded chunks; never buffer it in memory.
+
+        The size is checked with ``HeadObject`` before a single body byte is pulled, so an
+        object larger than the caller's ceiling (or unexpectedly empty) never starts a
+        download. The caller owns the destination file lifecycle: on any error the partial
+        file is left for the caller to remove, matching the materializer's scratch cleanup.
+        """
+
+        _validate_object_key(object_key)
+        head = await self._head(object_key)
+        if head.byte_size <= 0:
+            raise StoragePermanentError("storage object is empty")
+        if head.byte_size > max_bytes:
+            raise StoragePermanentError("storage object exceeds the materialization limit")
+        url = self._signer.endpoint.url(object_key)
+        headers = self._signer.headers(
+            method="GET",
+            object_key=object_key,
+            query={},
+            payload_sha256=_EMPTY_SHA256,
+            now=datetime.now(UTC),
+        )
+        total = 0
+        handle = await asyncio.to_thread(destination.open, "wb")
+        try:
+            async with self._client(self._verification_timeout) as client:
+                try:
+                    async with client.stream("GET", url, headers=headers) as response:
+                        if response.status_code != 200:
+                            await response.aread()
+                            raise self._mapped_error(response.status_code)
+                        async for chunk in response.aiter_bytes(_CHUNK_BYTES):
+                            total += len(chunk)
+                            if total > head.byte_size:
+                                raise StoragePermanentError("storage object grew during download")
+                            await asyncio.to_thread(handle.write, chunk)
+                except httpx.HTTPError as error:
+                    raise StorageUnavailableError("storage request failed") from error
+        finally:
+            await asyncio.to_thread(handle.close)
+        if total != head.byte_size:
+            raise StoragePermanentError("storage object size does not match")
+        return total
+
     # ------------------------------------------------------------- presigned part URLs
 
     def _instructions(

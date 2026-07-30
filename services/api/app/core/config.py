@@ -120,8 +120,19 @@ class Settings(BaseSettings):
         "video/quicktime",
         "audio/mpeg",
     )
+    # Video containers that enter the technical-analysis pipeline. Admission at the upload
+    # boundary is wider than analysis: a container here is only scheduled for ffprobe work;
+    # the actual codec is validated against media_supported_video_codecs downstream.
+    media_analyzable_video_types: tuple[str, ...] = ("video/mp4", "video/quicktime")
+    # ffprobe codec_name values the pipeline can probe and proxy. An admitted container whose
+    # ffprobe-resolved codec is not here is rejected with a documented code, never left silent.
+    media_supported_video_codecs: tuple[str, ...] = ("h264", "hevc")
     identity_adapter: Literal["local"] = "local"
     storage_adapter: Literal["fake", "s3"] = "fake"
+    # The worker-input adapter. `fake` reads registered fixtures for tests; `s3` streams the
+    # real object from storage. Selection mirrors storage_adapter and is refused as `fake`
+    # in production; the s3 materializer requires the same S3_* configuration.
+    materializer_adapter: Literal["fake", "s3"] = "fake"
     # Server-side endpoint the API and workers call. Presigned part URLs are signed for
     # S3_PRESIGN_ENDPOINT_URL instead, because SigV4 binds the signature to the host the
     # client will actually contact (a phone cannot resolve a Compose service name).
@@ -160,12 +171,19 @@ class Settings(BaseSettings):
             raise ValueError("Redis URLs must use redis:// or rediss://")
         return value
 
-    @field_validator("media_allowed_mime_types")
+    @field_validator("media_allowed_mime_types", "media_analyzable_video_types")
     @classmethod
     def validate_media_types(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if not value or any("/" not in mime for mime in value):
-            raise ValueError("MEDIA_ALLOWED_MIME_TYPES must contain MIME types")
+            raise ValueError("media MIME type settings must contain MIME types")
         return tuple(mime.lower() for mime in value)
+
+    @field_validator("media_supported_video_codecs")
+    @classmethod
+    def validate_supported_codecs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value or any(not codec.strip() for codec in value):
+            raise ValueError("MEDIA_SUPPORTED_VIDEO_CODECS must be non-empty codec names")
+        return tuple(codec.strip().lower() for codec in value)
 
     @field_validator("ffmpeg_binary", "ffprobe_binary")
     @classmethod
@@ -348,6 +366,7 @@ class Settings(BaseSettings):
             for description, selected in (
                 ("the local identity adapter", self.identity_adapter == "local"),
                 ("the fake storage adapter", self.storage_adapter == "fake"),
+                ("the fake media materializer", self.materializer_adapter == "fake"),
             )
             if selected
         ]
@@ -359,7 +378,8 @@ class Settings(BaseSettings):
     def require_complete_s3_configuration(self) -> Settings:
         """Fail at startup rather than on the first upload of a misconfigured deployment."""
 
-        if self.storage_adapter != "s3":
+        # The s3 materializer reuses the same adapter, so either selection needs the S3_* set.
+        if self.storage_adapter != "s3" and self.materializer_adapter != "s3":
             return self
         missing = [
             name

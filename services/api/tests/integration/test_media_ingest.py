@@ -119,6 +119,9 @@ def upload_payload(
             "image/jpeg": "image.jpg",
             "image/png": "image.png",
             "audio/mpeg": "audio.mp3",
+            "image/heic": "photo.heic",
+            "image/heif": "photo.heif",
+            "video/quicktime": "clip.mov",
         }.get(content_type, "clip.mp4"),
         "content_type": content_type,
         "byte_size": byte_size,
@@ -731,6 +734,122 @@ def test_image_and_audio_ingest_do_not_schedule_video_technical_analysis() -> No
                 technical_records(str(asset["id"]))
             )
             assert technical_job_count == 0 and technical_event_count == 0
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_quicktime_ingest_schedules_video_technical_analysis() -> None:
+    owner = auth("mov-owner", "mov-owner@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "QuickTime", "timezone": "UTC"}
+        ).json()["id"]
+        inspector = cast(FastAPI, client.app).state.content_inspector
+        asset = complete_upload(client, business_id, owner, content_type="video/quicktime")
+        _, object_key = asyncio.run(upload_details_for_asset(str(asset["id"])))
+        inspector.set_result_for_testing(object_key=object_key, content_type="video/quicktime")
+        job = asyncio.run(process_next(cast(FastAPI, client.app)))
+        assert job is not None and job.status == JobStatus.SUCCEEDED
+        # `.mov` is now admitted to the analysis pipeline instead of stopping after ingest.
+        technical_job_count, technical_event_count = asyncio.run(
+            technical_records(str(asset["id"]))
+        )
+        assert technical_job_count == 1 and technical_event_count == 1
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_heic_ingest_is_declined_explicitly_without_silent_death() -> None:
+    owner = auth("heic-owner", "heic-owner@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "HEIC", "timezone": "UTC"}
+        ).json()["id"]
+        inspector = cast(FastAPI, client.app).state.content_inspector
+        for content_type in ("image/heic", "image/heif"):
+            asset = complete_upload(client, business_id, owner, content_type=content_type)
+            _, object_key = asyncio.run(upload_details_for_asset(str(asset["id"])))
+            inspector.set_result_for_testing(object_key=object_key, content_type=content_type)
+            job = asyncio.run(process_next(cast(FastAPI, client.app)))
+            # The upload succeeded (W01 byte path), but analysis is explicitly declined: the
+            # asset is rejected with a documented code, never left silently mid-pipeline.
+            assert job is not None and job.status == JobStatus.FAILED
+            assert job.last_error_code == "INGEST_ANALYSIS_UNSUPPORTED_MEDIA_TYPE"
+            persisted, _ = asyncio.run(stored_asset(str(asset["id"])))
+            assert persisted.ingest_status == IngestStatus.REJECTED
+            assert persisted.status == MediaAssetStatus.REJECTED
+            technical_job_count, _ = asyncio.run(technical_records(str(asset["id"])))
+            assert technical_job_count == 0
+
+
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_unsupported_codec_rejects_the_asset_with_a_documented_code(tmp_path: Path) -> None:
+    # An mp4 container the ingest gate admits, but wrapping a codec the pipeline cannot proxy.
+    source = tmp_path / "mpeg4.mp4"
+    subprocess.run(
+        [
+            config().ffmpeg_binary,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x48:r=12",
+            "-t",
+            "1",
+            "-c:v",
+            "mpeg4",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    owner = auth("codec-owner", "codec-owner@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = client.post(
+            "/v1/businesses", headers=owner, json={"name": "Codec", "timezone": "UTC"}
+        ).json()["id"]
+        asset = complete_upload(
+            client, business_id, owner, byte_size=source.stat().st_size, checksum=checksum
+        )
+        assert asyncio.run(process_next(cast(FastAPI, client.app))) is not None
+        persisted_asset, _ = asyncio.run(stored_asset(str(asset["id"])))
+        materializer = FakeMediaMaterializer()
+        materializer.register_for_testing(
+            object_key=persisted_asset.storage_object_key, fixture_path=source
+        )
+        job = asyncio.run(
+            process_technical_next(
+                materializer=materializer,
+                storage=cast(FakeMultipartStorage, cast(FastAPI, client.app).state.storage),
+                workdir=tmp_path,
+            )
+        )
+        assert job is not None and job.status == JobStatus.FAILED
+        assert job.next_attempt_at is None  # unsupported media does not retry
+        assert job.last_error_code == "TECHNICAL_VIDEO_CODEC_UNSUPPORTED"
+
+        async def rejected_state() -> tuple[MediaAssetStatus, IngestStatus, str | None]:
+            engine = create_async_engine(os.environ["DATABASE_URL"])
+            try:
+                async with AsyncSession(engine) as session:
+                    reloaded = await session.scalar(
+                        select(MediaAsset).where(MediaAsset.id == asset["id"])
+                    )
+                    analysis = await MediaRepository(session).get_technical_analysis(
+                        UUID(str(business_id)), UUID(str(asset["id"]))
+                    )
+                    assert reloaded is not None
+                    return (
+                        reloaded.status,
+                        reloaded.ingest_status,
+                        analysis.safe_error_code if analysis is not None else None,
+                    )
+            finally:
+                await engine.dispose()
+
+        status, ingest_status, safe_code = asyncio.run(rejected_state())
+        assert status == MediaAssetStatus.REJECTED
+        assert ingest_status == IngestStatus.REJECTED
+        assert safe_code == "TECHNICAL_VIDEO_CODEC_UNSUPPORTED"
 
 
 @pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
