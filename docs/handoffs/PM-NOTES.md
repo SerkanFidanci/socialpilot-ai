@@ -61,6 +61,9 @@ Sırası [STATUS.md](../STATUS.md) WO tablosunda. Henüz yazılmamış olanları
   2. Dış API sürüm yaşam döngüsü politikası (Google Ads yılda 4 major; pinleme + takvimli yükseltme + contract test).
   3. Yayın (publish) delivery yüzeyi — Instagram public URL gereksinimi ile signed-URL duruşunun çelişkisi.
   4. AI disclosure alanları (Meta otomatik etiketleme + EU AI Act Md. 50).
+  5. **Sağlayıcı route politikasının içeriği.** ADR-007 mekanizmayı kurdu ama sağlayıcı seçimini bilinçli olarak dışarıda bıraktı; route kaydında `data-region requirement` alanı var, politikanın içeriği yok. Yazılacak kural: *yüz/ses taşıyan girdi sınıfı hangi sağlayıcılara gidebilir* (KVKK: biyometrik tartışması + her sağlayıcı için standart sözleşme ve 5 iş günü Kurul bildirimi), ve QC'nin üreten sağlayıcıdan farklı olma zorunluluğunun routing'e nasıl bağlandığı.
+
+- **W08 — Golden set benchmark koşum takımı (gerçek sağlayıcı bağlanmadan ÖNCE).** PRD §40.5'teki sabit medya seti (dikey/yatay, gürültülü, Türkçe konuşma, karanlık, titrek, insan yüzü, öncesi/sonrası, logo, küçük metin) üzerinde kabiliyet başına sağlayıcı karşılaştırması: Türkçe ASR doğruluğu, VLM sahne isabeti, Türkçe TTS prozodisi, marka tonu ve yasak kelime uyumu, katı JSON şema sadakati, kabiliyet başına gerçek maliyet. **Gerekçe:** ölçülmeden bağlanan ilk sağlayıcı varsayılan hâline gelir ve kabiliyet routing'inin amacı kaybolur. PRD §17.2'nin aday tablosu maliyete göre seçilmiş; Türkçe kalitesi ve veri bölgesi tartılmamış.
 - **Phase 2 kapısı öncesi değerlendirme:** durable execution (DBOS/Temporal) ve LiteLLM'in kabiliyet portları altına konması.
 
 ## Öğrenilen dersler (tekrarlanmasın)
