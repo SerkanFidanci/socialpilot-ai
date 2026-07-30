@@ -221,6 +221,23 @@ girdilerinde boş/uzun/duplicate sınırları · (7) skor testte 0 iken tüm yaz
 - Ürün adı tenant içinde tekil (`PRODUCT_NAME_CONFLICT`) — katalog hijyeni ve üretimin "hangi
   Soğuk Latte" belirsizliğini yaşamaması için bilinçli.
 
-## Doğrulama
+## Doğrulama — 2026-07-30 · Codex test oturumu
 
-_(test eden oturum doldurur — özellikle: cross-tenant okuma/yazma, para biriminde kayan nokta, süresi geçmiş kampanyanın aktif görünmesi, cursor ile sayfa atlama)_
+Worktree kökünde, `COMPOSE_PROJECT_NAME=sp-codex` ile ayrık PostgreSQL + Redis + MinIO
+üzerinde sınandı. Araç zinciri: Docker 25.0.3 · Docker Compose v2.24.6-desktop.1 ·
+Python 3.13.14 · PostgreSQL 16.14 · pytest 9.1.1 · ruff 0.16.0 · mypy 2.3.0.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---:|---|---|---|---|
+| 1 | Cross-tenant marka, ürün ve kampanya okumaları ile ürün güncelleme/kampanya yazma girişimleri `404 BUSINESS_NOT_FOUND` döndü. Yabancı tenant ve rastgele UUID aynı problem içeriğini döndürüyor; `instance` içindeki UUID yalnızca istekte gönderilen yolun yankısı, varlık sinyali değil. | — | İki ayrı tenant ile gerçek HTTP istekleri; ayrıca `tests/integration/test_brand_catalog.py`. | geçti |
+| 2 | **Parasal API tipi kayan noktayı bütünüyle reddetmiyor.** `price.price_minor: 165.0` ürün yaratımında `201` ve `165` olarak kabul edildi; sabit indirimde `discount_amount_minor: 500.0` da `201`/`500` oldu. Kesirli `165.5` ve `500.5` `400 REQUEST_VALIDATION_FAILED`; sorun integral JSON float’un sessizce tamsayıya çevrilmesi. | yüksek | Gerçek PostgreSQL üzerinde iki POST; mevcut test yalnızca kesirli float’u deniyor. | açık |
+| 3 | Kampanya aktiflik penceresi `[starts_at, ends_at)` olarak çalıştı: başlangıç anı ve bitişten 1µs önce aktif, tam `ends_at` ve sonrası `expired`. | — | `test_campaign_window_is_half_open_at_both_boundaries` + DB entegrasyon sınırı. | geçti |
+| 4 | Yedi kayıt/ikişerlik sayfa yürüyüşünde cursor ile atlama veya tekrar yok; bozuk cursor `400 PAGINATION_CURSOR_INVALID`. | — | `tests/unit/test_pagination.py` ve `test_product_pages_never_skip_or_repeat_a_row`. | geçti |
+| 5 | Editor marka, ürün ve kampanya yazamıyor (`403 INSUFFICIENT_PERMISSION`); okuma yetkisi korunuyor. | — | Gerçek üyelik/rol matrisi entegrasyon testi. | geçti |
+
+Ek doğrulama: W04 odaklı 65 test ve tüm backend takımı `392 passed`; Alembic head
+`0010_brand_catalog`. `ruff check`, `ruff format --check` ve `mypy .` temiz. Windows
+hostunda `make` kurulu olmadığından `make verify` doğrudan çağrılamadı; eşdeğer konteyner
+komutları ayrı ayrı çalıştırıldı.
+
+**Karar:** düzeltme gerekiyor — minor-unit parasal alanlar JSON float kabul etmemeli.

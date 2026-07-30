@@ -183,6 +183,23 @@ domain temizliği.
    SDK yükseltmesinde bu test kırmızıya döner ve iç yapı doğrulanır — sızıntı yerine düşürme
    davranışı var.
 
-## Doğrulama
+## Doğrulama — 2026-07-30 · Codex test oturumu
 
-_(test eden oturum doldurur — özellikle: kapalıyken gerçekten sıfır maliyet mi, presigned URL sızıntısı, correlation↔trace bağının kopma senaryoları)_
+Worktree kökünde, `COMPOSE_PROJECT_NAME=sp-codex` ile sınandı. Araç zinciri: Docker 25.0.3 ·
+Docker Compose v2.24.6-desktop.1 · Python 3.13.14 · PostgreSQL 16.14 · pytest 9.1.1 ·
+ruff 0.16.0 · mypy 2.3.0.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---:|---|---|---|---|
+| 1 | Endpoint ayarlanmamış gerçek API yapılandırmasında telemetri handle’ı `None`; `/health/live` sonrası span/metric sağlayıcısı, exporter kuyruğu veya ek Python thread’i oluşmadı. | — | `OTEL_EXPORTER_OTLP_ENDPOINT` yokken TestClient/lifespan ve thread öncesi-sonrası karşılaştırması; `test_telemetry.py`. | geçti |
+| 2 | Sentinel taşıyan presigned URL ve bearer token exporter yolunda sızmadı: URL `https://minio.test/bucket/key` olarak query/userinfo olmadan kaldı, authorization `[REDACTED]` oldu. | — | `_RedactingSpanExporter` ile in-memory exporter saldırısı; 14 telemetri birim testi. | geçti |
+| 3 | API isteğindeki `X-Correlation-ID`, server span attribute’una bağlanıyor ve response header korunuyor. Ancak API→outbox→Beat→worker arasında dayanıklı `traceparent` saklanmadığından trace zinciri devam etmiyor; kaynakta `traceparent` kullanımı yok. Bu, iş emrinin raporlanmış/migration gerektiren istisnasıyla uyumlu açık takip işidir. | orta | Etkin telemetry ile `/health/ready` spanı; worker sınırı için kaynak taraması ve yürütücü raporundaki kapsam kararı. | kabul edilmiş takip işi |
+| 4 | Kırk farklı saldırgan correlation ID ile metrik toplandı; etiket anahtarları yalnız HTTP düşük-kardinalite alanlarıydı. `asset_id`, `job_id`, `user_id`, `correlation_id`, `upload_id`, `url.full` görülmedi. | — | In-memory metric reader ile tekrarlı istek; `test_metric_labels_are_low_cardinality`. | geçti |
+
+Ek doğrulama: `tests/unit/test_telemetry.py` **14 passed**; tüm backend takımı
+`392 passed`; `ruff check`, `ruff format --check` ve `mypy .` temiz. Windows hostunda `make`
+kurulu olmadığından `make verify` doğrudan çağrılamadı; eşdeğer konteyner komutları ayrı ayrı
+çalıştırıldı.
+
+**Karar:** teslim edilebilir — API içi bağ ve redaksiyon doğrulandı; API→worker trace devamlılığı
+belgelenmiş, migration gerektiren takip işidir.
