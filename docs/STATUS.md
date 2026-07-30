@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| `main` | `aea6a18` — W01→W03, W07→W09 hepsi merge edildi, origin ile senkron |
+| `main` | `7b9fd35` — W01→W03, W04 hariç W05→W09 hepsi merge edildi, origin ile senkron |
 | Alembic head | `0009_video_understanding` (tek head) |
 | Backend doğrulama | **313 pytest** (gerçek PostgreSQL + MinIO) · lint + format + mypy strict 121 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
@@ -106,9 +106,10 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W09](handoffs/W09-real-media-materializer.md) | **Gerçek medya materializer + `.mov`/HEVC analiz kapısı** | **tamamlandı** · merge edildi · ADR **011**'e numaralandırıldı (009 W02'de) | merge edildi, dal silindi | Opus 4.8 / high | — |
 | [W07](handoffs/W07-single-server-resilience.md) | **Tek sunucu dayanıklılığı** — kaynak limitleri + scratch guard + sunucu dışına yedek + geri yükleme provası | **tamamlandı** (`c199b86`) · merge edildi · ADR-013 | merge edildi, dal silindi | Opus 4.8 / medium | — |
 | [W08](handoffs/W08-provider-benchmark-harness.md) | **Golden set benchmark koşum takımı** | **tamamlandı** · merge edildi · `provider_usage` bulgusu W04 slotuna alındı | merge edildi, dal silindi | Opus 5 / high | — |
-| W04 | Marka profili + ürün/hizmet kataloğu modülü | **sıradaki** | `slice/1f-brand-catalog` | Opus 5 / high | **ayrılmış** — bu slota üç iş biner: (a) `provider_usage` tablosunun oluşturulması (ADR-007 onu varmış gibi anlatıyordu, aslında yok — W08 bulgusu; `ProviderUsageRecord` şekli hazır), (b) `storage_upload_id` kolonunu `String(128)`'den genişletme (W01'in kontrol-objesi geçici çözümünü kaldırır), (c) fotoğraf analiz durumu için enum genişletmesi (K6 ikinci yarısı) |
-| W05 | OpenTelemetry (trace + metric) | W01 kapanınca yazılacak | `slice/0i-telemetry` | Opus 4.8 / medium | — |
-| W06 | PostgreSQL 18 + Valkey imaj geçişi | W01 + W02 kapanınca | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
+| [W04](handoffs/W04-brand-catalog.md) | **Marka profili + ürün/hizmet kataloğu** — Phase 2'nin ön koşulu (AI fiyat/tarih uyduramaz, doğrulanmış kayıt gerekiyor) | **şimdi** | `slice/1f-brand-catalog` | Opus 5 / high | **SENDE** (`0010`) |
+| [W05](handoffs/W05-opentelemetry.md) | **OpenTelemetry** trace + metric, varsayılan kapalı | **şimdi** (W04 ile paralel) | `slice/0i-telemetry` | Opus 4.8 / medium | — |
+| W06 | PostgreSQL 18 + Valkey imaj geçişi | W05 sonrası (`compose.yaml`) | `slice/0j-runtime-images` | Opus 4.8 / medium | — |
+| W10 | **Şema borcu:** `provider_usage` tablosu · `storage_upload_id` genişletmesi · fotoğraf analiz enum'u | W04 slotu boşalınca | `slice/0m-schema-debt` | Opus 4.8 / medium | sıradaki slot |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -124,6 +125,8 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 | `docs/runbooks/local-development.md` | W02 |
 | `docs/index.md`, `docs/adr/README.md` | **W03 tekel** — W01/W02 ADR dosyasını yazar, indekse eklemez |
 | `AGENTS.md`, `CLAUDE.md`, `docs/product/**`, modül `CLAUDE.md`'leri | W03 |
+| `app/main.py`, `app/core/config.py`, `app/core/logging.py`, `pyproject.toml`, `uv.lock` | W05 |
+| `app/api/routes/__init__.py` (router dikişi), `migrations/` | W04 |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

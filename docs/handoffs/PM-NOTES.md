@@ -90,9 +90,10 @@ Kullanıcı "en mantıklısı ve en doğrusuyla devam et her zaman" dedi. Bunun 
 
 ## Sıradaki iş (PM kuyruğu, güncel)
 
-1. **W04 — Marka profili + ürün/hizmet kataloğu.** Sıradaki. Migration slotu onda ve **üç iş biner**: `provider_usage` tablosu, `storage_upload_id` genişletmesi, fotoğraf analiz durumu enum'u. PRD §11 / [20-brand-catalog.md](../product/requirements/20-brand-catalog.md). Cursor pagination borcu da burada kapanır.
-2. **W05 — OpenTelemetry.** `config.py` artık serbest.
-3. **W06 — PostgreSQL 18 + Valkey.** `compose.yaml` artık serbest (W07 kapandı). Dikkat: W07'nin kaynak limitleri ve `cpu_shares` öncelik sırası korunmalı.
+1. ~~W04~~ **YAZILDI** → [W04-brand-catalog.md](W04-brand-catalog.md). Migration slotu onda. **Karar:** şema borcu üç kalemi W04'ten çıkarıldı ve W10 oldu — brands diff'i odaklı kalsın, üç ilgisiz kalem karışmasın. W10 slotu W04 kapanınca alır.
+2. ~~W05~~ **YAZILDI** → [W05-opentelemetry.md](W05-opentelemetry.md). Kritik kısım redaksiyon: auto-instrumentation httpx URL'lerini yazdığı için presigned URL span'lere sızabilir; sentinel testi zorunlu kılındı.
+3. **W06 — PostgreSQL 18 + Valkey.** W05 sonrası (`compose.yaml` çakışmasın). Dikkat: W07'nin kaynak limitleri ve `cpu_shares` öncelik sırası korunmalı.
+4. **W10 — şema borcu** (yazılacak): `provider_usage` tablosu, `storage_upload_id` genişletmesi, fotoğraf analiz enum'u. W04 slotu boşalınca.
 4. **Codex doğrulaması** `main` üzerinde: W07'nin yedek/geri yükleme döngüsü ve scratch guard'ı, W08'in ground-truth metrik hesabı ve maliyet tavanı. Bunlar iddia edilen ama bağımsız sınanmamış yüzeyler.
 5. **Phase 2 kapısı öncesi:** K3 ve K4 cevaplanmalı; durable execution (DBOS/Temporal) ve LiteLLM değerlendirmesi; `RenderPort` ADR'ı (K5'in gereği).
 
