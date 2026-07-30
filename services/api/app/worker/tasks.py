@@ -19,6 +19,7 @@ from app.worker.composition import (
     shutdown_worker_process,
     start_worker_process,
 )
+from app.worker.scratch import WorkerScratchGuard
 
 
 async def _drain(
@@ -29,7 +30,14 @@ async def _drain(
 ) -> dict[str, object]:
     processed = 0
     root = Path(context.settings.worker_temp_root)
+    guard = WorkerScratchGuard(root)
     for _ in range(context.settings.worker_drain_batch_size):
+        # Refuse to start another job while scratch is over budget. On a single server this
+        # fails loudly with WORKER_SCRATCH_BUDGET_EXCEEDED instead of piling more work onto a
+        # near-full disk; the job the drain would have claimed stays unclaimed and is
+        # recovered later. Checked before every item so residue a subprocess left outside its
+        # TemporaryDirectory cannot accumulate silently across the batch.
+        guard.ensure_within_budget()
         async with context.database.session_factory() as session:
             service = factory(session)
             if needs_workdir:
@@ -39,6 +47,11 @@ async def _drain(
         if result is None:
             break
         processed += 1
+        # Belt-and-suspenders cleanup: services already remove their own TemporaryDirectory,
+        # but sweep anything a subprocess left behind so the next item starts from a clean
+        # scratch. Only runs for workdir-backed drains that actually touch disk.
+        if needs_workdir:
+            guard.reclaim_stale()
     return {"status": "drained", "processed": processed}
 
 

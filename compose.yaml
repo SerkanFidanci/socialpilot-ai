@@ -1,5 +1,16 @@
 name: ${COMPOSE_PROJECT_NAME:-socialpilot-ai}
 
+# Single-server resource budget (ADR-XXX). The product runs on one cheap dedicated box, so
+# every service carries an explicit CPU ceiling (`cpus`), memory ceiling (`mem_limit`), and a
+# relative CPU weight (`cpu_shares`) that arbitrates *only* when the box is saturated. Ceilings
+# are deliberately oversubscribed — their sum exceeds the host's cores — because a ceiling caps
+# a single service's burst while `cpu_shares` decides who yields under contention. The priority
+# order the shares encode is postgres > api > redis > workers: the system of record and the API
+# must never starve, and a render/analysis burst on the workers is the first thing to brake.
+# Numbers below target the low end of the intended host (6 cores / 32 GB); a 6-core box keeps
+# ~1 core and the hard-limit sum (~15.6 GB) leaves the rest of 32 GB for PostgreSQL's own cache
+# and the OS. cpu_shares default is 1024.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,11 +28,18 @@ services:
       timeout: 3s
       retries: 20
     networks: [backend, edge]
+    # System of record: highest CPU weight and the largest memory ceiling so its page cache and
+    # connection workers keep RAM under load. 2 cores is enough for the MVP write volume; the
+    # 8 GB ceiling caps runaway queries while leaving cache headroom on a 32 GB host.
+    cpus: 2.0
+    mem_limit: 8g
+    mem_reservation: 2g
+    cpu_shares: 2048
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "no"]
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "384mb", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-56379}:6379"
     healthcheck:
@@ -30,6 +48,14 @@ services:
       timeout: 3s
       retries: 20
     networks: [backend, edge]
+    # Broker and cache: light and CPU-cheap, but ranked above the workers so queue traffic keeps
+    # flowing under contention. `maxmemory` (384mb) sits below the 512m container ceiling so Redis
+    # rejects new writes with OOM *inside* its budget instead of being SIGKILLed by the cgroup;
+    # `noeviction` keeps the Celery broker from silently dropping queued jobs.
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpu_shares: 512
     restart: unless-stopped
 
   # Object storage for the direct-upload byte path. It shares the internal `backend`
@@ -52,6 +78,13 @@ services:
       timeout: 3s
       retries: 20
     networks: [backend, edge]
+    # Local-only object storage: production uses zero-egress R2 (ADR-XXX), so this exists just
+    # for the development byte path. Modest ceilings keep it from competing with PostgreSQL or the
+    # API for RAM; weight sits above the workers because uploads must stay responsive.
+    cpus: 1.0
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpu_shares: 512
     restart: unless-stopped
 
   # One-shot bucket provisioning. Production bucket/IAM setup is deliberately not modelled
@@ -80,6 +113,11 @@ services:
     # `edge` is required, not cosmetic: on an internal-only network the embedded DNS cannot
     # answer this image's lookups and every `mc` call fails with SERVFAIL.
     networks: [backend, edge]
+    # One-shot provisioning: tiny ceilings are ample for a few `mc` calls; lowest weight since it
+    # is not on any request path. It exits after creating the bucket, so it never restarts.
+    cpus: 0.5
+    mem_limit: 128m
+    cpu_shares: 128
     restart: "no"
 
   api:
@@ -146,6 +184,14 @@ services:
       minio:
         condition: service_healthy
     networks: [edge, backend]
+    # The API must never lose the CPU to a render/analysis burst: it ranks just below PostgreSQL
+    # and well above the workers (cpu_shares 1024 vs 256). No media bytes flow through it
+    # (ADR-002), so 2 GB is generous for FastAPI request handling; 2 cores absorbs concurrent
+    # requests without needing to match the worker's compute footprint.
+    cpus: 2.0
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpu_shares: 1024
     restart: unless-stopped
 
   celery-worker:
@@ -153,7 +199,11 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
     environment: *application_environment
-    command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    # Concurrency 2 caps heavy FFmpeg jobs to two at a time so they fit the 2-core ceiling
+    # (~1 core each) and cannot swamp the box. §38.2's per-queue profiles (a separate,
+    # higher-concurrency worker for light queues such as outbox dispatch and notifications)
+    # are a config addition once task routing lands — see ADR-XXX.
+    command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
     profiles: ["worker"]
     depends_on:
       postgres:
@@ -163,13 +213,25 @@ services:
       minio:
         condition: service_healthy
     networks: [backend]
-    mem_limit: 1g
-    cpus: 1.0
+    # Lowest CPU weight (256): under contention the workers yield to PostgreSQL, the API, and
+    # Redis, and the worker process renices itself (+10, app/worker/composition.py) so its FFmpeg
+    # children inherit an even lower CPU priority. 4 GB covers two concurrent frame-extraction
+    # jobs plus the 512 MB tmpfs scratch (which counts against this ceiling); the application
+    # scratch guard (WORKER_SCRATCH_BUDGET_EXCEEDED) trips at 3/4 of that tmpfs before ENOSPC.
+    cpus: 2.0
+    mem_limit: 4g
+    mem_reservation: 512m
+    cpu_shares: 256
     pids_limit: 128
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
-    restart: unless-stopped
+    # on-failure (not unless-stopped): a warm SIGTERM shutdown exits 0 and stays down, while a
+    # crash (e.g. OOM-kill, exit 137) restarts under Docker's exponential backoff, which caps the
+    # restart *rate* so an OOM loop cannot busy-spin the CPU. Plain `docker compose` has no
+    # attempt cap; the production host bounds attempts with systemd StartLimitBurst (ADR-XXX).
+    stop_grace_period: 30s
+    restart: on-failure
 
   # Beat only emits schedule ticks; it never executes work and holds no worker adapters.
   # Development assumes exactly ONE beat replica: the schedule file is local to the
@@ -190,13 +252,18 @@ services:
       redis:
         condition: service_healthy
     networks: [backend]
-    mem_limit: 256m
-    cpus: 0.5
+    # Beat only emits schedule ticks — near-zero CPU and RAM. Lowest weight alongside the workers;
+    # same on-failure policy so a clean stop stays down and only a crash restarts (rate-capped by
+    # Docker backoff).
+    cpus: 0.25
+    mem_limit: 128m
+    cpu_shares: 128
     pids_limit: 64
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
-    restart: unless-stopped
+    stop_grace_period: 15s
+    restart: on-failure
 
 networks:
   edge:
