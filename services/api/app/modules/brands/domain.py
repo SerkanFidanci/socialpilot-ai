@@ -18,6 +18,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.core.errors import ProblemException
+from app.core.money import MAX_MINOR_UNITS, is_minor_units
 from app.modules.brands.models import CampaignApprovalStatus, CampaignOfferStatus
 
 MAX_TEXT_ENTRY_LENGTH = 300
@@ -26,7 +27,8 @@ MAX_COLOR_ENTRIES = 8
 MAX_AUDIENCE_ENTRIES = 20
 MAX_ASSET_ENTRIES = 20
 MAX_LOCATION_ENTRIES = 50
-MAX_PRICE_MINOR = 10**12
+MAX_PRICE_MINOR = MAX_MINOR_UNITS
+"""The monetary bound is defined once, in `core/money.py`; this is the catalogue's name for it."""
 MAX_DISCOUNT_PERCENT = 90
 MAX_STOCK_LIMIT = 10**7
 MIN_AGE = 13
@@ -115,7 +117,7 @@ def normalize_entries(values: list[str], *, field: str, limit: int = MAX_LIST_EN
 def normalize_price_minor(value: int) -> int:
     """Money is a count of minor units: a non-integer or negative price is not a price."""
 
-    if value < 0 or value > MAX_PRICE_MINOR:
+    if not is_minor_units(value):
         raise invalid("Price must be a non-negative integer amount in minor units.")
     return value
 
@@ -128,7 +130,7 @@ class Money:
     currency: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.amount_minor, int) or isinstance(self.amount_minor, bool):
+        if not is_minor_units(self.amount_minor):
             raise invalid("Monetary amounts must be integers in minor units.")
 
 

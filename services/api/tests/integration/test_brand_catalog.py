@@ -403,6 +403,74 @@ def test_product_prices_stay_integer_minor_units_in_one_currency() -> None:
         assert history == [(16500, "TRY", False), (17500, "TRY", True)]
 
 
+@pytest.mark.skipif(os.getenv("RUN_INTEGRATION_TESTS") != "1", reason="requires PostgreSQL")
+def test_monetary_fields_refuse_every_non_integer_json_shape() -> None:
+    """One row per wire shape, because testing only `165.5` is what let `165.0` through.
+
+    The earlier test proved a *fractional* float was rejected and stopped there, so the real
+    hole — an integral float being coerced to an int with `201` — sat behind a green test.
+    Each shape below is sent as its own request against real PostgreSQL, and nothing is written.
+    """
+
+    owner = auth("money-shape-owner", "money-shape-owner@example.com")
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        business_id = business(client, owner, "Acme")
+        assert (
+            client.put(
+                f"/v1/businesses/{business_id}/brand", headers=owner, json=brand_body()
+            ).status_code
+            == 200
+        )
+
+        # (value, why it must be refused)
+        shapes: list[tuple[Any, str]] = [
+            (165.0, "integral float: coerced silently before this fix"),
+            (165.5, "fractional float"),
+            ("165", "numeric string"),
+            (True, "bool is not an amount"),
+            (None, "null is not zero"),
+            (10**13, "beyond the monetary upper bound"),
+            (-1, "negative"),
+        ]
+        for index, (value, reason) in enumerate(shapes):
+            product = client.post(
+                f"/v1/businesses/{business_id}/products",
+                headers=owner,
+                json=product_body(
+                    name=f"Shape {index}", price={"price_minor": value, "currency": "TRY"}
+                ),
+            )
+            assert product.status_code == 400, f"price_minor={value!r} ({reason}): {product.text}"
+            assert product.json()["code"] == "REQUEST_VALIDATION_FAILED"
+
+            offer = client.post(
+                f"/v1/businesses/{business_id}/campaign-offers",
+                headers=owner,
+                json=offer_body(
+                    name=f"Kampanya {index}",
+                    discount_type="fixed_amount",
+                    discount_percent=None,
+                    discount_amount_minor=value,
+                    discount_currency="TRY",
+                ),
+            )
+            assert offer.status_code == 400, f"discount={value!r} ({reason}): {offer.text}"
+            # `discount_amount_minor` is legitimately optional, so an explicit `null` is a
+            # *missing* amount the fixed-amount rule rejects, not a malformed one the schema does.
+            expected_code = "REQUEST_INVALID" if value is None else "REQUEST_VALIDATION_FAILED"
+            assert offer.json()["code"] == expected_code, offer.text
+
+        # The integer the contract does accept still works, and lands as an integer.
+        accepted = client.post(
+            f"/v1/businesses/{business_id}/products",
+            headers=owner,
+            json=product_body(name="Kabul", price={"price_minor": 16500, "currency": "TRY"}),
+        )
+        assert accepted.status_code == 201, accepted.text
+        assert accepted.json()["price_minor"] == 16500
+        assert asyncio.run(price_rows(str(accepted.json()["id"]))) == [(16500, "TRY", True)]
+
+
 async def price_rows(product_id: str) -> list[tuple[int, str, bool]]:
     engine = create_async_engine(os.environ["DATABASE_URL"])
     try:

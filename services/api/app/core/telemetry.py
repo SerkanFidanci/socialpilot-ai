@@ -16,18 +16,26 @@ easily than a hand-written log line. Two layers guard them:
 * ``_RedactingSpanExporter`` is the guaranteed net on the export path: it drops secret-named
   attributes and strips every URL-valued attribute for *all* instrumentations, right before a
   span leaves the process.
+
+The second job of this module is the **durable trace carrier**. Work crosses the API/worker
+boundary through the transactional outbox, not a direct enqueue, so in-process propagation
+cannot reach the worker. ``current_trace_carrier`` renders the current W3C trace context as
+plain envelope fields the domain stores next to ``correlation_id``, and ``continue_trace``
+validates and re-attaches it on the worker side.
 """
 
 from __future__ import annotations
 
 import contextlib
+import re
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 import structlog
+from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -48,6 +56,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 from opentelemetry.trace import Span
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -200,6 +209,86 @@ def _server_request_hook(span: Span, scope: Any) -> None:
                 break
     if correlation_id:
         span.set_attribute("correlation_id", correlation_id)
+
+
+# ------------------------------------------------------------- durable envelope carrier
+
+TRACEPARENT_FIELD = "traceparent"
+TRACESTATE_FIELD = "tracestate"
+_TRACE_FIELDS: frozenset[str] = frozenset({TRACEPARENT_FIELD, TRACESTATE_FIELD})
+
+# W3C trace-context §3.2.2: `version-traceid-spanid-flags`, lowercase hex. Version `ff` is
+# invalid, and an all-zero trace id or span id means "no parent" rather than a usable one.
+_TRACEPARENT = re.compile(
+    r"^(?!ff)[0-9a-f]{2}-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$"
+)
+_MAX_TRACESTATE_LENGTH = 512
+
+# The W3C propagator is used directly rather than the configured global one: the global
+# propagator also carries baggage, and the event envelope must contain trace context and
+# nothing else — no attributes, no prompts, no URLs.
+_TRACE_PROPAGATOR = TraceContextTextMapPropagator()
+
+
+def current_trace_carrier() -> dict[str, str]:
+    """Render the current trace context as envelope fields; empty when telemetry is off.
+
+    An outbox event outlives the request that produced it, so the only way its worker-side
+    continuation can join the originating trace is to persist the W3C ``traceparent`` with the
+    event (PRD §26.4). With telemetry disabled there is no recording span, the propagator
+    writes nothing, and the caller stores exactly the payload it stored before.
+    """
+
+    carrier: dict[str, str] = {}
+    _TRACE_PROPAGATOR.inject(carrier)
+    return {
+        key: value
+        for key, value in carrier.items()
+        if key in _TRACE_FIELDS and isinstance(value, str)
+    }
+
+
+def trace_carrier_from_envelope(envelope: Mapping[str, object]) -> dict[str, str] | None:
+    """Return a *validated* carrier, or ``None`` when the envelope has none or it is malformed.
+
+    The envelope is durable data: a corrupt row, a hand-edited payload, or a hostile value must
+    never reach the tracer. Anything that is not a well-formed traceparent is dropped so the
+    consumer starts a fresh trace instead of joining or poisoning someone else's.
+    """
+
+    raw = envelope.get(TRACEPARENT_FIELD)
+    if not isinstance(raw, str) or not _TRACEPARENT.match(raw):
+        return None
+    carrier = {TRACEPARENT_FIELD: raw}
+    state = envelope.get(TRACESTATE_FIELD)
+    if isinstance(state, str) and 0 < len(state) <= _MAX_TRACESTATE_LENGTH:
+        carrier[TRACESTATE_FIELD] = state
+    return carrier
+
+
+@contextlib.contextmanager
+def continue_trace(envelope: Mapping[str, object]) -> Iterator[None]:
+    """Run the block under the trace context the envelope carries.
+
+    Spans created inside — including the ones Celery's instrumentation creates when the outbox
+    publisher enqueues a drain task — become children of the request that wrote the event, so
+    API and worker stop being two islands. No span is started here; this only re-attaches a
+    parent context, and it is inert when the envelope carries nothing valid.
+    """
+
+    carrier = trace_carrier_from_envelope(envelope)
+    if carrier is None:
+        yield
+        return
+    parent = _TRACE_PROPAGATOR.extract(carrier)
+    if not trace.get_current_span(parent).get_span_context().is_valid:
+        yield
+        return
+    token = otel_context.attach(parent)
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
 
 
 # --------------------------------------------------------------------------- providers
@@ -463,10 +552,15 @@ def setup_worker_telemetry(
 
 
 __all__ = [
+    "TRACEPARENT_FIELD",
+    "TRACESTATE_FIELD",
     "TelemetryHandle",
+    "continue_trace",
+    "current_trace_carrier",
     "instrument_database",
     "redact_attribute",
     "redact_url",
     "setup_api_telemetry",
     "setup_worker_telemetry",
+    "trace_carrier_from_envelope",
 ]

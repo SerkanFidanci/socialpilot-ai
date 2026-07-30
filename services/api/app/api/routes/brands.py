@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_current_user
 from app.core.config import Settings
 from app.core.correlation import get_correlation_id
+from app.core.money import MinorUnits
 from app.core.pagination import MAX_PAGE_SIZE, decode_cursor
 from app.infrastructure.database.session import get_session
 from app.modules.brands.domain import (
@@ -234,11 +235,16 @@ class BrandHealthResponse(BaseModel):
 
 
 class PricePayload(BaseModel):
-    """Money crosses the wire as an integer count of minor units, never as a decimal."""
+    """Money crosses the wire as an integer count of minor units, never as a decimal.
+
+    `MinorUnits` is strict on purpose: a JSON float is rejected even when its value is integral,
+    so a client that computes an amount in floating point fails on its first request instead of
+    on the one value that does not round cleanly (see `core/money.py`).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    price_minor: int = Field(ge=0)
+    price_minor: MinorUnits
     currency: str = Field(min_length=3, max_length=3)
 
 
@@ -304,7 +310,7 @@ class ProductResponse(BaseModel):
     stock_status: StockStatus
     valid_locations: list[str]
     landing_page_url: str | None
-    price_minor: int | None
+    price_minor: MinorUnits | None
     currency: str | None
     price_effective_from: datetime | None
     created_at: datetime
@@ -347,7 +353,7 @@ class CampaignOfferRequest(BaseModel):
     ends_at: AwareDatetime
     discount_type: DiscountType
     discount_percent: int | None = Field(default=None, ge=0, le=100)
-    discount_amount_minor: int | None = Field(default=None, ge=0)
+    discount_amount_minor: MinorUnits | None = None
     discount_currency: str | None = Field(default=None, min_length=3, max_length=3)
     product_ids: list[UUID] = Field(default_factory=list, max_length=MAX_LIST_ENTRIES)
     valid_locations: list[str] = Field(default_factory=list, max_length=MAX_LOCATION_ENTRIES)
@@ -384,7 +390,7 @@ class CampaignOfferResponse(BaseModel):
     ends_at: datetime
     discount_type: DiscountType
     discount_percent: int | None
-    discount_amount_minor: int | None
+    discount_amount_minor: MinorUnits | None
     discount_currency: str | None
     product_ids: list[UUID]
     valid_locations: list[str]

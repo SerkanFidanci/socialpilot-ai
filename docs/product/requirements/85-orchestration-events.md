@@ -118,6 +118,16 @@ OPS-06 Security Event Notification
 
 Tüm n8n girişleri imzalı webhook veya private network üzerinden olmalıdır.
 
+> **Uygulama notu (W12) — zarf bir alan daha taşır: `traceparent`.** Yukarıdaki alan listesine
+> W3C [`traceparent`](https://www.w3.org/TR/trace-context/) (ve varsa `tracestate`) eklendi.
+> Gerekçe: iş, API'den worker'a doğrudan enqueue ile değil outbox + Beat üzerinden geçtiği için
+> süreç içi trace bağlamı worker'a ulaşmıyordu; zarf `correlation_id`'yi zaten taşıdığından
+> aynı kategorideki bu bağlam kimliğini de taşıyor. **Sır değildir, şema değişikliği
+> gerektirmez:** ayrı bir zarf kolonu olmadığından `outbox_events.payload_json` içinde durur.
+> Telemetri kapalıyken alan **hiç yazılmaz**; zarfa `traceparent`/`tracestate` dışında hiçbir
+> telemetri verisi (attribute, prompt, URL, baggage) konmaz; okunan değer doğrulanmadan trace
+> bağlamına alınmaz. Ayrıntı: [observability.md](../../architecture/observability.md).
+
 ---
 
 # 27. Event-driven tasarım
