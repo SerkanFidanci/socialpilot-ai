@@ -243,4 +243,24 @@ Kabul kriterleri:
 
 ## Doğrulama
 
-_(test eden oturum doldurur — özellikle: fiyat kalıbı tespitini atlatma denemeleri (boşluklu/birimli varyantlar), verified_field ile başka tenant'ın verisini çözdürme, injection'ın şema dışına çıkarma denemesi)_
+Araç zinciri: worktree kökü `A:\socialpilot-ai` · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine
+25.0.3 · Docker Compose v2.24.6-desktop.1 · API konteyneri Python 3.13.14 · pytest 9.1.1 ·
+Ruff 0.16.0 · mypy 2.3.0 · PostgreSQL 16.14.
+
+Bağımsız HTTP saldırıları gerçek PostgreSQL üzerinde, kötü niyetli sağlayıcı çıktısı üreten
+`FakeScriptGenerationAdapter` ile çalıştırıldı. W13 odaklı testler de ayrıca çalıştırıldı:
+`RUN_INTEGRATION_TESTS=1 pytest -q tests/unit/test_content_script_unit.py tests/integration/test_content_script.py`
+→ **94 passed**. `alembic downgrade base → upgrade head` sonrası tek head
+`0013_script_generation` kaldı. Ana makinede `make` kurulu olmadığından `make verify` komutu
+başlatılamadı (`make: command not found`); bu nedenle tam kapı için yürütücünün “yeşil” beyanı
+bağımsız olarak yeniden üretilemedi.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Fiyat/tarih literal koruması Türkçe yazım varyantlarında aşılabiliyor; bunlar doğrulanmış slot olmadan kalıcı `generated` script'e giriyor. | kritik | Sağlayıcı çıktısındaki `segments[1].voice_text` sırasıyla `165 Türk lirası`, `yüzde yirmi indirim`, `bir Ağustos'a kadar` ve para birimi önekli `TL 165` yapıldı. Her biri `201` / `status=generated` döndü; test DB'sinde beş generated satır görüldü (dört bypass + normal idempotency ilk isteği). | açık |
+| 2 | Başka tenant'a ait gerçek product UUID'siyle `{{price:<rival-id>}}` slotu çözdürülemedi; kimlik veya değer sızmadı. | — | İki ayrı business oluşturuldu; ilk tenant'ın sağlayıcı çıktısına ikinci tenant product UUID'si kondu. `422 SCRIPT_VALIDATION_FAILED`, yalnız `SCRIPT_VERIFIED_FIELD_NOT_FOUND` döndü. | kabul edildi |
+| 3 | Prompt-injection ile sağlayıcı çıktısına şema dışı `tool_calls` alanı eklenemedi. | — | Üst düzey `tool_calls: [{name: exfiltrate, arguments: {url: …}}]` içeren JSON gönderildi. `422 SCRIPT_PROVIDER_OUTPUT_INVALID` / `SCRIPT_UNKNOWN_FIELD`, pointer `$.tool_calls`; script failed kaldı. | kabul edildi |
+| 4 | Aynı `Idempotency-Key` ile farklı gövde sessiz replay olmadı. | — | İlk `POST /scripts` normal gövdeyle `201`; aynı anahtarla yalnız `target_duration_ms=10000` değiştirilmiş ikinci gövde `409 IDEMPOTENCY_CONFLICT`. | kabul edildi |
+| 5 | “production + fake HTTP'de 503 ve boot devam eder” iddiası gerçek production ayarıyla uçtan uca doğrulanamadı. | orta | `app_env=production` altında fake script fabrikası bağımsız olarak `DisabledScriptGenerationAdapter` seçiyor ve fake adapter constructor'ı `SCRIPT_GENERATION_FAKE_ADAPTER_NOT_ALLOWED_IN_PRODUCTION` ile reddediyor. Ancak uygulama HTTP isteğine gelmeden `LocalIdentityVerifier` / fake storage üretimde yasak olduğundan startup'ta duruyor (`STORAGE_PRODUCTION_ADAPTER_NOT_CONFIGURED`; normal Settings doğrulaması ayrıca local identity'yi reddediyor). Dolayısıyla gerçek production boot üzerinden gözlenen bir `503` yok. | açık |
+
+**Karar:** düzeltme gerekiyor
