@@ -30,7 +30,7 @@ from app.infrastructure.ai.fake_script import (
 )
 from app.modules.businesses.models import BusinessRole
 from app.modules.businesses.policy import Permission
-from app.modules.content.policy import ContentAction, permits_action
+from app.modules.content.policy import ContentAction, permits_action, required_permission
 from app.modules.content.script import (
     SCRIPT_OUTPUT_SCHEMA,
     BrandBrief,
@@ -671,6 +671,38 @@ def test_only_the_roles_that_produce_content_may_generate_a_script() -> None:
     assert permits_action(BusinessRole.VIEWER, ContentAction.SCRIPT_READ)
     assert not permits_action(BusinessRole.APPROVER, ContentAction.SCRIPT_READ)
     assert Permission.CONTENT_GENERATE in {permission for permission in Permission}
+
+
+def test_every_content_write_answers_the_same_way_for_the_same_role() -> None:
+    """W14: the whole module draws one line, between producing content and changing the business.
+
+    Before this, an editor could generate a script (`content.generate`, W13) and then be refused
+    the timeline it was for (`business.update`, W11) — a role that could write the words but not
+    place them. Asserting the actions together is what keeps the next content action from
+    picking a third answer.
+    """
+
+    writes = (
+        ContentAction.TIMELINE_WRITE,
+        ContentAction.RENDER_REQUEST,
+        ContentAction.SCRIPT_GENERATE,
+    )
+    reads = (ContentAction.TIMELINE_READ, ContentAction.RENDER_READ, ContentAction.SCRIPT_READ)
+
+    assert {required_permission(action) for action in writes} == {Permission.CONTENT_GENERATE}
+    assert {required_permission(action) for action in reads} == {Permission.BUSINESS_READ}
+    for action in writes:
+        assert permits_action(BusinessRole.OWNER, action)
+        assert permits_action(BusinessRole.ADMIN, action)
+        # The alignment itself: an editor can now author and render, not only write copy.
+        assert permits_action(BusinessRole.EDITOR, action)
+        assert not permits_action(BusinessRole.VIEWER, action)
+        assert not permits_action(BusinessRole.APPROVER, action)
+    for action in reads:
+        assert permits_action(BusinessRole.VIEWER, action)
+        assert not permits_action(BusinessRole.APPROVER, action)
+    # Every action is mapped, so a new one cannot inherit an answer by omission.
+    assert {action for action in ContentAction} == set(writes) | set(reads)
 
 
 def _constants(tree: ast.Module) -> ast.stmt:

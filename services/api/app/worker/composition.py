@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.logging import install_signature_redaction
 from app.core.telemetry import (
     TelemetryHandle,
     instrument_database,
@@ -193,6 +194,10 @@ def start_worker_process() -> None:
 
     global _context, _telemetry
     shutdown_worker_process()
+    # The worker never calls `configure_logging` — Celery owns its own handlers here — so the
+    # signature scrubber has to be installed explicitly. Without this the worker would be the
+    # one process where a materializer's HTTP client could log a presigned URL unmasked.
+    install_signature_redaction()
     _lower_worker_cpu_priority()
     _context = build_worker_context(get_settings())
     # Wire telemetry in the forked worker process (default OFF). CeleryInstrumentor must patch

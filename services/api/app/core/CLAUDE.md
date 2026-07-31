@@ -10,7 +10,8 @@ sözleşmesi ve uygulama fabrikasının ihtiyaç duyduğu küçük protokoller.
 - **Buradan `../modules/` içine bağımlılık verilmez.** `core` en alt katmandır; domain'i bilmez.
 - Konfigürasyon **yalnızca** `Settings` üzerinden okunur; kodda `os.environ` erişimi yoktur ve secret varsayılan değeri yazılmaz.
 - Her hata yanıtı `ProblemDetails` şemasındadır; route'lar `ProblemException` fırlatır, elle JSON hata gövdesi kurmaz.
-- **Log'a secret, access token veya signed object-storage URL'i yazılmaz.** `logging._redact` özyinelemeli maskeleme yapar; yeni hassas alan adı buraya eklenir.
+- **Log'a secret, access token veya signed object-storage URL'i yazılmaz.** İki katman: (1) `logging._redact` structlog olaylarında alan adına göre maskeler — yeni hassas alan adı buraya eklenir; (2) `install_signature_redaction()` **süreç genelinde** bir `logging` record factory kurar ve imza query parametrelerini (`X-Amz-Signature`, `X-Amz-Credential`, GCS/Azure karşılıkları) hangi logger yazarsa yazsın, **hiçbir handler görmeden** maskeler. İkincisi zorunludur: httpx gerçek MinIO akışında tam imzalı URL'i `INFO` seviyesinde yazıyordu ve structlog işlemcisi o kaydı hiç görmüyordu (W14). Kütüphaneyi susturmak çözüm değildir — sonraki kütüphane aynısını yapar.
+- **Filtre `configure_logging`'e bağlı değildir.** Worker `configure_logging` çağırmaz (handler'lar Celery'nin), bu yüzden `start_worker_process` filtreyi ayrıca kurar. Yeni bir süreç girişi eklenirse `install_signature_redaction()` orada da çağrılır.
 - Doğrulama hatası meta'sı `safe_validation_error_meta` ile temizlenir; ham istek gövdesi hata yanıtına sızmaz.
 - Her isteğin correlation ID'si vardır ve log kaydına aynı alan adıyla düşer.
 
@@ -20,7 +21,7 @@ sözleşmesi ve uygulama fabrikasının ihtiyaç duyduğu küçük protokoller.
 |---|---|
 | `config.py` | `Settings` (env'den tipli konfigürasyon) ve önbellekli `get_settings()` — **sahiplik: W01** |
 | `errors.py` | `ProblemDetails`, `ProblemException`, `problem_response`, `safe_validation_error_meta` |
-| `logging.py` | `configure_logging` + özyinelemeli secret maskeleme (`_redact`, `redact_sensitive_values`) |
+| `logging.py` | `configure_logging` + özyinelemeli secret maskeleme (`_redact`, `redact_sensitive_values`) + logger-bağımsız imza redaksiyonu (`redact_signature_material`, `install_signature_redaction`, `RedactingFormatter`) |
 | `correlation.py` | `CorrelationIdMiddleware` ve `get_correlation_id()` — istek/log arası izleme |
 | `protocols.py` | `DatabaseClient` ve `RedisClient` protokolleri (uygulama fabrikası ve route'lar için) |
 | `__init__.py` | Paket |
@@ -32,4 +33,6 @@ sözleşmesi ve uygulama fabrikasının ihtiyaç duyduğu küçük protokoller.
 
 ## Testler
 
-`tests/unit/test_config.py` · `tests/unit/test_health.py` · `tests/unit/test_openapi.py`
+`tests/unit/test_config.py` · `tests/unit/test_health.py` · `tests/unit/test_openapi.py` ·
+`tests/unit/test_logging_redaction.py` ·
+`tests/integration/test_media_uploads_minio.py` (gerçek MinIO akışında sızıntı testi)

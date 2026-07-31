@@ -7,8 +7,14 @@
 2. ``media_upload_sessions.storage_upload_id`` widens from ``String(128)`` to ``String(512)`` so
    it holds a real provider multipart ``UploadId`` directly. This retires the server-owned
    ``_control/`` object the narrow column had forced (ADR-008 + its W10 amendment). ``VARCHAR``
-   widening never rewrites or loses data; the downgrade shrinks back and fails loudly (never
-   truncates) if any value is longer than 128.
+   widening never rewrites or loses data.
+
+   **The downgrade only supports data that fits the old width.** A real AWS ``UploadId`` runs to
+   ~290 characters, and no shrink can keep one in ``varchar(128)`` — that is arithmetic, not a
+   missing feature. So the reversal refuses up front with ``MIGRATION_0011_DOWNGRADE_BLOCKED``,
+   naming how many rows do not fit and one of them, instead of getting halfway and surfacing the
+   driver's ``StringDataRightTruncationError`` (W10 verification finding 1, closed by W14). No
+   data is touched when it refuses. This is a dev-only reversal; there is no production data.
 3. ``media_ingest_status`` gains ``ready_for_photo_analysis`` — the unreachable seam for the
    future HEIC/HEIF photo pipeline (K6). No code path produces it yet.
 4. ``business_role`` gains ``approver`` (PRD §4). The role is added; it holds no permission until
@@ -34,6 +40,43 @@ branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
 _TIMESTAMP_DEFAULT = sa.text("timezone('utc', now())")
+
+# The width `storage_upload_id` had before this revision widened it.
+_LEGACY_UPLOAD_ID_LENGTH = 128
+
+
+def _refuse_downgrade_that_cannot_keep_its_data() -> None:
+    """Stop before touching anything if any UploadId is too long for the old column.
+
+    Without this the reversal runs its enum recreations, reaches the column shrink, and dies on
+    the driver's `StringDataRightTruncationError` — an error that names neither the table, the
+    rows, nor what the operator is supposed to do about it. The check is a plain count, so it
+    costs nothing on the empty dev databases where this reversal is normally run.
+    """
+
+    row = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT count(*) AS oversized, coalesce(max(length(storage_upload_id)), 0) "
+                "AS longest, min(id::text) AS example FROM media_upload_sessions "
+                "WHERE length(storage_upload_id) > :width"
+            ),
+            {"width": _LEGACY_UPLOAD_ID_LENGTH},
+        )
+        .one()
+    )
+    if not row.oversized:
+        return
+    raise RuntimeError(
+        "MIGRATION_0011_DOWNGRADE_BLOCKED: media_upload_sessions.storage_upload_id cannot be "
+        f"narrowed back to varchar({_LEGACY_UPLOAD_ID_LENGTH}) because {row.oversized} row(s) "
+        f"hold a longer provider UploadId (longest {row.longest} characters, for example "
+        f"session {row.example}). Narrowing would have to discard those values, so this "
+        "downgrade stops before changing anything. Finish or delete those upload sessions "
+        "first; this reversal only supports data that predates the widening. The UploadId "
+        "itself is not printed here — it is provider material, not diagnostic material."
+    )
 
 
 def upgrade() -> None:
@@ -91,6 +134,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # First, before a single object is dropped or recreated: can the reversal keep its data?
+    _refuse_downgrade_that_cannot_keep_its_data()
+
     op.drop_index("ix_provider_usage_business_capability", table_name="provider_usage")
     op.drop_index("ix_provider_usage_business_created", table_name="provider_usage")
     op.drop_table("provider_usage")
@@ -123,8 +169,8 @@ def downgrade() -> None:
         "USING ingest_status::media_ingest_status"
     )
 
-    # Shrink storage_upload_id back. VARCHAR shrink preserves every value that still fits and
-    # raises (never truncates) on any longer one; dev-only data never exceeds 128.
+    # Shrink storage_upload_id back. Every remaining value fits — the precondition at the top of
+    # this function already refused the reversal otherwise — so this is a lossless in-place ALTER.
     op.alter_column(
         "media_upload_sessions",
         "storage_upload_id",

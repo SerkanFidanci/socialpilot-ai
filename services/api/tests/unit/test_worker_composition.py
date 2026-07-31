@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -14,6 +15,7 @@ from typing import cast
 import pytest
 from sqlalchemy.exc import NoReferencedTableError
 
+from app.core import logging as app_logging
 from app.core.config import Settings
 from app.infrastructure.database.session import Database
 from app.worker import composition
@@ -145,6 +147,37 @@ def test_restart_releases_the_previous_loop_without_leaking_a_context(tmp_path: 
     finally:
         shutdown_worker_process()
         assert composition._context is None
+        asyncio.set_event_loop(None)
+
+
+def test_worker_process_init_installs_the_signature_scrubber(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker is the one process that never calls `configure_logging`.
+
+    Celery owns the handlers here, so the scrubber has to be installed by the process init or
+    a materializer's HTTP client could log a presigned URL that no other process would.
+    """
+
+    signature = "a" * 64
+    monkeypatch.setattr(app_logging, "_redaction_installed", False)
+    previous_factory = logging.getLogRecordFactory()
+    logging.setLogRecordFactory(logging.LogRecord)
+    try:
+        start_worker_process()
+        record = logging.getLogRecordFactory()(
+            "vendor.sdk",
+            logging.INFO,
+            __file__,
+            1,
+            "PUT %s",
+            (f"?X-Amz-Signature={signature}",),
+            None,
+        )
+        assert signature not in record.getMessage()
+    finally:
+        logging.setLogRecordFactory(previous_factory)
+        shutdown_worker_process()
         asyncio.set_event_loop(None)
 
 

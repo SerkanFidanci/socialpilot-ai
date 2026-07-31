@@ -34,7 +34,7 @@ from app.modules.content.models import (
     RenderStatus,
     RenderTrigger,
 )
-from app.modules.content.patch import PatchOperation, apply_patch
+from app.modules.content.patch import PatchOperation, apply_patch, serialize_patch
 from app.modules.content.policy import ContentAction, permits_action
 from app.modules.content.render import (
     AiDisclosureState,
@@ -196,7 +196,15 @@ class ContentTimelineService:
                 user_id=user_id,
                 operation="content.timeline.patch",
                 key=idempotency_key,
-                payload={"timeline_id": str(timeline_id), "operations": len(operations)},
+                # The whole request, canonically: the target, the profile it will be rendered
+                # for, and every operation. Counting operations was not a weaker fingerprint,
+                # it was no fingerprint at all — the same key with different replacement text
+                # replayed the first revision and the second edit vanished silently.
+                payload={
+                    "timeline_id": str(timeline_id),
+                    "profile": profile.value,
+                    "operations": serialize_patch(operations),
+                },
                 correlation_id=correlation_id,
             )
             if replay is not None and replay.timeline_id is not None:

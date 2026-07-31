@@ -52,6 +52,79 @@ Public API errors use `application/problem+json`, based on RFC 9457, with a stab
 | 503 | `DEPENDENCY_UNAVAILABLE` | Required readiness dependency is unavailable. |
 | 503 | `STORAGE_UNAVAILABLE` | The upload-storage control-plane adapter is temporarily unavailable. |
 
+## Timeline, parametric editing and render (PRD §18.2, §18.3, §19 — slice 2A)
+
+Top-level codes. A timeline is rejected in two stages, and the split is deliberate: a document
+that is not a timeline at all fails to *parse* and names one location, while a document that
+parses but could not be rendered fails *validation* and names every violation at once, so a
+client fixes one round of problems rather than discovering them one at a time.
+
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 404 | `TIMELINE_NOT_FOUND` | Timeline does not exist in the authorized tenant, including non-disclosing cross-tenant access. |
+| 404 | `RENDER_NOT_FOUND` | Render output does not exist in the authorized tenant. |
+| 422 | `TIMELINE_SCHEMA_INVALID` | The document does not match §18.2. `meta.issue` carries the code below and `meta.pointer` the location; the rejected value is never echoed, because a timeline can carry text lifted out of an uploaded video. |
+| 422 | `TIMELINE_PATCH_INVALID` | The patch body does not match the closed operation set (K4). Same `meta.issue`/`meta.pointer` shape. |
+| 422 | `TIMELINE_VALIDATION_FAILED` | §18.3 pre-render rules. `meta.issues[]` lists every violation at once, and **no render is scheduled** — the check runs before the job exists. |
+
+`meta.issue` values (schema, §18.2):
+
+| Code | What it catches |
+|---|---|
+| `TIMELINE_VERSION_UNSUPPORTED` | a document version this build does not implement |
+| `TIMELINE_UNKNOWN_FIELD` | an extra key — a raw `x`/`y` coordinate lands here, which is how K4 is enforced structurally |
+| `TIMELINE_FIELD_INVALID` / `TIMELINE_FIELD_OUT_OF_RANGE` | wrong type, or a value outside its bounds |
+| `TIMELINE_TOO_MANY_ENTRIES` | more clips, overlays or tracks than one document may hold |
+| `TIMELINE_NO_VIDEO_TRACK` / `TIMELINE_NO_CLIP` | nothing to render |
+| `TIMELINE_DUPLICATE_TRACK` / `TIMELINE_DUPLICATE_AUDIO_TRACK` | the same track declared twice |
+| `TIMELINE_CLIP_TOO_SHORT` | a cut below the minimum clip duration, including one that snapping pulled shut |
+| `TIMELINE_LITERAL_WITH_REFERENCE` | literal text offered together with a record reference |
+| `TIMELINE_VERIFIED_FIELD_NOT_LITERAL` | prose written into a verified slot — the shortest path around "a model never writes a price" |
+| `TIMELINE_VERIFIED_REFERENCE_MISSING` | a verified slot with no record to resolve from |
+| `TIMELINE_STYLE_TOKEN_UNKNOWN` | a style outside the closed token registry |
+
+`meta.issue` values (patch, K4):
+
+| Code | What it catches |
+|---|---|
+| `PATCH_EMPTY` / `PATCH_TOO_MANY_OPERATIONS` | no operations, or more than one request may carry |
+| `PATCH_OPERATION_UNKNOWN` | an operation outside the closed set |
+| `PATCH_UNKNOWN_FIELD` / `PATCH_FIELD_INVALID` / `PATCH_FIELD_OUT_OF_RANGE` | an extra key, a wrong type, or a value outside its bounds |
+| `PATCH_TARGET_NOT_FOUND` / `PATCH_TARGET_NOT_TEXT` | an overlay, track or clip index past the end, or a text edit aimed at a logo. Out-of-range edits are refused rather than ignored, so a client cannot believe a change landed when it did not |
+
+The schema codes above also apply to a patch, because a patch is parsed under the same rules.
+
+`meta.issues[].code` values (pre-render validation, §18.3):
+
+| Code | What it catches |
+|---|---|
+| `TIMELINE_DURATION_OVERFLOW` | a cut past the canvas duration, or a canvas past the adapter's ceiling |
+| `TIMELINE_ASSET_NOT_ACCESSIBLE` | an asset that does not exist **or belongs to another tenant** — the query is tenant-scoped, so the two are indistinguishable by construction rather than by comparison |
+| `TIMELINE_ASSET_NOT_RENDERABLE` | an asset whose ingest or technical analysis has not finished |
+| `TIMELINE_CLIP_RANGE_INVALID` | a cut beyond the source duration |
+| `TIMELINE_CLIP_OVERLAP` / `TIMELINE_DUPLICATE_CLIP` | overlapping cuts on one track, or the same (asset, start, end) twice |
+| `TIMELINE_ASPECT_RATIO_MISMATCH` / `TIMELINE_RESOLUTION_TOO_LOW` | canvas ratio against the target profile; a source that cannot fill the target without visible upscaling |
+| `TIMELINE_TEXT_OUTSIDE_SAFE_AREA` | text that still does not fit the safe area after line wrapping |
+| `TIMELINE_FORBIDDEN_TERM` | a term on the brand's forbidden claim/topic list, matched at word boundaries |
+| `TIMELINE_VERIFIED_FIELD_NOT_FOUND` | a reference that resolves to nothing in this tenant |
+| `TIMELINE_CAMPAIGN_WINDOW_INVALID` | a campaign outside its window |
+| `TIMELINE_LOGO_ASSET_INVALID` | an image the brand never registered as a logo |
+| `TIMELINE_OVERLAY_WINDOW_INVALID` / `TIMELINE_AUDIO_TRACK_INVALID` | an overlay window or audio track that cannot be placed |
+| `TIMELINE_UNSUPPORTED_TRANSITION` / `_CROP_MODE` / `_AUDIO_SOURCE` / `_CAPTION_SOURCE` | outside the render adapter's declared capabilities — refused cleanly rather than failing halfway through an encode |
+| `TIMELINE_TOO_MANY_VIDEO_TRACKS` / `RENDER_PROFILE_UNSUPPORTED` | more tracks or a target profile than this adapter declares |
+
+Worker-side failure codes. These are not HTTP responses: they are written to
+`render_outputs.failure_code` and read back through `GET .../renders/{id}`, so a caller learns
+why an encode stopped without the worker inventing an API error.
+
+| Code | Meaning |
+|---|---|
+| `RENDER_RECORD_MISSING` / `RENDER_TIMELINE_MISSING` | the claimed job's render or timeline row is gone |
+| `RENDER_TIMELINE_INVALID` | the stored document no longer parses under §18.2 |
+| `RENDER_TIMELINE_VALIDATION_FAILED` | §18.3 re-run immediately before rendering now refuses. Not redundant with the API check: a campaign can expire or a price row can be superseded between request and render |
+| `RENDER_SOURCE_UNAVAILABLE` | a source object could not be materialized for the encode |
+| `RENDER_STORAGE_UNAVAILABLE` / `RENDER_STORAGE_METADATA_INVALID` | the output could not be stored, or what storage holds does not match what was written |
+
 ## Script generation (PRD §17.5, §18.1 — slice 2B)
 
 Request-level rejections. All of these happen **before** a provider is called, so a refused

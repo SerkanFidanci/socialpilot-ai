@@ -21,6 +21,11 @@ buradaki hiçbir sınıf domain kararı vermez.
 | `celery_app.py` | `create_celery_app` — domain task'ı kaydetmeyen Celery konfigürasyonu |
 | `celery_publisher.py` | `CeleryOutboxPublisher` — dayanıklı PostgreSQL drain task'larını uyandıran outbox yayıncısı |
 | `storage/fake.py` | `FakeMultipartStorage` — byte kabul etmeyen bellek içi multipart fake (bkz. bloke edici **B1**) |
+| `storage/s3.py` | `S3MultipartStorage` — SigV4'ü `httpx` üzerinde kendi imzalayan S3/MinIO multipart adapter'ı; sağlayıcı `UploadId`'sini döner (kontrol objesi yok, W10), imzalı URL'i döndürmez/loglamaz/hataya koymaz |
+| `storage/__init__.py` | `create_storage` — `STORAGE_ADAPTER`'a göre fake/s3 seçimi, üretimde `fake` reddedilir |
+| `render/ffmpeg.py` | `FFmpegRenderAdapter` — `RenderPort`'un FFmpeg uygulaması: filtre grafiği, concat demuxer, altyazı yakma, timeout ve kısmi çıktı temizliği; `ffmpeg` sözcüğü bu çizginin altında kalır |
+| `render/fake.py` | `FakeRenderAdapter` — yer tutucu dosya yazan render fake'i (birim testler FFmpeg olmadan render *servisini* sınar); üretimde reddedilir |
+| `render/__init__.py` | `create_render` — `RENDER_ADAPTER`'a göre fake/ffmpeg seçimi (`create_storage` deseni), üretimde `fake` reddedilir |
 | `identity/local.py` | `LocalIdentityVerifier` — yalnızca geliştirme/test için imzalı yerel token |
 | `media/frame_extraction.py` | `FFmpegFrameExtractionAdapter` + `select_frame_timestamps` — sınırlı gerçek frame çıkarma |
 | `media/s3_materializer.py` | `S3MediaMaterializer` — depodan worker scratch'ine akışlı indirme; W01 adapter'ının imzalamasını yeniden kullanır, kısmi dosya bırakmaz (ADR-009) |
