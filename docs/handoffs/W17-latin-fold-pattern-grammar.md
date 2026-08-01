@@ -281,7 +281,7 @@ Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
 ## Rapor — takip düzeltmesi 1 · 2026-08-02 · yürüten oturum (Opus 5)
 
 **Dal:** `fix/w17-latin-fold` (`git merge main` ile `6fd5ec2` üzerine güncellendi) ·
-**Commit:** `ed4c1c8` · **Durum:** tamamlandı, dalda bırakıldı
+**Commit:** `bacf7f8` · **Durum:** tamamlandı, dalda bırakıldı
 
 ### 1 — Sağ çapa ek zincirinin sonuna taşındı
 
