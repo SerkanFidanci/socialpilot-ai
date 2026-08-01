@@ -266,4 +266,15 @@ Redis 56399, MinIO 59020/59021). Tüm koşular **konteyner içinde**.
 
 ## Doğrulama
 
-_(test eden oturum doldurur — özellikle: yeni normalizasyonu yine Unicode ile atlatma [Mn kombinasyon zincirleri, homoglif rakamlar, Cyrillic karışımı], redaksiyonu QueueHandler/child-process logger üzerinden atlatma, fast-path'in yanlış negatif üretip üretmediği)_
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fc5555f`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · API/worker Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · PostgreSQL 16.14 · MinIO · FFmpeg. Host portları yalnız izole `sp-codex` stack'i için `55433`/`56380`/`59002`/`8001` oldu; test DB'si head `0014_voiceover_assets` üzerinde çalıştı ve saldırı verisi temizlendi.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Confusable tablosu Coptic `Ⲧ` (U+2CA6) karakterini Latin `T`'ye katlamıyor; `TL` para birimi bu yolla atlatılabiliyor ve kalıcı script'e giriyor. | kritik | `find_fabrication("165 ⲦL")` → `PASS`. Kötü niyetli sağlayıcı çıktısı olarak gerçek HTTP'den gönderildi: `201`, `status=generated`, DB'de `document IS NOT NULL`. | açık |
+| 2 | U+2065 (atanmamış, görünmez ayırıcı) temizlenmediği için fiyat kalıbını bölüyor. | kritik | `find_fabrication("1\\u20656\\u20655\\u2065TL")` → `PASS`; aynı literal HTTP'de `201/generated` oldu ve kalıcı document satırı oluştu. | açık |
+| 3 | Hızlı redaksiyon yolu, yüzde-kodlu imza parametre adlarını tanımıyor. | orta | `X-Amz-%53ignature=…&X-Amz-%43redential=…` hem QueueHandler/QueueListener mesajında hem `extra` yüzeyinde ham sentinel ile kaldı. `urllib.parse.parse_qsl` aynı query'yi standart olarak `X-Amz-Signature`/`X-Amz-Credential` anahtarlarına çözüyor; redaktör ham karakter dizisinde `sig`/`cred` ön filtresini geçemiyor. Bu URL biçiminin MinIO/S3 imza doğrulamasında kabulü ayrıca ölçülmedi. | açık |
+| 4 | İstenen QueueHandler/QueueListener ve fork çocuk-süreç yolları kanonik imza parametreleri için atlatılamadı. | — | S3 `X-Amz-Signature`, GCS `GoogleAccessId` ve Azure `sig`, mesaj + `extra` + iç içe payload olarak QueueHandler/QueueListener'dan geçirildi; sentinel yoktu. Fork edilmiş çocuk süreçte mesaj ve `extra` yine maskelendi. | kabul edildi |
+| 5 | Yeni Mn/rakam/Kiril denemelerinin test edilenleri engellendi. | — | Uzun Mn/CGJ/variation-selector zinciri, matematiksel kalın rakamlar, N'Ko ve Tibet rakamları ile Kiril `ТL` fiyatı `SCRIPT_FABRICATED_PRICE` verdi. Bilinen W17 gramer açıkları (diyakritiksiz Türkçe, `T.L.`, `⑴⑸`) ve `handle()`'ı bilinçli ezmiş handler tekrar raporlanmadı. | kabul edildi |
+| 6 | Mevcut odaklı süitler yeni #1–#3 girdilerini kapsamıyor. | orta | `RUN_INTEGRATION_TESTS=1 python -m pytest -q tests/unit/test_logging_redaction.py tests/unit/test_content_script_unit.py tests/integration/test_content_script.py` → `191 passed` (1 Starlette/httpx deprecation uyarısı). | açık |
+
+**Karar:** düzeltme gerekiyor. Normalizasyonun görünmez/uyumlu karakter seti ve confusable kapsamı genişletilmeli; redaksiyon, query parametre adını eşleştirmeden önce güvenli şekilde yüzde-çözülmüş biçimi de incelemelidir. Her üç açık HTTP/Queue regresyon testleriyle kapatılmalıdır.

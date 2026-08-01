@@ -204,4 +204,15 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir.
 
 ## Doğrulama
 
-_(test eden oturum doldurur — özellikle: serbest metni script id'siz seslendirtme denemeleri, başka tenant'ın script'i, tavan aşımı, süre beyanı ile ffprobe ölçümünün çelişmesi)_
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fc5555f`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · API/worker Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · PostgreSQL 16.14 · MinIO · FFmpeg. Hosttaki mevcut stack ile port çakışmaması için yalnızca bu compose projesinin yayınlanan portları `55433`/`56380`/`59002`/`8001` olarak ayrıldı. İzole DB `0014_voiceover_assets` head'ine yükseltildi; saldırı verisi test sonunda temizlendi.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Serbest metin veya `script_id` olmadan seslendirme yolu bulunamadı. | — | Gerçek HTTP isteğinde geçerli `script_id` yanına `text: "Sadece 1 TL seslendir"` eklendi; hem bu hem de yalnız `text` taşıyan gövde `400 REQUEST_VALIDATION_FAILED` döndü. | kabul edildi |
+| 2 | Başka tenant'ın gerçek senaryosu seslendirilemedi ve kimlik sızmadı. | — | İkinci tenant, ilk tenant'ın üretilmiş script UUID'siyle `/voiceovers` çağırdı: `404 VOICEOVER_SCRIPT_NOT_FOUND`; gövdede UUID yok. | kabul edildi |
+| 3 | Maliyet tavanı çağrıdan önce duruyor. | — | `estimated_cost_minor=1` fake TTS ve varsayılan tavan `0` ile HTTP çağrısı `409 TTS_COST_LIMIT_EXCEEDED`; `tts.calls=0`, `voiceover_assets` satırı `0`. | kabul edildi |
+| 4 | Sağlayıcı süre beyanı ölçüm yerine geçemedi. | — | Fake adapter her segment için `declared_duration_ms=999999`, gerçek WAV için `duration_ms=1100` üretti. HTTP sonucu `201`, üç segmentin ölçümü `1100` ve toplam `3300`; beyanlar yalnız metadata olarak `999999` kaldı. | kabul edildi |
+| 5 | Kanonik idempotency atlatması bulunamadı. | — | Aynı key ile alan sırası ters JSON gövdesi aynı voiceover id'sini `201` ile replay etti; aynı key + `tr-neutral-v1` profil değişikliği `409` döndü ve yalnız ilk üç TTS çağrısı yapıldı. | kabul edildi |
+| 6 | W15'in gerçek MinIO depolama yolunda imzalı URL sızıntısı görülmedi. | — | `RUN_INTEGRATION_TESTS=1 RUN_STORAGE_TESTS=1 python -m pytest -q tests/unit/test_voiceover_unit.py tests/integration/test_content_voiceover.py` → `46 passed` (1 Starlette/httpx deprecation uyarısı); bu süit gerçek imzalı PUT ve tüm handler çıktısını kapsar. | kabul edildi |
+
+**Karar:** W15 kabul kriterleri için teslim edilebilir. W16'da ayrıca raporlanan yüzde-kodlu parametre redaksiyon açığı, W15'in mevcut S3 üretim yolunda oluşmadı; yine de genel logging düzeltmesinde ele alınmalıdır.
