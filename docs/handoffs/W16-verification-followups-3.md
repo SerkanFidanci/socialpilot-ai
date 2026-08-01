@@ -1,7 +1,7 @@
 # W16 — Doğrulama bulguları 3. tur: log `extra` sızıntısı + dedektör Unicode atlatması
 
 **Dal:** `fix/verification-followups-3` · **Base:** `main` · **Migration slotu: YOK** (`0014` W15'te — migration dosyalarına dokunma)
-**Durum:** hazır, tetiklenmedi
+**Durum:** tamamlandı (dalda, merge edilmedi) — bkz. Rapor
 **Model/effort:** Opus 5 / high
 **Neden bu iş:** Codex'in 2026-08-01 düşman turu iki **kritik** bulgu döndürdü (kayıtları [W14-verification-followups-2.md](W14-verification-followups-2.md) ve [W13-script-generation.md](W13-script-generation.md) "Doğrulama" bölümlerinde — ikisini de oku, yeniden üretim adımları orada):
 
