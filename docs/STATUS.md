@@ -1,6 +1,6 @@
 # Proje Durumu
 
-**Son güncelleme:** 2026-07-30 · **Sahip:** PM oturumu
+**Son güncelleme:** 2026-07-31 · **Sahip:** PM oturumu
 
 | | |
 |---|---|
