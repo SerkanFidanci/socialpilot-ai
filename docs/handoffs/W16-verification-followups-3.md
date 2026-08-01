@@ -296,7 +296,7 @@ Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fc5555f`) · `COMPOS
 ## Rapor — düzeltme turu 2 · 2026-08-02 · yürüten oturum (Opus 5)
 
 **Dal:** `fix/verification-followups-3` (`git merge main` ile `96ba2f1` üzerine güncellendi) ·
-**Durum:** tamamlandı, dalda bırakıldı
+**Commit:** `ac48c87` · **Durum:** tamamlandı, dalda bırakıldı
 
 ### 1 — Confusable kapsamı: sınıf kapatıldı
 
