@@ -18,10 +18,14 @@ even if the provider is compromised, swapped, or (as today) fake. It never runs 
 values — those came from a record and are supposed to contain digits. Matching runs on text that
 `text_normalization.normalize_for_matching` has already folded, because a rule written against
 characters is otherwise defeated by re-encoding the same sentence: zero-width spaces between the
-digits, a decomposed `ü`, a Cyrillic `Т` in `TL`. Folding alone is still an allowlist of known
-lookalikes, so `parse_text` also bounds the alphabet: a letter outside Latin script is refused
-before any rule runs, which is what makes "the next alphabet" — Coptic, Cherokee, Lisu — a closed
-question rather than the next finding.
+digits, a decomposed `ü`, a Cyrillic `Т` in `TL`. That fold now reaches all the way to ASCII, so
+**every pattern literal below is written without diacritics** — `turk lirasi`, `yuzde`,
+`agustos`. It reads wrong and it is deliberate: the text these run against has none either, which
+is what makes `165 türk lirası`, `165 turk lirasi` (what a human actually types) and `165 ṬL`
+(what an attacker types) one input. Folding alone is still an allowlist of known lookalikes, so
+`parse_text` also bounds the alphabet: a letter the fold cannot spell in ASCII is refused before
+any rule runs, which is what makes "the next alphabet" — Coptic, Cherokee, Lisu — and "the next
+diacritic" closed questions rather than the next finding.
 
 Two further §17.5 properties are structural rather than advisory. Untrusted text lifted out of
 uploaded media travels as **JSON data** in `input_data`, never concatenated into the instruction
@@ -46,7 +50,8 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.modules.content.text_normalization import (
-    contains_non_latin_letter,
+    contains_unsupported_letter,
+    normalize_encoding,
     normalize_for_matching,
 )
 from app.modules.content.validation import VerifiedValue
@@ -189,26 +194,43 @@ ISSUE_RESOLVED_TEXT_TOO_LONG: Final = "SCRIPT_RESOLVED_TEXT_TOO_LONG"
 # write digits will reach for words next. The detector recognizes a written percentage too:
 # without an approved-claim value to bind, even "yüzde yüz memnuniyet" is an unverified factual
 # claim, not safe model prose.
+#
+# Every literal here is spelled in `normalize_for_matching`'s folded alphabet — ASCII only, no
+# diacritic, `ı` and `i` collapsed onto `i`. A literal written the way Turkish is actually
+# spelled would simply never match again, so a rule added below has to be folded by hand the
+# same way; the unit suite pins that by feeding both spellings of a sentence to every rule.
 
 _NUMBER: Final = r"\d{1,3}(?:[.\s ]\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?"
+# `T.L.` and `T L` are how the abbreviation gets written by hand, and the adjacency the plain
+# `tl` alternative relies on survives neither a full stop nor a space. The separator is *any*
+# run of non-word characters rather than the two the work order named, and unbounded rather
+# than capped: `T·L`, `T-L`, `T/L` and `T . . L` all read as the same abbreviation, so a list of
+# separators — or a length cap — is only a rule about which spellings someone thought of. My own
+# adversarial round found `165 T....L` against a three-character cap.
+#
+# Unbounded is safe because the run may contain no word character, so any *word* between the two
+# letters ends the match — "1 t. tuz, 2 l. su" is a recipe, not a currency. What keeps it out of
+# prose is that both letters have to be *single-letter tokens*: every use of this group carries
+# a trailing `(?!\w)` and anchors its left side, so "tatli lezzet" cannot become a currency
+# because the `t` is followed by a letter rather than by a separator. The trailing run is what
+# lets the prefix form reach its number in `T.L. 165`.
+_TL_ABBREVIATION: Final = r"t[\W_]+l[\W_]{0,2}"
 _CURRENCY_WORD: Final = (
-    r"tl|try|türk\s+liras[ıi]|lira|liras[ıi]|liray[ıa]|liradan|liral[ıi]k|kuruş|"
-    r"usd|eur|euro|avro|dolar(?:[ıi])?|dolar[lı][ıi]k|gbp|sterlin"
+    rf"tl|{_TL_ABBREVIATION}|try|turk\s+lirasi|lira|lirasi|liray[ia]|liradan|liralik|kurus|"
+    r"usd|eur|euro|avro|dolari?|dolarlik|gbp|sterlin"
 )
 _CURRENCY_SYMBOL: Final = r"₺|\$|€|£"
 _NUMBER_WORD: Final = (
-    r"bir|iki|üç|dört|beş|alt[ıi]|yedi|sekiz|dokuz|on|yirmi|otuz|k[ıi]rk|elli|"
-    r"altm[ıi]ş|yetmiş|seksen|doksan|yüz|bin|milyon|milyar|yar[ıi]m|çeyrek"
+    r"bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz|on|yirmi|otuz|kirk|elli|"
+    r"altmis|yetmis|seksen|doksan|yuz|bin|milyon|milyar|yarim|ceyrek"
 )
-_MONTH: Final = (
-    r"ocak|şubat|mart|nisan|may[ıi]s|haziran|temmuz|ağustos|eylül|ekim|kas[ıi]m|aral[ıi]k"
-)
+_MONTH: Final = r"ocak|subat|mart|nisan|mayis|haziran|temmuz|agustos|eylul|ekim|kasim|aralik"
 _WRITTEN_NUMBER: Final = rf"(?:{_NUMBER_WORD})(?:\s+(?:{_NUMBER_WORD}))*"
 # A written calendar day has a much smaller grammar than a currency amount. Keeping it bounded
 # avoids turning arbitrary prose ending in a month name into a date, while covering 1–31.
 _WRITTEN_DAY: Final = (
-    r"bir|iki|üç|dört|beş|alt[ıi]|yedi|sekiz|dokuz|on(?:\s+(?:bir|iki|üç|dört|beş|alt[ıi]|"
-    r"yedi|sekiz|dokuz))?|yirmi(?:\s+(?:bir|iki|üç|dört|beş|alt[ıi]|yedi|sekiz|dokuz))?|"
+    r"bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz|on(?:\s+(?:bir|iki|uc|dort|bes|alti|"
+    r"yedi|sekiz|dokuz))?|yirmi(?:\s+(?:bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz))?|"
     r"otuz(?:\s+bir)?"
 )
 
@@ -225,7 +247,7 @@ _PRICE_PATTERNS: Final = (
     # field) or a claim (an approved claim); neither is the model's to write. This includes
     # the digit-free form "yüzde yirmi".
     re.compile(rf"%\s*(?:{_NUMBER})|(?<!\w)(?:{_NUMBER})\s*%"),
-    re.compile(rf"(?<!\w)yüzde\s+(?:{_WRITTEN_NUMBER}|{_NUMBER})(?!\w)"),
+    re.compile(rf"(?<!\w)yuzde\s+(?:{_WRITTEN_NUMBER}|{_NUMBER})(?!\w)"),
 )
 
 _DATE_PATTERNS: Final = (
@@ -260,7 +282,10 @@ def find_fabrication(text: str) -> str | None:
     The text is normalized before any pattern runs. Without that step the rules match glyphs
     rather than words, and `1​6​5​TL` with zero-width spaces or an NFD
     `Türk lirası` reads as a price to a customer while reading as harmless prose to a
-    regular expression (W13 verification, 2026-08-01).
+    regular expression (W13 verification, 2026-08-01). The fold reaches ASCII, so the patterns
+    are also blind to diacritics in both directions: the missing ones a human types
+    (`165 turk lirasi`) and the extra ones an attacker types (`165 ṬL`) are the same string by
+    the time a pattern runs, which is why the literals above are spelled without them.
     """
 
     normalized = normalize_for_matching(text)
@@ -285,6 +310,11 @@ def forbidden_matcher(terms: Sequence[str]) -> re.Pattern[str] | None:
     "lezzetli". Both the terms and the candidate go through `normalize_for_matching`, which is
     what makes `"Sağlığa iyi gelir"` and `"sağlığa iyi gelir"` the same term — and what stops a
     zero-width space in the middle of a banned claim from unbanning it.
+
+    Folding the terms as well as the candidate widens the ban: a brand that forbids `şeker` also
+    forbids `seker`. That is the safe direction and it is a PM decision (W17), not an accident —
+    the alternative is a banned claim that comes back by dropping a cedilla, which is exactly
+    how a human types it anyway.
     """
 
     cleaned = [normalize_for_matching(term.strip()) for term in terms if term and term.strip()]
@@ -518,11 +548,12 @@ def parse_text(value: Any, pointer: str, *, max_chars: int) -> ScriptText:
         raise ScriptSchemaError(SCHEMA_FIELD_TYPE_INVALID, pointer)
     if _CONTROL_CHARACTERS.search(value):
         raise ScriptSchemaError(SCHEMA_CONTROL_CHARACTER, pointer)
-    if contains_non_latin_letter(value):
-        # The alphabet, not the wording. Every rule below matches characters, so an alphabet the
-        # rules were never written against is a bypass of all of them at once: `165 ⲦL` reads as
-        # a price and matched nothing. Bounding the alphabet is the only version of this defence
-        # that does not need a new entry every time someone finds another script.
+    if contains_unsupported_letter(value):
+        # The alphabet, not the wording. Every rule below matches characters, so a letter the
+        # rules cannot read is a bypass of all of them at once: `165 ⲦL` reads as a price and
+        # matched nothing. The bound is the fold itself — a letter is admitted exactly when it
+        # can be spelled in ASCII — so it needs no new entry when someone finds another script,
+        # and none when they find another diacritic (`165 ŦL`, W16 round 2).
         raise ScriptSchemaError(SCHEMA_UNSUPPORTED_CHARACTER, pointer)
     if len(value) > max_chars:
         raise ScriptSchemaError(SCHEMA_TEXT_TOO_LONG, pointer)
@@ -601,7 +632,11 @@ def _scene_tags(value: Any, pointer: str) -> tuple[str, ...]:
     for index, item in enumerate(value):
         if not isinstance(item, str):
             raise ScriptSchemaError(SCHEMA_FIELD_TYPE_INVALID, f"{pointer}[{index}]")
-        tag = normalize_for_matching(item.strip()).replace(" ", "_").replace("-", "_")
+        # `normalize_encoding`, not `normalize_for_matching`: this value is *stored*, and 2C/2E
+        # match it against labels video understanding produced. Folding it to ASCII would turn
+        # `ürün` into `urun` and quietly stop it matching anything, which is a product bug
+        # wearing a security fix (W16 report, W17 scope).
+        tag = normalize_encoding(item.strip()).replace(" ", "_").replace("-", "_")
         if not MIN_SCENE_TAG_CHARS <= len(tag) <= MAX_SCENE_TAG_CHARS:
             raise ScriptSchemaError(SCHEMA_SCENE_TAG_INVALID, f"{pointer}[{index}]")
         if not _SCENE_TAG_PATTERN.fullmatch(tag):
@@ -613,8 +648,10 @@ def _scene_tags(value: Any, pointer: str) -> tuple[str, ...]:
 
 
 def _slot_kind(value: str, pointer: str) -> SlotKind:
+    # Also `normalize_encoding`: a slot kind is a closed enum, and widening what spells `price`
+    # is not this fix's business.
     try:
-        return SlotKind(normalize_for_matching(value))
+        return SlotKind(normalize_encoding(value))
     except ValueError as error:
         raise ScriptSchemaError(SCHEMA_SLOT_KIND_UNKNOWN, pointer) from error
 

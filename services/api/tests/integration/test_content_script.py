@@ -540,6 +540,110 @@ def test_an_unknown_alphabet_or_code_point_never_reaches_a_stored_script(
     assert document is None
 
 
+W17_BYPASSES = [
+    # The work order's numbered inputs, over HTTP, against the row the API would otherwise have
+    # committed. The first four are diacritics *missing* — which is how a person types on a
+    # phone, so a model copying a customer's own caption lands here without trying — and the
+    # next three are diacritics *added*: U+1E6C, U+0166 and U+2C66 all draw a `T`, and all three
+    # are Latin letters, so W16's alphabet rule admitted them by design.
+    ("undotted currency", "Sadece 165 turk lirasi.", "SCRIPT_FABRICATED_PRICE"),
+    ("undotted percentage", "Simdi yuzde yirmi indirim.", "SCRIPT_FABRICATED_PRICE"),
+    ("undotted month", "1 agustos tarihine kadar.", "SCRIPT_FABRICATED_DATE"),
+    ("undotted written amount", "Sadece yuz altmis bes lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("t with dot below", "Sadece 165 ṬL.", "SCRIPT_FABRICATED_PRICE"),
+    ("t with stroke", "Sadece 165 ŦL.", "SCRIPT_FABRICATED_PRICE"),
+    ("t with diagonal stroke", "Sadece 165 ⱦl.", "SCRIPT_FABRICATED_PRICE"),
+    # Pattern grammar rather than spelling.
+    ("dotted abbreviation", "Sadece 165 T.L.", "SCRIPT_FABRICATED_PRICE"),
+    ("spaced abbreviation", "Sadece 165 T L.", "SCRIPT_FABRICATED_PRICE"),
+    ("parenthesized digits", "Sadece ⑴⑸ TL.", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("phrase", "issue"),
+    [(phrase, issue) for _, phrase, issue in W17_BYPASSES],
+    ids=[label for label, _, _ in W17_BYPASSES],
+)
+def test_a_folded_or_regrouped_figure_never_reaches_a_stored_script(
+    phrase: str, issue: str
+) -> None:
+    """One fold closes both directions, and the proof has to be at the boundary that persists.
+
+    Every one of these answered `201` with `status=generated` before W17: a price a human can
+    open, approve and publish, sitting in a row nothing else in the system disputes.
+    """
+
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-fold", "s-fold@example.com"), "Fold")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "SCRIPT_VALIDATION_FAILED"
+    assert [entry["code"] for entry in response.json()["meta"]["issues"]] == [issue]
+    assert query("SELECT status, failure_code, document FROM content_scripts") == [
+        ("failed", issue, None)
+    ]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("label", "phrase"),
+    [
+        # The other half of the trade, asserted where it costs money: a rejection here is a
+        # generation the business cannot complete. An accented business name has to survive the
+        # fold, or that tenant is blocked permanently with no path out but renaming itself.
+        ("accented business name", "Café Nero şubemizde sizi bekliyor."),
+        ("stroked business name", "Łukasz Kebap artık açık."),
+        # Two single letters in ordinary words are not a currency abbreviation.
+        ("t and l inside words", "165 tatlı lezzet bir arada."),
+        # And the alternative design for the parenthesized digits — letting patterns skip
+        # punctuation between digits — would have rejected this.
+        ("legal citation", "(1) madde (5) fıkra gereği geçerlidir."),
+    ],
+)
+def test_ordinary_copy_still_produces_a_script(label: str, phrase: str) -> None:
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-fp", "s-fp@example.com"), "FalsePositive")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 201, response.text
+    assert phrase in str(response.json()["document"])
+
+
+@requires_postgres
+def test_a_latin_letter_the_fold_cannot_spell_is_refused_at_the_boundary() -> None:
+    """Fail-closed: an unmapped letter is rejected, never passed to rules that cannot read it."""
+
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-unfold", "s-unfold@example.com"), "Unfoldable")
+        output = _mutate(
+            tenant.cta_id,
+            # Small-capital latin letters: `LATIN LETTER SMALL CAPITAL T` names no base this
+            # module will guess at, so the fold declines and the parser refuses the text.
+            lambda document: document["segments"][1].update({"voice_text": "Sadece 165 ᴛʟ."}),
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 422, response.text
+    assert query("SELECT status, failure_code, document FROM content_scripts") == [
+        ("failed", "SCRIPT_UNSUPPORTED_CHARACTER", None)
+    ]
+
+
 @requires_postgres
 def test_a_forbidden_claim_is_refused_in_either_case() -> None:
     adapter = FakeScriptGenerationAdapter(config())
