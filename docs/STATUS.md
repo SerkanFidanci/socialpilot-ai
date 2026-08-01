@@ -1,10 +1,10 @@
 # Proje Durumu
 
-**Son güncelleme:** 2026-07-30 · **Sahip:** PM oturumu
+**Son güncelleme:** 2026-07-31 · **Sahip:** PM oturumu
 
 | | |
 |---|---|
-| `main` | W01→W15 merge edildi (yalnız W06 bekliyor); son dilim **W15 — Phase 2C seslendirme** |
+| `main` | W01→W15 merge edildi (yalnız W06 bekliyor); son dilim **W15 — Phase 2C seslendirme**. **Codex 3. tur döndü: 2 kritik bulgu → W16** (log `extra` sızıntısı, dedektör Unicode atlatması) — W15 kapsamı değil, açık |
 | Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
 | Backend doğrulama | **674 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
@@ -130,26 +130,19 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W10](handoffs/W10-schema-debt.md) | **Şema borcu** (4 kalem) | **tamamlandı** · merge (`0a44f22`) · `0011` | dal silindi | Opus 4.8 / medium | kullanıldı |
 | [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
 
-| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · merge + **kritik düzeltme merge edildi** (`7621b61`): dedektör yazıyla/önekli Türkçe varyantları da yakalıyor, +16 test · birleşik Codex turu bekliyor | dal + worktree duruyor (tur bitene kadar) | Opus 5 / high | kullanıldı |
-| [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **tamamlandı** · merge (`4e643fe`) — imza sızıntısı süreç genelinde kapandı, envanter 2 ek fingerprint eksiği bulup düzeltti | dal silinebilir (kendi Codex turu W13 düzeltmesiyle birleşecek) | Opus 5 / high | — |
-| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **tamamlandı** · `0014` · 674 test (+46) · bağımsız doğrulama bekliyor · **açık:** hiçbir render adapter'ı `voiceover` ses kaynağını bildirmiyor (miksaj kapsam dışıydı) → 2E | `slice/2c-tts-voiceover` | Opus 5 / high | kullanıldı |
+| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — Unicode görünmez/normalizasyon varyantları dedektörü atlatıyor → **W16**; 2 yanlış pozitif bilinçli politika olarak pinlenecek | dal + worktree silindi | Opus 5 / high | kullanıldı |
+| [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
+| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **tamamlandı** · merge edildi · `0014` · 674 test (+46) · bağımsız doğrulama bekliyor · **açık:** hiçbir render adapter'ı `voiceover` ses kaynağını bildirmiyor (miksaj kapsam dışıydı) → 2E · **W16'ya not:** `tests/unit/test_content_script_unit.py` yetki matrisi testi iki yeni `ContentAction` için güncellendi (kaçınılmazdı: test her eylemin eşlendiğini iddia ediyor) | `slice/2c-tts-voiceover` (worktree duruyor, doğrulama turu bitene kadar) | Opus 5 / high | kullanıldı |
+| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektöre NFKC+Cf normalizasyonu, yanlış pozitif pinleri | **şimdi** — W15 merge edildi, `main`'den dallan | `fix/verification-followups-3` | Opus 5 / high | — (0014 W15'te) |
 
 ### Dosya sahipliği (çakışma önleme)
 
-Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. Sahibi olmadığın bir dosyaya dokunman gerekiyorsa dur ve raporuna yaz.
+Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. Sahibi olmadığın bir dosyaya dokunman gerekiyorsa dur ve raporuna yaz. (Tablo yalnızca **uçuştaki** işleri listeler; kapanan işlerin sahiplikleri WO dosyalarında kayıtlı.)
 
 | Dosya | Sahibi |
 |---|---|
-| `services/api/app/core/config.py` | W01 |
-| `compose.yaml`, `.env.example` | W01 |
-| `services/api/pyproject.toml` | W01 (yalnızca storage bağımlılığı) → sonra W02 (uv geçişi) |
-| `docs/architecture/media-upload.md` | W01 |
-| `services/api/Dockerfile`, `.github/workflows/verify.yml`, `Makefile` | W02 |
-| `docs/runbooks/local-development.md` | W02 |
-| `docs/index.md`, `docs/adr/README.md` | **W03 tekel** — W01/W02 ADR dosyasını yazar, indekse eklemez |
-| `AGENTS.md`, `CLAUDE.md`, `docs/product/**`, modül `CLAUDE.md`'leri | W03 |
-| `app/main.py`, `app/core/config.py`, `app/core/logging.py`, `pyproject.toml`, `uv.lock` | W05 |
-| `app/api/routes/__init__.py` (router dikişi), `migrations/` | W04 |
+| ~~W15'in dosyaları~~ | **serbest** — W15 merge edildi (`modules/content/{models,policy,repository,service,timeline,validation,tts,tts_service}.py`, `api/routes/content.py`, `core/config.py`, `infrastructure/ai/**`, `migrations/0014_*`, `.env.example`) |
+| `core/logging.py`, `modules/content/script.py`, `modules/content/text_normalization.py` (yeni), script test dosyaları | **W16** — `tests/unit/test_content_script_unit.py` W15'te de değişti (yetki matrisi); `main`'den dallanınca güncel hali gelir |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

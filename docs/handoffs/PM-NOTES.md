@@ -2,7 +2,31 @@
 
 **Amaç:** PM oturumunun bağlamı sıkıştırılırsa veya yeni bir PM oturumu açılırsa, buradan devam edilebilsin. **Her PM oturumu bu dosyayı ve [STATUS.md](../STATUS.md)'yi okur.**
 
-**Son güncelleme:** 2026-07-30
+**Son güncelleme:** 2026-07-31 (compact öncesi anlık durum bloğu eklendi)
+
+## ŞU AN — hızlı devralma (2026-08-01)
+
+**Depo durumu:** `main` = `3109464`+ (origin'e push kontrol et). **628 pytest** tabanı, lint+format+mypy strict yeşil, Alembic head `0013_script_generation` (tek head; `0014` slotu W15'te). Kapanan işler: **W01–W14 + W13 düzeltmesi**. ADR-001…016 kayıtlı.
+
+**Codex 3. tur DÖNDÜ (2026-08-01) — tur temiz DEĞİL, 2 kritik bulgu:** (1) log redaksiyonu `extra` alanlarını görmüyor (record factory `makeRecord`'da extra'dan önce çalışıyor; API+worker'da repro) + `GoogleAccessId` maskelenmiyor; (2) fabrikasyon dedektörü Unicode görünmez/normalizasyon varyantlarına açık (ZWSP'li `165TL`, NFD `Tu¨rk lirası`, combining-dot `YİRMİ` → kalıcı `generated` script). Ayrıntı ve reprolar W13/W14 dosyalarının Doğrulama bölümlerinde. İki yanlış pozitif (Ağustos böceği, yüzde yüz pamuk) **bilinçli politika** olarak pinlenecek — PM kararı: bağlam beyaz listesi açılmaz.
+
+**Uçuşta / tetiklenecek:**
+
+1. **W15 — Phase 2C TTS** (`slice/2c-tts-voiceover`, slot `0014`, worktree `w14-verification-followups-47d51d` — evet, adı yanıltıcı ama dal doğru). Kullanıcı tetikledi, oturum çalışıyor: worktree'de ilan listesine uygun uncommitted değişiklikler var, testler henüz görünmüyor. Dönüşü W15 dosyasının Rapor bölümünden oku; "bitirdi" beyanında worktree status'a bak.
+2. **W16 — Doğrulama bulguları 3. tur** ([W16-verification-followups-3.md](W16-verification-followups-3.md)) — iki kritik + GoogleAccessId + yanlış pozitif pinleri. **W15 ile dosya-ayrık, paralel tetiklenebilir.** Tetikleme prompt'u:
+```
+docs/handoffs/W16-verification-followups-3.md dosyasındaki iş emrini oku ve uygula. Protokol: docs/handoffs/README.md. Başlamadan önce docs/STATUS.md oku. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w16 ile çalıştır. Migration slotun YOK, migration dosyalarına dokunma. W15 paralel çalışıyor — iş emrindeki uçuş uyarısındaki dosyalara dokunma.
+```
+
+**Dönüşler geldiğinde akış:** W15 ve W16 raporları → PM denetler, merge eder (sıra: hangisi önce biterse; dosya-ayrık oldukları için çapraz risk düşük), merge sonrası tam doğrulama (`make verify`, taban 628+), STATUS güncelle, push. **İkisi de temiz kapanınca → 2D (QC) iş emri** (Phase 2 planı §3; içine: `forbidden_matcher` birleştirmesi — W16'nın `text_normalization.py`'ını import eder, timeline tarafı Türkçe `İ/I` katlamasına geçer — ve 2C'nin ölçtüğü süre sapması eşikleri). W16'dan sonra redaksiyon+dedektör için kısa bir Codex teyit turu düşün (yeni normalizasyonu yine Unicode ile atlatma denemesi).
+
+**Kuyruk (sonrası):** 2E yaşam döngüsü+entitlement (senaryonun `pending` süpürme borcu da orada) → 2F onay+revizyon → 2G planlayıcı → W06 (PG18+Valkey+`pg_dump` taşıyan backup-runner compose profili; D1 kapısını kapatır). ADR kuyruğu 5 kalem + ADR-008 ekleri aşağıda duruyor. Gerçek AI sağlayıcı seçimi W08 benchmark koşusu + route politikası ADR'ı sonrası — **hiçbir ücretli sağlayıcı benchmark'sız bağlanmaz.**
+
+**Açık kararlar:** K1 faturalandırma (KULLANICININ, Phase 3 öncesi) · K3 pazar kapsamı (bloke etmiyor) · K6 ikinci yarı fotoğraf hattı. **Dağıtım kapıları D1–D3** STATUS'ta (D3: üretim kimlik adapter'ı yok, production Settings bugün kurulamıyor).
+
+**Worktree'ler:** `w13-script-generation-733c80` **silindi** (dal merge edilmişti, temizdi); `w14-verification-followups-47d51d` W15'in aktif worktree'si (dal `slice/2c-tts-voiceover`) — W15 merge edilene kadar durur; `tech-methodology-review-fda5e7` PM'in worktree'si. Compose: ana stack `socialpilot-ai`; paralel işler `COMPOSE_PROJECT_NAME=sp-*` + worktree kökünden.
+
+**PM'in kendi kuralları (kısa):** merge + ADR numarası + push PM'de · "bitirdi" beyanı ≠ commit, worktree'ye bak (`git -C <worktree> status`) · dal boşluğu `git log` ile ölçülmez · kabul kriterlerinde denenecek girdiler sayılır, kritik dedektörlerde atlatma senaryoları düşman gözüyle · doğrulama raporuna araç zinciri sürümleri yazılır · her oturum raporu okunduktan sonra STATUS/PM-NOTES aynı turda güncellenir.
 
 ## Rol ve çalışma modeli
 
