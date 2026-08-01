@@ -118,7 +118,7 @@ Kural [README.md](README.md)'de. PM için özeti: **slice başına yeni oturum**
 - ~~W14~~ **KAPANDI** (`4e643fe`, 612 test). Eski özet: Codex bulguları (presigned URL log sızıntısı YÜKSEK — W01'in sentinel testi kütüphane logger'larını taramıyordu, ders: sızıntı testleri **tüm handler çıktısını** kapsamalı; patch fingerprint; 0011 downgrade koruması) + izin hizalaması + doküman borçları.
 - **Codex W13: 1 KRİTİK açık** — fabrikasyon dedektörü sayısal kalıpları yakalıyor ama **Türkçe yazım varyantlarını** kaçırıyor. Düzeltme sıcak W13 oturumunda (aynı-slice kuralı). Ders: dedektör kabul kriterinde varyantları ben saymıştım ama *yazıyla* varyantları saymamıştım — sayılı girdi listesi de ancak listeleyenin hayal gücü kadar iyi; **kritik dedektörlerde 'atlatma' senaryolarını ayrı bir düşman gözüyle listelet**.
 - **W14'ün kendi Codex turu** W13 düzeltmesinin doğrulamasıyla birleştirilecek (tek tur: imza redaksiyonunu atlatma + fabrikasyon varyantları).
-- **2C (TTS) iş emri** W13 kritik düzeltmesi merge edildikten sonra yazılır; üretim davranışı W13 kural onayı 1'deki genel kurala uyacak.
+- ~~2C~~ **YAZILDI** → [W15-tts-voiceover.md](W15-tts-voiceover.md); W13 düzeltmesi merge edildi (`7621b61`, 628 test). **Yeni ders:** W13 oturumu düzeltmeyi tamamlayıp commit'lemeden bıraktı — 'bitirdi' beyanı commit değil; PM diff'i gözden geçirip finalize etti. Sıradaki: birleşik Codex turu (W13 varyant düzeltmesi + W14 imza redaksiyonu) W15 ile paralel; üretim davranışı W13 kural onayı 1'deki genel kurala uyacak.
 - `forbidden_matcher` birleştirmesi (Türkçe İ/I katlaması timeline tarafına) → **2D (QC) slice'ına** not düşüldü.
 - D3 dağıtım kapısı eklendi: üretim kimlik adapter'ı (Firebase/OIDC) yok.
 

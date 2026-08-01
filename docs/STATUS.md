@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | `28ad6c7` — W01→W14 merge edildi (yalnız W06 bekliyor), origin ile senkron |
+| `main` | `7621b61`+ — W01→W14 + W13 kritik düzeltmesi merge edildi (yalnız W06 bekliyor), origin ile senkron |
 | Alembic head | `0013_script_generation` (tek head; zincir 0001→0013, merge sonrası up/down/up doğrulandı) |
-| Backend doğrulama | **612 pytest** (gerçek PostgreSQL + MinIO + FFmpeg, merge sonrası `main`'de) · lint + format + mypy strict 170 dosyada temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **628 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -128,8 +128,9 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W10](handoffs/W10-schema-debt.md) | **Şema borcu** (4 kalem) | **tamamlandı** · merge (`0a44f22`) · `0011` | dal silindi | Opus 4.8 / medium | kullanıldı |
 | [W11](handoffs/W11-timeline-and-render.md) | **Phase 2A** — timeline + RenderPort + AI'sız render | **tamamlandı** · merge (`258ddc3`) · `0012` yeniden zincirlendi · ADR-015/016 | dal silindi | Opus 5 / high | kullanıldı |
 
-| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | merge edildi (`2e4c59a`) · **Codex: 3/5 geçti, 1 KRİTİK açık** — fiyat tespiti Türkçe yazım varyantlarında aşılıyor (`165 Türk lirası`, `yüzde yirmi indirim`, `bir Ağustos'a kadar`, `TL 165`) → **düzeltme sıcak W13 oturumunda** | dal + worktree duruyor (düzeltme orada) | Opus 5 / high | kullanıldı |
+| [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · merge + **kritik düzeltme merge edildi** (`7621b61`): dedektör yazıyla/önekli Türkçe varyantları da yakalıyor, +16 test · birleşik Codex turu bekliyor | dal + worktree duruyor (tur bitene kadar) | Opus 5 / high | kullanıldı |
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **tamamlandı** · merge (`4e643fe`) — imza sızıntısı süreç genelinde kapandı, envanter 2 ek fingerprint eksiği bulup düzeltti | dal silinebilir (kendi Codex turu W13 düzeltmesiyle birleşecek) | Opus 5 / high | — |
+| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **şimdi** | `slice/2c-tts-voiceover` | Opus 5 / high | **SENDE** (`0014`) |
 
 ### Dosya sahipliği (çakışma önleme)
 
