@@ -248,4 +248,19 @@ Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
 
 ## Doğrulama
 
-_(W17 sonrası birleşik Codex turu: W16 2. tur yüzeyleri + W17 birlikte saldırılır; bulgular buraya ve W16 dosyasına)_
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `282155c`) ·
+`COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose
+v2.24.6-desktop.1 · Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 ·
+unicodedata 15.1.0 · PostgreSQL 16.14 · MinIO · FFmpeg. İzole host portları
+`55433`/`56380`/`59002`/`8001`; Alembic head `0014_voiceover_assets`.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | `lirayla` para birimi çekimi kalıp dışında; dolayısıyla aksansız temel biçim ve onun Latin katlama varyantları literal fiyat olarak kalıcı dokümana ulaşabiliyor. | kritik | `find_fabrication("165 lirayla")` → `None`; `resolve_script(parse_script(...), context=...)` → `document is not None`, `issues=[]`. 792 kabul edilen Latin harfin para/tarih sözcüklerine yerleştirildiği 4.186 varyantta 294 kaçışın tamamı bu tek temel sözcüğe indirgeniyor (`lirayla`); ör. `165 lirÀyla` da geçiyor. | açık |
+| 2 | Ad-tabanlı `WITH`/ligatür ve IPA/fonetik sınıflarında ikinci bir eşleştirme atlatması bulunamadı. | — | Örnekler: `165 ƮL`, `165 ŦL`, `165 ʈɬ`, `165 ﬅerlin`; ad-tabanlı tüm geçerli eşdeğer yerleştirmelerde, #1'in aynı `lirayla` kökü dışındaki 3.892 varyant yakalandı. | kabul edildi |
+| 3 | Katlama + görünmez + confusable + süslü rakam bileşimleri kaçamadı. | — | Circled/dingbat/parenthesized/fullwidth/Arabic-Indic/matematiksel rakam; `Cf`/`Cn`/`Co`, combining mark, Kiril/Coptic/Greek harf ve Latin `WITH` birleşimleri: **6/6** ret. | kabul edildi |
+| 4 | `T.L.` gramerinde yeni ayırıcılarla atlatma bulunamadı. | — | Ethiopic wordspace, ideographic/Arabic comma, fraction slash, interlinear separator, em space, uzun nokta dizisi, `_` ve satır sonu: **9/9** `SCRIPT_FABRICATED_PRICE`. Tarif ve ASCII madde/fıkra kontrolleri **3/3** geçti; `165 T. L. maddesi` ise para birimi grameri gereği reddedildi (ölçülen yanlış-pozitif sınırı). | kabul edildi |
+| 5 | Meşru aksanlı ad ve sıradan kopya örneklerinde yeni yan etki bulunmadı. | — | `Café Nero`, `Łukasz Kebap`, `Straße Burger`, `Smørrebrød ve Æblekage`, `Æblekage`, `ǅakovo`, `Əge Lokantası` ve Türkçe promosyon metni: **8/8** geçti. | kabul edildi |
+| 6 | Mevcut kapı yeşil, ancak #1 için regresyon testi yok. | orta | Ruff check + format: yeşil; mypy: 178 dosya temiz; `RUN_INTEGRATION_TESTS=1` gerçek PG/MinIO/FFmpeg pytest: **864 passed** (1 Starlette/httpx deprecation uyarısı). Runtime imajında `make` yoktu; eşdeğer alt komutlar doğrudan çalıştırıldı. | açık |
+
+**Karar:** düzeltme gerekiyor. `lirayla` ve varyantlarını para birimi gramerine ekleyen, birim + HTTP kalıcılık engeli regresyonu içeren küçük bir W17 takip düzeltmesi gerekli.

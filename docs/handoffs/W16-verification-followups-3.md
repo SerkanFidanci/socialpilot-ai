@@ -455,6 +455,22 @@ Redis 56399, MinIO 59020/59021). Tüm koşular **konteyner içinde**.
 | 6 | `make verify` yeşil, taban 743'ün altına düşmüyor, migration yok | ✅ 743 → **792** |
 | 7 | Rapor + araç zinciri | ✅ |
 
+#### Birleşik Codex saldırı turu — 2026-08-02
+
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `282155c`) ·
+`COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose
+v2.24.6-desktop.1 · Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 ·
+PostgreSQL 16.14 · MinIO · FFmpeg. İzole host portları
+`55433`/`56380`/`59002`/`8001`; Alembic head `0014_voiceover_assets`.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Yüzde-kodlu imza parametresi için yeni bir redaksiyon atlatması bulunamadı. | — | 0–3 kat `%25` zinciri, karışık hex (`%2d`/`%2D`, `%3d`/`%3D`), kısmen/tamamen kodlu adlar, kodlu `=`; S3, `GoogleAccessId` ve `sig` için 9 varyant. Fork çocuk sürecinde `QueueHandler` ile gönderilen, iç içe `extra.payload` içeren 9 kaydın 9'unda sentinel yoktu. | kabul edildi |
+| 2 | Normalizasyon/redaksiyon regresyonları gerçek entegrasyon süitinde kapalı kaldı. | — | `RUN_INTEGRATION_TESTS=1 ... pytest -q tests/integration/test_content_script.py` → **52 passed**. | kabul edildi |
+| 3 | Tam kapı kod tabanının mevcut testleri için yeşil; yeni W17 bulgusu henüz regresyon testi değildir. | orta | Ruff check + format: yeşil; mypy: 178 dosya temiz; gerçek PG/MinIO/FFmpeg ile pytest: **864 passed**. Runtime imajında `make` yoktu; aynı alt komutlar doğrudan `/opt/venv/bin/python` ile çalıştırıldı. | açık (W17 düzeltmesine test eklenmeli) |
+
+**Karar:** W16 redaksiyon düzeltme turu teslim edilebilir. Birleşik turdaki tek açık, W17'nin para birimi grameri bulgusudur.
+
 ### Açıkça belirtmem gerekenler
 
 1. **Yeni bir hata kodu eklendi: `SCRIPT_UNSUPPORTED_CHARACTER`** (şema kodu, `meta.issue`).
