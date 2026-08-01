@@ -12,7 +12,23 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**Codex birleşik turu DÖNDÜ (2026-08-02): redaksiyon TEMİZ — W16 kapandı, dal+worktree silindi.** Katlama da tuttu (3.892 varyant, `Cf`/`Cn`/`Co`+confusable+süslü rakam bileşimleri 6/6 ret, `T.L.` ayırıcıları 9/9, meşru aksanlı adlar 8/8 geçti). **Tek kritik: `165 lirayla`** — `_CURRENCY_WORD` elle sayılmış bir çekim listesi (`lira|lirasi|liray[ia]|liradan|liralik`) ve `lirayla` içinde yok. **Aynı enumerasyon hatasının üçüncü tekrarı** (confusable tablosu → görünmez listesi → çekim listesi). Takip düzeltmesi talimatı W17 dosyasının "Takip düzeltmesi 1" bölümünde; sıcak oturum, aynı dal (`fix/w17-latin-fold`). Prompt:
+**W17 takip düzeltmesi MERGE EDİLDİ (2026-08-02, PM koşusu 947 pytest). Senaryo dedektörü hattı kapandı.** Çözüm: çekim listesi kaldırıldı, kalıplar kök + `_SUFFIX` (Türkçe ek alfabesi — `o`/`ö` yok çünkü ünlü uyumu ekte üretmez, `b/f/h/j/p/v` yok çünkü ek ünsüzü değil; "Eurovision"/"Europa"/"Kebap" bu yüzden güvende). Tarih/oran kökleri de kapandı, `yuzde(?!n)` ile "bu yüzden" korundu, sol taraftaki yazılı sayı çekimi de kapandı (yan kazanç: `yuzlerce lira`, `binlerce dolar`). **46.918 varyant / 0 kaçış** (düzeltme öncesi 612) ve taramanın sınırlı hâli jeneratif test olarak eklendi. Ay adları sıradan isim olduğu için `3 martı`/`2 ocakta` reddediliyor — mevcut bilinçli sınırın içinde, ürün tarafı bilsin.
+
+**PM kararı (W17'nin sorusu):** yasak terimlerde **çekim eşleşmesi yapılmayacak** — `şeker` yasakken `şekerli` serbest. Liste markanın, kalıp bizim; kök eşleşmesi `az` yasakken `azalttık`ı da yasaklardı. Ürün tarafı markaya "yasaklamak istediğin biçimleri yaz" der. W18'e yazıldı.
+
+**Sıradaki tetikleme — W18 (Phase 2D otomatik QC)** ([W18-automatic-qc.md](W18-automatic-qc.md), slot `0015`, taban **947**). Prompt:
+```
+docs/handoffs/W18-automatic-qc.md dosyasındaki iş emrini oku ve uygula. Protokol: docs/handoffs/README.md. Başlamadan önce docs/STATUS.md oku. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w18 ile çalıştır. Migration slotu sende (0015). Sahibi olmadığın dosyaya dokunma. Merge etme, dalda bırak.
+```
+**Paralel tetiklenebilir — kısa Codex teyidi (W17 çekim yüzeyi):**
+```
+docs/handoffs/W17-latin-fold-pattern-grammar.md dosyasının "Rapor — takip düzeltmesi 1" bölümünü oku. Sen test edensin, özellik yazma. main'de merge edildi. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-codex ile çalış. Hedef: çekim çapasını atlatmaya çalış — ek alfabesi dışında kalan gerçek Türkçe ekler, kök gibi başlayan kelimeler, kısaltma köklerinin kesme işaretli/işaretsiz biçimleri, sol taraftaki yazılı sayı çekimleri, katlama+çekim bileşimleri; yanlış pozitifleri de ölç (marka adları, "bu yüzden", "Eurovision", tarif metinleri). Bilinçli bırakılanları yeniden raporlama: ay adlarının sıradan isim olması (3 martı, 2 ocakta), iki politika pini, yasak terimlerde çekim yokluğu (PM kararı). Bulgularını aynı dosyanın "Doğrulama" bölümüne tabloyla yaz; araç zinciri sürümlerini yaz.
+```
+
+**W18 dönünce:** denetim → merge → tam doğrulama (taban 947) → push → Codex turu. Sonra **2E** (yaşam döngüsü + entitlement + QC'nin önerdiği eylemlerin gerçekleşmesi + render'a voiceover miksajı + `pending` süpürücü) → 2F onay/revizyon → 2G planlayıcı → W06.
+
+<!-- arşiv: kapanmış turlar -->
+**~~Codex birleşik turu DÖNDÜ (2026-08-02): redaksiyon TEMİZ — W16 kapandı, dal+worktree silindi.~~** Katlama da tuttu (3.892 varyant, `Cf`/`Cn`/`Co`+confusable+süslü rakam bileşimleri 6/6 ret, `T.L.` ayırıcıları 9/9, meşru aksanlı adlar 8/8 geçti). **Tek kritik: `165 lirayla`** — `_CURRENCY_WORD` elle sayılmış bir çekim listesi (`lira|lirasi|liray[ia]|liradan|liralik`) ve `lirayla` içinde yok. **Aynı enumerasyon hatasının üçüncü tekrarı** (confusable tablosu → görünmez listesi → çekim listesi). Takip düzeltmesi talimatı W17 dosyasının "Takip düzeltmesi 1" bölümünde; sıcak oturum, aynı dal (`fix/w17-latin-fold`). Prompt:
 ```
 docs/handoffs/W17-latin-fold-pattern-grammar.md dosyasındaki "Takip düzeltmesi 1" bölümünü oku ve uygula. Aynı dalda (fix/w17-latin-fold) çalış; önce git merge main ile dalını güncelle. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w17 ile çalıştır. Migration yok. Merge etme, dalda bırak.
 ```
