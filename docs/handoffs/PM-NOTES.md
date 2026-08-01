@@ -12,7 +12,17 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**Sıradaki tetikleme — birleşik Codex turu (W16 2. tur + W17; ikisi de bağımsız teyit görmedi).** Prompt:
+**Codex birleşik turu DÖNDÜ (2026-08-02): redaksiyon TEMİZ — W16 kapandı, dal+worktree silindi.** Katlama da tuttu (3.892 varyant, `Cf`/`Cn`/`Co`+confusable+süslü rakam bileşimleri 6/6 ret, `T.L.` ayırıcıları 9/9, meşru aksanlı adlar 8/8 geçti). **Tek kritik: `165 lirayla`** — `_CURRENCY_WORD` elle sayılmış bir çekim listesi (`lira|lirasi|liray[ia]|liradan|liralik`) ve `lirayla` içinde yok. **Aynı enumerasyon hatasının üçüncü tekrarı** (confusable tablosu → görünmez listesi → çekim listesi). Takip düzeltmesi talimatı W17 dosyasının "Takip düzeltmesi 1" bölümünde; sıcak oturum, aynı dal (`fix/w17-latin-fold`). Prompt:
+```
+docs/handoffs/W17-latin-fold-pattern-grammar.md dosyasındaki "Takip düzeltmesi 1" bölümünü oku ve uygula. Aynı dalda (fix/w17-latin-fold) çalış; önce git merge main ile dalını güncelle. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w17 ile çalıştır. Migration yok. Merge etme, dalda bırak.
+```
+
+**Düzeltme dönünce:** PM denetler → merge → tam doğrulama (taban **864**) → push → kısa Codex teyidi (yalnız çekim yüzeyi + yanlış pozitif ölçümü). Temizse → **2D (QC)**.
+
+**PM dersi (üç kez ödendi):** kabul kriterine "şu girdiler reddedilsin" yazmak yetmiyor — **kalıp/liste yazan her düzeltmede "bu bir enumerasyon mu?" diye sor.** Elle sayılmış her küme (confusable çifti, görünmez kod noktası, çekim eki, ayırıcı karakter) bir sonraki turda delindi; tutan çözümlerin hepsi kategori/kural/üretilmiş-veri oldu. Yeni WO yazarken bu cümle kabul kriterlerine girsin.
+
+<!-- kapanmış: birleşik Codex turu (aşağıdaki prompt arşiv) -->
+**~~Sıradaki tetikleme — birleşik Codex turu (W16 2. tur + W17; ikisi de bağımsız teyit görmedi).~~** Prompt:
 ```
 docs/handoffs/W16-verification-followups-3.md ("Rapor — düzeltme turu 2" dahil) ve docs/handoffs/W17-latin-fold-pattern-grammar.md dosyalarını oku. Sen test edensin, özellik yazma. İkisi de main'de merge edildi. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-codex ile çalış. Hedefler: (1) dedektörü YENİDEN atlatmaya çalış — ad-tabanlı Latin katlamasının kapsam sınırları (LIGATURE/WITH biçimleri, IPA, fonetik), katlama+görünmez+confusable+süslü rakam kombinasyonları, T.L. grameri çevresinde yeni ayırıcılar, fail-closed reddin tutarlılığı; yanlış pozitifleri de ölç (meşru aksanlı adlar, tarif/madde-fıkra metinleri); (2) redaksiyonu YENİDEN atlatmaya çalış — %(?:25)*XX kalıbının kenarları, karışık büyük/küçük hex, extra+queue+fork kombinasyonları. Bilinçli bırakılanları yeniden raporlama: haritalanmamış harflerin reddi (ürün maliyeti, dokümante), handle()'ı ezen elde kurulmuş handler, iki politika pini. Bulgularını iki dosyanın "Doğrulama" bölümlerine tabloyla yaz; araç zinciri sürümlerini yaz.
 ```

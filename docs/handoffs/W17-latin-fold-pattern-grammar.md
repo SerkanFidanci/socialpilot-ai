@@ -1,8 +1,40 @@
 # W17 — Latin harf katlaması (iki yön) + kalıp grameri
 
 **Dal:** `fix/w17-latin-fold` · **Base:** `main` · **Migration slotu: YOK** (migration dosyalarına dokunma)
-**Durum:** hazır, tetiklenmedi
+**Durum:** merge edildi (`a44ffaf`) · **TAKİP DÜZELTMESİ AÇIK** — aşağıdaki bölüme bak
 **Model/effort:** Opus 5 / high
+
+## Takip düzeltmesi 1 — Türkçe çekim sınıfı (PM, 2026-08-02)
+
+Codex birleşik turu W17'yi tek noktadan deldi: **`165 lirayla` geçiyor** ve kalıcı dokümana ulaşıyor (tablo en alttaki "Doğrulama"da; 4.186 varyantlık taramada 294 kaçışın tamamı bu tek köke iniyor). Sebebi kodda görünüyor:
+
+```
+_CURRENCY_WORD = tl|…|turk\s+lirasi|lira|lirasi|liray[ia]|liradan|liralik|kurus|…
+```
+
+Bu **elle sayılmış bir çekim listesi** — `lirayla` listede yok, yarın `liraymış`/`liralarla`/`liranın` de olmayacak. Aynı hata sınıfı bu hattı üçüncü kez deliyor (W16: elle confusable tablosu → Coptic; W16 2. tur: elle görünmez listesi → `Cn`; şimdi: elle çekim listesi). **Örnek kapatma kabul edilmez; sınıfı kapat.**
+
+### PM kararları
+
+1. **Türkçe sondan eklemelidir; kalıp bunu bilmelidir.** Ek alabilen kökler için sağ çapa (`(?!\w)`) kökün *sonunda* değil, **ek zincirinin sonunda** olmalı — pratikte kök + ek karakterleri. Uygulama biçimi senin (kök başına `\w*`, Türkçe ek alfabesiyle sınırlı bir sınıf, veya ek-üreten ortak bir yardımcı), ama **liste uzatmak çözüm değil**.
+2. **Kök başına ek-alabilirlik açıkça karar verilir** — hepsine körlemesine `\w*` verme:
+   - Türkçe **kelime** kökleri (`lira`, `turk lirasi`, `kurus`, `dolar`, `avro`, `sterlin`) çekim alır;
+   - **Kısaltmalar** (`tl`, `try`, `usd`, `eur`, `gbp`) serbest ek almaz — Türkçede kesme işaretiyle çekilirler (`TL'ye`, `TL'den`, `USD'lik`); bu biçimi ayrıca ele al. Serbest `\w*` verirsen `eur` → "Euro Kebap 5 yıldır" gibi meşru metni fiyat sanma riski doğar: **ölç ve raporda göster.**
+3. **Aynı sınıfı tarih ve oran sözcüklerinde de kapat.** `1 agustosta`, `agustostan itibaren`, `subatta`, `yuzdesi` gibi çekimler bugün ne yapıyor — ölç, aynı mantıkla kapat. `yuzde` kökünde dikkat: `yuzden` ("bu yüzden") meşru bir bağlaçtır; kalıbın sayı şartı bunu koruyor mu, testle göster.
+4. Bu bir **kural genişletmesi değil, mevcut kuralın eksik yazılmış hâli** — yeni hata kodu yok, yeni kalıp sınıfı yok, migration yok.
+
+### Kabul kriterleri
+
+1. `165 lirayla` · `165 lirÀyla` · `165 liraya` · `165 liralarla` · `165 liranın` · `165 liraymış` · `165 kurusla` · `20 dolarla` · `165 TL'ye` · `165 TL'den` — hepsi birim testte **ve** HTTP'de reddediliyor (`document IS NULL`).
+2. **Codex'in tarama yöntemini kendi tarafında yeniden üret** ve sonucu rapora yaz: kabul edilen tüm harflerin para/tarih sözcüklerine yerleştirildiği varyant taraması + çekim eki boyutu. **Kaçış sayısı 0** olmalı; 0 değilse kalan her kaçış gerekçelenmeli.
+3. Tarih/oran çekimleri ölçüldü ve kapatıldı (`1 agustosta`, `agustostan`, `subatta`, …).
+4. **Yanlış pozitif ölçümü rapora tabloyla:** `Euro Kebap 5 yıldır hizmette` · `bu yüzden` içeren sıradan kopya · `Lirik bir sunum` · `3 tabak, 2 limon` · meşru aksanlı adlar (mevcut 8 pin) — hangisi etkilendi, hangisi etkilenmedi. Etkilenen varsa kısaltma kuralını daralt.
+5. `make verify` yeşil; taban **864**'ün altına düşmez; kontrat farksız; migration yok.
+6. Rapor bu dosyaya "Rapor — takip düzeltmesi 1" başlığıyla; araç zinciri sürümleri. **Merge etme, dalda bırak.**
+
+### Kapsam dışı
+
+Redaksiyon (Codex turu temiz çıktı, dokunma) · timeline `forbidden_matcher` birleştirmesi (2D) · katlama mekanizması (çalışıyor, 3.892 varyantta tuttu) · `docs/index.md`, `docs/adr/README.md`, `migrations/`.
 **Neden bu iş:** Dedektörde bilinen ve bilinçli bırakılmış son açık sınıfları kapatır. W16 2. tur raporunun "PM'e somut istek" bölümü aynen kabul edildi: eksik aksan (`165 turk lirasi`) ve fazla/farklı aksan (`165 ṬL`, `165 ŦL`) **tek bir katlamanın iki yönüdür** ve birlikte kapatılır; ayrı turlara bölünürse ikinci yön bir sonraki doğrulama turunda kritik olarak geri gelir. Üstüne 1. turdan beri bekleyen üç kalıp-grameri açığı eklenir (`T.L.` / `T L`, `⑴⑸`).
 
 ## Okunacaklar
