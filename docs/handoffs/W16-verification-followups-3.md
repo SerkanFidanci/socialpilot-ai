@@ -83,7 +83,7 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. (Redaksiyon mek
 
 ## Rapor — 2026-08-01 · yürüten oturum (Opus 5)
 
-**Dal:** `fix/verification-followups-3` (base `main` @ `362777a`) · **Durum:** tamamlandı
+**Dal:** `fix/verification-followups-3` (base `main` @ `362777a`) · **Commit:** `3c7e095` · **Durum:** tamamlandı
 
 ### Yapılanlar
 
