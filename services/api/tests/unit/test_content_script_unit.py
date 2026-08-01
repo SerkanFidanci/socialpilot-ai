@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import json
 import tokenize
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from app.modules.businesses.models import BusinessRole
 from app.modules.businesses.policy import Permission
 from app.modules.content.policy import ContentAction, permits_action, required_permission
 from app.modules.content.script import (
+    _SUFFIX,
     SCRIPT_OUTPUT_SCHEMA,
     BrandBrief,
     ScenarioCode,
@@ -56,6 +58,7 @@ from app.modules.content.text_normalization import (
     _CONFUSABLE_PAIRS,
     _IGNORED_CATEGORIES,
     _NAMED_BASES,
+    _ascii_fold,
     contains_unsupported_letter,
     normalize_encoding,
     normalize_for_matching,
@@ -803,6 +806,186 @@ def test_the_matching_fold_never_reaches_a_stored_scene_tag() -> None:
 def test_the_pattern_grammar_stops_at_ordinary_punctuation(label: str, text: str) -> None:
     assert find_fabrication(text) is None
     assert contains_url(text) is False
+
+
+# --- the inflection class (W17 follow-up 1) ---------------------------------------------------
+#
+# `_CURRENCY_WORD` used to carry a hand-written list of inflections — `lira|lirasi|liray[ia]|
+# liradan|liralik` — so `165 lirayla` reached a stored document (Codex, 2026-08-02). Turkish is
+# agglutinative: that list can never be finished, and finishing it was never the job. The right
+# anchor belongs after the suffix chain, and the chain is spelled from the alphabet Turkish
+# suffixes are actually built from.
+
+INFLECTED_BYPASSES = [
+    # The work order's numbered inputs.
+    ("instrumental", "165 lirayla", "SCRIPT_FABRICATED_PRICE"),
+    ("instrumental, decorated", "165 lirÀyla", "SCRIPT_FABRICATED_PRICE"),
+    ("dative", "165 liraya", "SCRIPT_FABRICATED_PRICE"),
+    ("plural instrumental", "165 liralarla", "SCRIPT_FABRICATED_PRICE"),
+    ("genitive", "165 liranın", "SCRIPT_FABRICATED_PRICE"),
+    ("reported past", "165 liraymış", "SCRIPT_FABRICATED_PRICE"),
+    ("kuruş instrumental", "165 kuruşla", "SCRIPT_FABRICATED_PRICE"),
+    ("dolar instrumental", "20 dolarla", "SCRIPT_FABRICATED_PRICE"),
+    # Abbreviations inflect with an apostrophe, which is already a non-word character — these two
+    # were caught before this fix and are pinned so the rewrite cannot lose them.
+    ("abbreviation, apostrophe dative", "165 TL'ye", "SCRIPT_FABRICATED_PRICE"),
+    ("abbreviation, apostrophe ablative", "165 TL'den", "SCRIPT_FABRICATED_PRICE"),
+    # Written without the apostrophe it is not Turkish orthography, but it still reads as a price.
+    ("abbreviation, no apostrophe", "165 TLye", "SCRIPT_FABRICATED_PRICE"),
+    ("compound currency", "165 türk lirasıyla", "SCRIPT_FABRICATED_PRICE"),
+    ("compound currency, plural", "165 türk liralarıyla", "SCRIPT_FABRICATED_PRICE"),
+    ("euro ablative", "165 eurodan", "SCRIPT_FABRICATED_PRICE"),
+    ("avro instrumental", "165 avroyla", "SCRIPT_FABRICATED_PRICE"),
+    ("sterlin instrumental", "5 sterlinle", "SCRIPT_FABRICATED_PRICE"),
+    ("abbreviated pair, apostrophe", "165 T.L.'ye", "SCRIPT_FABRICATED_PRICE"),
+    # The same class in the date and rate rules, which had the same anchor mistake.
+    ("month locative", "1 ağustosta", "SCRIPT_FABRICATED_DATE"),
+    ("month ablative", "1 ağustostan itibaren", "SCRIPT_FABRICATED_DATE"),
+    ("month locative, şubat", "1 şubatta", "SCRIPT_FABRICATED_DATE"),
+    ("month locative, mayıs", "15 mayısta", "SCRIPT_FABRICATED_DATE"),
+    ("month with written day", "Ağustos yirmisinde", "SCRIPT_FABRICATED_DATE"),
+    ("rate, possessive root", "indirim yüzdesi 20", "SCRIPT_FABRICATED_PRICE"),
+    ("rate, possessive amount", "yüzde yirmisi", "SCRIPT_FABRICATED_PRICE"),
+    # A vague money claim is what a model reaches for when told not to write a figure, and it is
+    # spelled exactly like an inflected number word.
+    ("hundreds of lira", "yüzlerce lira tasarruf", "SCRIPT_FABRICATED_PRICE"),
+    ("thousands of dollars", "binlerce dolar kazanç", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [(text, code) for _, text, code in INFLECTED_BYPASSES],
+    ids=[label for label, _, _ in INFLECTED_BYPASSES],
+)
+def test_a_suffix_does_not_take_a_word_out_of_the_rule(text: str, code: str) -> None:
+    assert find_fabrication(text) == code
+
+
+@pytest.mark.parametrize(
+    "text",
+    [text for _, text, _ in INFLECTED_BYPASSES],
+    ids=[label for label, _, _ in INFLECTED_BYPASSES],
+)
+def test_no_inflected_figure_can_be_resolved_into_a_document(text: str) -> None:
+    document = script_document()
+    document["segments"][1]["voice_text"] = f"Sadece {text}."
+    outcome = resolve_script(parse_script(document), context=context())
+
+    assert outcome.document is None
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        # The suffix chain cannot spell these, which is the whole reason it is the Turkish suffix
+        # alphabet rather than `\w*`: suffix vowels are never `o`/`ö`, and `p` and `v` are not
+        # suffix consonants, so `eur` cannot reach "Eurovision" and "Europa".
+        ("eurovision after a year", "2026 Eurovision izle"),
+        ("eurovision before a year", "Eurovision 2026 başlıyor"),
+        ("europa tour", "Europa turu 5 gün"),
+        ("euro as a business name", "Euro Kebap 5 yıldır hizmette"),
+        # Words that merely begin like a money root.
+        ("lirik", "Lirik bir sunum"),
+        ("kurulum", "5 kurulum tamamlandı"),
+        ("dolap", "2 dolapta saklanır"),
+        ("türlü", "3 türlü menü"),
+        ("beslenme", "Beslenme 5 adımda"),
+        ("birey", "Birey 2 kez geldi"),
+        # `yüzden` is the conjunction, not the rate word, and the pattern's number requirement
+        # does not tell them apart — the carve-out does.
+        ("bu yüzden with a count", "Bu yüzden 3 kişi daha katıldı"),
+        ("o yüzden with a count", "O yüzden 2 gün bekledik"),
+        ("bu yüzden, undotted", "bu yuzden 20 kisi geldi"),
+    ],
+)
+def test_inflection_does_not_reach_words_that_only_start_alike(label: str, text: str) -> None:
+    assert find_fabrication(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        # The other side of the same rule, and the same deliberate policy boundary W16 pinned for
+        # "1 Ağustos böceğiyle": a month name is also an ordinary Turkish noun, and a detector
+        # that matches patterns cannot read context. A context allowlist ("martı", "ocakta")
+        # would itself become the evasion channel. The user's path out is a regeneration.
+        ("3 martı gördük", "SCRIPT_FABRICATED_DATE"),
+        ("2 ocakta pişiyor", "SCRIPT_FABRICATED_DATE"),
+    ],
+)
+def test_an_inflected_month_that_is_also_a_common_noun_stays_pinned(text: str, code: str) -> None:
+    assert find_fabrication(text) == code
+
+
+# The Latin ranges every accepted non-ASCII letter lives in. Bounded so the suite stays fast; the
+# unbounded sweep (46,918 variants over all 773 accepted letters) is run out of band and recorded
+# in the work order's report.
+_LATIN_RANGES = ((0x00C0, 0x024F), (0x1E00, 0x1EFF), (0x2C60, 0x2C7F), (0xA720, 0xA7BF))
+
+
+def _accepted_letters() -> dict[str, list[str]]:
+    """Every non-ASCII letter the parser admits, keyed by the ASCII letter it folds onto."""
+
+    letters: dict[str, list[str]] = {}
+    for start, end in _LATIN_RANGES:
+        for code_point in range(start, end + 1):
+            character = chr(code_point)
+            if not unicodedata.category(character).startswith("L"):
+                continue
+            folded = _ascii_fold(character)
+            if folded is None or len(folded) != 1:
+                continue
+            letters.setdefault(folded, []).append(character)
+    return letters
+
+
+def test_no_money_or_date_word_escapes_through_spelling_or_inflection() -> None:
+    """Codex's method, reproduced: every accepted letter x every root x an inflection chain.
+
+    This is the test the verification round asked for by name. It is generative on purpose —
+    the finding it pins was a *list* that had to be finished by hand, and a list of examples is
+    what a list of examples cannot defend.
+    """
+
+    accepted = _accepted_letters()
+    roots = ["tl", "try", "usd", "eur", "gbp", "lira", "kuruş", "dolar", "euro", "avro"]
+    months = ["ocak", "şubat", "mart", "mayıs", "ağustos", "eylül", "aralık"]
+    suffixes = ["", "ı", "sı", "yla", "la", "dan", "ta", "lık", "larla", "nın", "ymış", "ler"]
+
+    def variants(word: str) -> list[str]:
+        folded = normalize_for_matching(word)
+        spellings = [folded]
+        for index, character in enumerate(folded):
+            for source in accepted.get(character, [])[:3]:
+                spellings.append(folded[:index] + source + folded[index + 1 :])
+        return spellings
+
+    escapes: list[str] = []
+    for root in roots:
+        for suffix in suffixes:
+            for spelling in variants(root + suffix):
+                if find_fabrication(f"165 {spelling}") is None:
+                    escapes.append(f"165 {spelling}")
+    for month in months:
+        for suffix in ["", "ta", "tan", "da", "dan", "ın"]:
+            for spelling in variants(month + suffix):
+                if find_fabrication(f"1 {spelling}") is None:
+                    escapes.append(f"1 {spelling}")
+
+    assert escapes == []
+
+
+def test_the_suffix_alphabet_is_the_language_rather_than_a_word_list() -> None:
+    """`o`, `p`, `v`, `b`, `f`, `h` and `j` are absent because Turkish suffixes do not use them.
+
+    Vowel harmony never produces `o`/`ö` in a suffix, and the rest are not suffix consonants.
+    That is the entire reason `eur` cannot walk into "Eurovision", so it is asserted rather than
+    left to the comment.
+    """
+
+    assert set("acdegiklmnrstuyz") == set(_SUFFIX.removeprefix("[").removesuffix("]*"))
+    assert not set("bfhjopqvwx") & set(_SUFFIX)
 
 
 def test_only_the_script_module_uses_the_shared_normalizer_so_far() -> None:

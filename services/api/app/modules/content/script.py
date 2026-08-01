@@ -201,6 +201,28 @@ ISSUE_RESOLVED_TEXT_TOO_LONG: Final = "SCRIPT_RESOLVED_TEXT_TOO_LONG"
 # same way; the unit suite pins that by feeding both spellings of a sentence to every rule.
 
 _NUMBER: Final = r"\d{1,3}(?:[.\s ]\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?"
+
+# Turkish is agglutinative, so a currency word is a *root plus a chain of suffixes*: `lira`,
+# `lirayla`, `lirasi`, `liralarla`, `liranin`, `liraymis`, and as many more as the grammar cares
+# to build. The right-hand anchor therefore belongs after the chain, not after the root — the
+# alternative is a hand-written list of inflections, which is what let `165 lirayla` through
+# (Codex, 2026-08-02) and is the same enumeration mistake that lost to Coptic (a hand-written
+# confusable table) and to U+2065 (a hand-written invisible list) before it.
+#
+# The chain is not `\w*`. It is the alphabet Turkish suffixes are actually built from, which is
+# a rule about the language rather than a list of the words someone remembered:
+#
+#   * suffix vowels are a/e/ı/i/u/ü and never o/ö — vowel harmony does not produce those — so
+#     `o` is absent, and that alone stops `eur` from reaching "Eurovision" or "Europa";
+#   * suffix consonants are c/ç/d/g/ğ/k/l/m/n/r/s/ş/t/y/z, so b, f, h, j, p and v are absent,
+#     which is the other half of the same protection.
+#
+# Folded (`ç`→`c`, `ş`→`s`, `ğ`→`g`, `ı`→`i`, `ü`→`u`) that is the class below. It is what lets
+# every root here carry its own inflection without carrying arbitrary words — including the
+# abbreviations, which Turkish inflects with an apostrophe (`TL'ye`); the apostrophe is a
+# non-word character, so the anchor was never in the way of that form to begin with.
+_SUFFIX: Final = r"[acdegiklmnrstuyz]*"
+
 # `T.L.` and `T L` are how the abbreviation gets written by hand, and the adjacency the plain
 # `tl` alternative relies on survives neither a full stop nor a space. The separator is *any*
 # run of non-word characters rather than the two the work order named, and unbounded rather
@@ -214,17 +236,26 @@ _NUMBER: Final = r"\d{1,3}(?:[.\s ]\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?"
 # a trailing `(?!\w)` and anchors its left side, so "tatli lezzet" cannot become a currency
 # because the `t` is followed by a letter rather than by a separator. The trailing run is what
 # lets the prefix form reach its number in `T.L. 165`.
-_TL_ABBREVIATION: Final = r"t[\W_]+l[\W_]{0,2}"
-_CURRENCY_WORD: Final = (
-    rf"tl|{_TL_ABBREVIATION}|try|turk\s+lirasi|lira|lirasi|liray[ia]|liradan|liralik|kurus|"
-    r"usd|eur|euro|avro|dolari?|dolarlik|gbp|sterlin"
-)
+#
+# Its suffix is the one exception to `_SUFFIX` below, and it has to be: an inflection may follow
+# only *after another separator* (`T.L.'ye`, `T.L.ye`). Letting the chain start straight after
+# the `l` would read "Şef T. Lezzetli 5 tarif" as a currency, because `ezzetli` is spelled
+# entirely in suffix letters. The separator is what tells an abbreviation from an initial.
+_TL_ABBREVIATION: Final = rf"t[\W_]+l(?:[\W_]{{1,2}}{_SUFFIX})?"
+
+# Roots only. Every inflection of these — `lirayla`, `liralarla`, `kurusla`, `dolarla`,
+# `eurodan`, `turk lirasiyla` — is `_SUFFIX`'s business, and a root is listed here exactly once.
+_CURRENCY_ROOT: Final = r"tl|try|turk\s+lira|lira|kurus|usd|eur|euro|avro|dolar|gbp|sterlin"
+_CURRENCY_WORD: Final = rf"(?:{_CURRENCY_ROOT}){_SUFFIX}|{_TL_ABBREVIATION}"
 _CURRENCY_SYMBOL: Final = r"₺|\$|€|£"
 _NUMBER_WORD: Final = (
     r"bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz|on|yirmi|otuz|kirk|elli|"
     r"altmis|yetmis|seksen|doksan|yuz|bin|milyon|milyar|yarim|ceyrek"
 )
-_MONTH: Final = r"ocak|subat|mart|nisan|mayis|haziran|temmuz|agustos|eylul|ekim|kasim|aralik"
+# Months inflect the same way — `1 agustosta`, `1 agustostan itibaren`, `subatta` — and the same
+# anchor mistake was in the date rules too.
+_MONTH_ROOT: Final = r"ocak|subat|mart|nisan|mayis|haziran|temmuz|agustos|eylul|ekim|kasim|aralik"
+_MONTH: Final = rf"(?:{_MONTH_ROOT}){_SUFFIX}"
 _WRITTEN_NUMBER: Final = rf"(?:{_NUMBER_WORD})(?:\s+(?:{_NUMBER_WORD}))*"
 # A written calendar day has a much smaller grammar than a currency amount. Keeping it bounded
 # avoids turning arbitrary prose ending in a month name into a date, while covering 1–31.
@@ -240,14 +271,26 @@ _PRICE_PATTERNS: Final = (
     # 165₺ and ₺1.650,00; currency prefixes are just as much a price as suffixes.
     re.compile(rf"(?<!\w)(?:{_NUMBER})\s*(?:{_CURRENCY_SYMBOL})"),
     re.compile(rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s*(?:{_NUMBER})(?!\w)"),
-    # yüz altmış beş lira · Türk lirası yüz altmış beş
-    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER})\s+(?:{_CURRENCY_WORD})(?!\w)"),
-    re.compile(rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s+(?:{_WRITTEN_NUMBER})(?!\w)"),
+    # yüz altmış beş lira · Türk lirası yüz altmış beş. The written amount inflects on this side
+    # too, and closing it is worth more than the grammar suggests: `yuzlerce lira`,
+    # `binlerce dolar` and `onlarca euro` are exactly the vague money claims a model reaches for
+    # when it is told not to write a figure, and all three read as `<number word>+suffix`.
+    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER}){_SUFFIX}\s+(?:{_CURRENCY_WORD})(?!\w)"),
+    re.compile(
+        rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s+(?:{_WRITTEN_NUMBER}){_SUFFIX}(?!\w)"
+    ),
     # %20 indirim · 20% indirim. A percentage in generated copy is either a discount (a verified
     # field) or a claim (an approved claim); neither is the model's to write. This includes
     # the digit-free form "yüzde yirmi".
     re.compile(rf"%\s*(?:{_NUMBER})|(?<!\w)(?:{_NUMBER})\s*%"),
-    re.compile(rf"(?<!\w)yuzde\s+(?:{_WRITTEN_NUMBER}|{_NUMBER})(?!\w)"),
+    # `yuzdesi 20` and `yuzde yirmisi` inflect at either end. `yuzden` is carved out because it
+    # is a different word: "bu yüzden 20 kişi geldi" is a conjunction followed by a count, and
+    # the pattern's number requirement does *not* protect it — the suffix chain would otherwise
+    # read the conjunction as a rate. No percentage is ever written `yüzden`, so the carve-out
+    # costs nothing; it is a homograph, not an evasion.
+    re.compile(
+        rf"(?<!\w)yuzde(?!n){_SUFFIX}\s+(?:(?:{_WRITTEN_NUMBER}){_SUFFIX}|(?:{_NUMBER}))(?!\w)"
+    ),
 )
 
 _DATE_PATTERNS: Final = (
@@ -260,7 +303,7 @@ _DATE_PATTERNS: Final = (
     re.compile(rf"(?<!\w)(?:{_MONTH})\s+\d{{1,4}}(?!\w)"),
     # bir Ağustos · otuz bir Aralık. The month may still be followed by an apostrophe suffix.
     re.compile(rf"(?<!\w)(?:{_WRITTEN_DAY})\s+(?:{_MONTH})(?!\w)"),
-    re.compile(rf"(?<!\w)(?:{_MONTH})\s+(?:{_WRITTEN_DAY})(?!\w)"),
+    re.compile(rf"(?<!\w)(?:{_MONTH})\s+(?:{_WRITTEN_DAY}){_SUFFIX}(?!\w)"),
 )
 
 # Only the unambiguous forms. A model naming a domain in a voiceover is a policy problem; a

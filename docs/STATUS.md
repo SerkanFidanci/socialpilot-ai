@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| `main` | W01→W17 merge edildi, yalnız W06 bekliyor. **Codex birleşik turu döndü (2026-08-02): redaksiyon TEMİZ (W16 kapandı); W17'de 1 kritik → takip düzeltmesi açık** — `165 lirayla` çekim eki kalıp dışında kaldığı için geçiyor (elle sayılmış çekim listesi, aynı enumerasyon hatasının üçüncü tekrarı) |
+| `main` | W01→W17 merge edildi, yalnız W06 bekliyor. **Codex birleşik turu döndü (2026-08-02): redaksiyon TEMİZ (W16 kapandı); W17'de 1 kritik → takip düzeltmesi 1 `fix/w17-latin-fold` dalında tamamlandı** (`ed4c1c8`, **947 pytest**, 46.918 varyantlık taramada 0 kaçış) — merge ve doğrulama bekliyor |
 | Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
 | Backend doğrulama | **864 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
@@ -134,7 +134,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
 | [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **KAPANDI** · merge · `0014` · **Codex doğrulaması geçti (6/6)** — serbest metin yolu yok, tenant sızıntısı yok, tavan çağrı öncesi duruyor, beyan ölçümü ezemiyor, idempotency kanonik, imza sızmıyor · **açık:** render adapter'ları `voiceover` kaynağını bildirmiyor → 2E | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | **iki tur da merge edildi** (2. tur: Latin dışı alfabe kısıtı `SCRIPT_UNSUPPORTED_CHARACTER`, görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde-kodlu adları görüyor) · **kapanış birleşik Codex turuna bağlı** (W17 sonrası) | `fix/verification-followups-3` (worktree duruyor, birleşik tur bitene kadar) | Opus 5 / high | — |
-| [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin harf katlaması (iki yön) + kalıp grameri** — `turk lirasi`+`ṬL`/`ŦL` tek katlamayla, ayrıştırılamayan Latin genişletmeleri fail-closed (ad-tabanlı), `T.L.`/`T L`, süslü rakamlar | merge edildi (864 pytest) · katlama Codex turunda 3.892 varyantta tuttu · **takip düzeltmesi 1 AÇIK:** Türkçe çekim sınıfı (`165 lirayla`) — talimat WO dosyasında | `fix/w17-latin-fold` (sıcak oturum, worktree duruyor) | Opus 5 / high | — |
+| [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin harf katlaması (iki yön) + kalıp grameri** — `turk lirasi`+`ṬL`/`ŦL` tek katlamayla, ayrıştırılamayan Latin genişletmeleri fail-closed (ad-tabanlı), `T.L.`/`T L`, süslü rakamlar | merge edildi (864 pytest) · katlama Codex turunda 3.892 varyantta tuttu · **takip düzeltmesi 1 tamamlandı** (`ed4c1c8`, dalda): kalıplar kök + Türkçe ek zinciri, tarih/oran da kapandı, **947 pytest**, 46.918 varyantlık kendi taramamda 0 kaçış — merge edilmedi, doğrulama bekliyor | `fix/w17-latin-fold` (sıcak oturum, worktree duruyor) | Opus 5 / high | — |
 
 ### Dosya sahipliği (çakışma önleme)
 
