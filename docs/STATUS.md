@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | W01→W16 (2. tur dahil) merge edildi, yalnız W06 bekliyor. Sırada: **W17 (Latin katlaması + kalıp grameri) → birleşik Codex turu → 2D**. Dedektörde bilinen tek açık sınıf W17'nin konusu (`ṬL`/`ŦL`/diyakritiksiz — dokümante) |
+| `main` | W01→W17 merge edildi, yalnız W06 bekliyor. **Dedektörde bilinen açık sınıf kalmadı** (W17: iki yönlü ASCII katlaması, ad-tabanlı fail-closed sınır, `T.L.`/süslü rakam grameri). Sırada: **birleşik Codex turu (W16 2. tur + W17) → 2D** |
 | Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
-| Backend doğrulama | **792 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **864 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -134,7 +134,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
 | [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **KAPANDI** · merge · `0014` · **Codex doğrulaması geçti (6/6)** — serbest metin yolu yok, tenant sızıntısı yok, tavan çağrı öncesi duruyor, beyan ölçümü ezemiyor, idempotency kanonik, imza sızmıyor · **açık:** render adapter'ları `voiceover` kaynağını bildirmiyor → 2E | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | **iki tur da merge edildi** (2. tur: Latin dışı alfabe kısıtı `SCRIPT_UNSUPPORTED_CHARACTER`, görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde-kodlu adları görüyor) · **kapanış birleşik Codex turuna bağlı** (W17 sonrası) | `fix/verification-followups-3` (worktree duruyor, birleşik tur bitene kadar) | Opus 5 / high | — |
-| [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin harf katlaması (iki yön) + kalıp grameri** — `turk lirasi`+`ṬL`/`ŦL` tek katlamayla, ayrıştırılamayan Latin genişletmeleri fail-closed, `T.L.`/`T L`, `⑴⑸` | **tamamlandı** (`3bef588`, dalda) · **864 pytest** yeşil (taban 792) · merge edilmedi, birleşik Codex turu bekliyor | `fix/w17-latin-fold` | Opus 5 / high | — |
+| [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin harf katlaması (iki yön) + kalıp grameri** — `turk lirasi`+`ṬL`/`ŦL` tek katlamayla, ayrıştırılamayan Latin genişletmeleri fail-closed (ad-tabanlı), `T.L.`/`T L`, süslü rakamlar | **tamamlandı** · **merge edildi** · 864 pytest (PM koşusu) · kendi düşman turunda 2 açık bulup kapattı (136 girdi) · birleşik Codex turu bekliyor | `fix/w17-latin-fold` (worktree duruyor, tur bitene kadar) | Opus 5 / high | — |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -142,7 +142,7 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| `modules/content/{script,text_normalization}.py`, `modules/content/CLAUDE.md`, script test dosyaları | **W17** |
+| *(uçuşta WO yok — sıradaki WO tetiklenince tablo doldurulur)* | — |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)
