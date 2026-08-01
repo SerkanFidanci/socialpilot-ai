@@ -1,7 +1,21 @@
 # W16 — Doğrulama bulguları 3. tur: log `extra` sızıntısı + dedektör Unicode atlatması
 
 **Dal:** `fix/verification-followups-3` · **Base:** `main` · **Migration slotu: YOK** (`0014` W15'te — migration dosyalarına dokunma)
-**Durum:** tamamlandı (dalda, merge edilmedi) — bkz. Rapor
+**Durum:** merge edildi (`5505537`) · **DÜZELTME TURU 2 AÇIK** — teyit turu 2 kritik + 1 orta buldu, aşağıdaki "Düzeltme turu 2" bölümüne bak
+
+## Düzeltme turu 2 — teyit bulguları (PM, 2026-08-01)
+
+Teyit turunun tablosu en alttaki "Doğrulama" bölümünde; reprolar orada. Sıcak oturum kuralı: **aynı dal** (`fix/verification-followups-3`), önce `git merge main` ile dalını güncelle (W16 main'e merge edildi). Bulgular ve istenen düzeltmeler:
+
+1. **Confusable kapsamı — SINIF kapatılsın, örnek değil.** Coptic `Ⲧ` (U+2CA6) için tabloya bir satır eklemek kabul edilmez; bir sonraki tur Cherokee/Lisu/Deseret bulur. Şunlardan birini (veya ikisini) seç ve gerekçele:
+   - UTS #39 confusables verisinden **üretilmiş** tam eşleme (hedefi ASCII harf/rakam olanlar) — üretici script depoya girer, elle satır yazılmaz;
+   - karma-yazı token kuralı: normalizasyon sonrası tek token içinde Latin + Latin-olmayan harf karışımı varsa ve katlanamıyorsa metin reddedilir (UTS #39 mixed-script mantığı).
+2. **Görünmezler kategoriyle temizlensin, enumerasyonla değil.** U+2065 atanmamış (`Cn`). `Cn` ve `Co` (private use) kod noktaları normalizasyonda çıkarılır/reddedilir — tek tek kod noktası listesi değil, kategori kuralı.
+3. **Redaksiyon yüzde-kodlu parametre adlarını da görsün.** Ham metinde aday yoksa **yüzde-çözülmüş kopyada** da ara (çift kodlama `%2553…` dahil en az iki çözüm turu); hit varsa maskeleme **ham biçimde** uygulanır. Fast-path'in yeni yanlış negatif üretmediğini sabitleyen test güncellenir.
+4. Üç bulgu için regresyon testleri: HTTP'de kalıcılık oluşmuyor (`document IS NULL`), QueueHandler/`extra` çıktısında sentinel yok.
+5. **Kendi düzeltmene yine düşman gözle saldır** ve tabloyu rapora yaz: farklı yazı sistemleri (Cherokee, Lisu, Deseret, N'Ko…), `Cn`/`Co` örnekleri, çift/üçlü yüzde kodlama, `+` ile boşluk kodlaması, UTF-8 çift kodlama.
+6. `make verify` yeşil; taban **743**'ün altına düşmez; migration yok; kontrat değişmiyorsa yeniden üretim farksız.
+7. Raporu bu dosyaya "Rapor — düzeltme turu 2" başlığıyla ekle; araç zinciri sürümleri.
 **Model/effort:** Opus 5 / high
 **Neden bu iş:** Codex'in 2026-08-01 düşman turu iki **kritik** bulgu döndürdü (kayıtları [W14-verification-followups-2.md](W14-verification-followups-2.md) ve [W13-script-generation.md](W13-script-generation.md) "Doğrulama" bölümlerinde — ikisini de oku, yeniden üretim adımları orada):
 

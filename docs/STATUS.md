@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| `main` | W01→W16 merge edildi (yalnız W06 bekliyor); son dilimler **W15 — Phase 2C seslendirme** ve **W16 — Codex 3. tur düzeltmeleri** (log `extra` yüzeyi, dedektör Unicode normalizasyonu). Birleşik Codex teyit turu bekliyor |
+| `main` | W01→W16 merge edildi (yalnız W06 bekliyor). **Codex teyit turu döndü (2026-08-01): W15 TEMİZ (6/6); W16'da 2 kritik + 1 orta → düzeltme turu 2 sıcak oturumda** (confusable kapsamı, `Cn` görünmezler, yüzde-kodlu parametre adları) |
 | Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
 | Backend doğrulama | **743 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
@@ -132,8 +132,8 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 
 | [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — Unicode görünmez/normalizasyon varyantları dedektörü atlatıyor → **W16**; 2 yanlış pozitif bilinçli politika olarak pinlenecek | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
-| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **tamamlandı** · merge edildi · `0014` · Codex doğrulaması bekliyor · **açık:** hiçbir render adapter'ı `voiceover` ses kaynağını bildirmiyor (miksaj kapsam dışıydı) → 2E | `slice/2c-tts-voiceover` (worktree duruyor, doğrulama turu bitene kadar) | Opus 5 / high | kullanıldı |
-| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektöre NFKC+Cf normalizasyonu, yanlış pozitif pinleri | **tamamlandı** · merge edildi · Codex doğrulaması bekliyor · **3 kalıp-grameri açığı PM kuyruğunda** (diyakritiksiz Türkçe, `T.L.`, `⑴⑸`) | `fix/verification-followups-3` (worktree duruyor, doğrulama turu bitene kadar) | Opus 5 / high | — (0014 W15'te) |
+| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **KAPANDI** · merge · `0014` · **Codex doğrulaması geçti (6/6)** — serbest metin yolu yok, tenant sızıntısı yok, tavan çağrı öncesi duruyor, beyan ölçümü ezemiyor, idempotency kanonik, imza sızmıyor · **açık:** render adapter'ları `voiceover` kaynağını bildirmiyor → 2E | dal + worktree silindi | Opus 5 / high | kullanıldı |
+| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektöre NFKC+Cf normalizasyonu, yanlış pozitif pinleri | merge edildi ama **düzeltme turu 2 AÇIK** (teyit turu: Coptic `Ⲧ` confusable'da yok, `Cn` U+2065 temizlenmiyor, `%53ignature` fast-path'i atlatıyor) · ayrıca 3 kalıp-grameri açığı → W17 | `fix/verification-followups-3` (sıcak oturum, worktree duruyor) | Opus 5 / high | — (0014 kullanıldı, W16'da yok) |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -141,7 +141,7 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| *(uçuşta WO yok — W15 ve W16 merge edildi; sıradaki WO tetiklenince tablo doldurulur)* | — |
+| `core/logging.py`, `modules/content/script.py`, `modules/content/text_normalization.py`, script/redaction test dosyaları | **W16 düzeltme turu 2** (sıcak oturum) |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)
