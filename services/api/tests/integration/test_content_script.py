@@ -622,6 +622,74 @@ def test_ordinary_copy_still_produces_a_script(label: str, phrase: str) -> None:
     assert phrase in str(response.json()["document"])
 
 
+INFLECTED_BYPASSES = [
+    # The work order's numbered inputs for follow-up 1. Turkish is agglutinative and the rule
+    # used to carry a hand-written list of inflections, so `165 lirayla` answered `201` with
+    # `status=generated` and a document a human could approve (Codex, 2026-08-02).
+    ("instrumental", "Sadece 165 lirayla.", "SCRIPT_FABRICATED_PRICE"),
+    ("instrumental, decorated", "Sadece 165 lirÀyla.", "SCRIPT_FABRICATED_PRICE"),
+    ("dative", "Sadece 165 liraya.", "SCRIPT_FABRICATED_PRICE"),
+    ("plural instrumental", "Sadece 165 liralarla.", "SCRIPT_FABRICATED_PRICE"),
+    ("genitive", "Sadece 165 liranın.", "SCRIPT_FABRICATED_PRICE"),
+    ("reported past", "Sadece 165 liraymış.", "SCRIPT_FABRICATED_PRICE"),
+    ("kuruş instrumental", "Sadece 165 kuruşla.", "SCRIPT_FABRICATED_PRICE"),
+    ("dolar instrumental", "Sadece 20 dolarla.", "SCRIPT_FABRICATED_PRICE"),
+    ("abbreviation, apostrophe dative", "Sadece 165 TL'ye.", "SCRIPT_FABRICATED_PRICE"),
+    ("abbreviation, apostrophe ablative", "Sadece 165 TL'den.", "SCRIPT_FABRICATED_PRICE"),
+    # And the same class in the date and rate rules.
+    ("month locative", "1 ağustosta başlıyor.", "SCRIPT_FABRICATED_DATE"),
+    ("rate, possessive root", "İndirim yüzdesi 20 oldu.", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("phrase", "issue"),
+    [(phrase, issue) for _, phrase, issue in INFLECTED_BYPASSES],
+    ids=[label for label, _, _ in INFLECTED_BYPASSES],
+)
+def test_an_inflected_figure_never_reaches_a_stored_script(phrase: str, issue: str) -> None:
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-suffix", "s-suffix@example.com"), "Suffix")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "SCRIPT_VALIDATION_FAILED"
+    assert [entry["code"] for entry in response.json()["meta"]["issues"]] == [issue]
+    assert query("SELECT status, failure_code, document FROM content_scripts") == [
+        ("failed", issue, None)
+    ]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("label", "phrase"),
+    [
+        # The measured cost of the suffix chain, asserted where it would block a business: a word
+        # that merely begins like a money root still produces a script.
+        ("business name starting like a root", "Euro Kebap 5 yıldır hizmetinizde."),
+        ("conjunction, not the rate word", "Bu yüzden 3 kişi daha katıldı."),
+    ],
+)
+def test_a_word_that_only_starts_like_a_money_root_still_generates(label: str, phrase: str) -> None:
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-suffix-fp", "s-suffix-fp@example.com"), "SuffixOk")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 201, response.text
+    assert phrase in str(response.json()["document"])
+
+
 @requires_postgres
 def test_a_latin_letter_the_fold_cannot_spell_is_refused_at_the_boundary() -> None:
     """Fail-closed: an unmapped letter is rejected, never passed to rules that cannot read it."""

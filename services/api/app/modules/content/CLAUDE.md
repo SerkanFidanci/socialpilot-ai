@@ -32,6 +32,14 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   (`165 ṬL` — saldırganın yazdığı biçim) **tek katlamanın iki yönüdür**. Bunun bedeli:
   `script.py`'deki her kalıp literali aksansız yazılır (`turk lirasi`, `yuzde`, `agustos`).
   Türkçe yazımıyla eklenen bir kural hiç eşleşmez.
+- **Türkçe sondan eklemelidir; sağ çapa kökün değil ek zincirinin sonundadır** (W17 takip 1).
+  `lira` aynı zamanda `lirayla`, `liralarla`, `liranın`, `liraymış`'tır; elle yazılmış bir çekim
+  listesi bitirilemez — `165 lirayla` bu yüzden geçiyordu. Kalıplarda para, ay ve oran kökleri
+  **kök olarak** yazılır ve `_SUFFIX` ile biter. `_SUFFIX` `\w*` **değil**, Türkçe eklerinin
+  kurulduğu alfabedir: ünlü uyumu ekte `o`/`ö` üretmez, `b/f/h/j/p/v` ek ünsüzü değildir — `eur`
+  kökünün "Eurovision"a ulaşamamasının tek sebebi budur. Yeni bir kök eklerken çekimini listeye
+  yazma, kökü yaz. Tek istisna `T.L.` kısaltması: eki ancak **başka bir ayırıcıdan sonra**
+  gelebilir, yoksa "Şef T. Lezzetli" para birimi olurdu.
 - **Katlama yalnızca eşleştirme içindir; saklanan değer `normalize_encoding`'den geçer.** İkinci
   fonksiyon kodlamayı (görünmezler, NFD, fullwidth, confusable, büyük/küçük harf) katlar ama
   harfleri korur. `_scene_tags` saklanan bir değer üretir ve 2C/2E onu video-understanding

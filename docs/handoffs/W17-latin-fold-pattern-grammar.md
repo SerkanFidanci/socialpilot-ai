@@ -278,6 +278,167 @@ Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
    `origin`'e push edilmedi. Dal ve worktree, protokol gereği birleşik Codex turu bitene kadar
    duruyor.
 
+## Rapor — takip düzeltmesi 1 · 2026-08-02 · yürüten oturum (Opus 5)
+
+**Dal:** `fix/w17-latin-fold` (`git merge main` ile `6fd5ec2` üzerine güncellendi) ·
+**Commit:** `bacf7f8` · **Durum:** tamamlandı, dalda bırakıldı
+
+### 1 — Sağ çapa ek zincirinin sonuna taşındı
+
+Kalıplarda para/ay/oran sözcükleri artık **kök** olarak yazılıyor ve ortak bir `_SUFFIX` ile
+bitiyor. Çekim listesi (`lira|lirasi|liray[ia]|liradan|liralik`) kaldırıldı — bitirilemeyecek bir
+listeydi ve zaten bitirilememişti.
+
+**`_SUFFIX` `\w*` değil; Türkçe eklerinin kurulduğu alfabe:**
+
+```
+[acdegiklmnrstuyz]        # katlanmış hâl: ç→c, ş→s, ğ→g, ı→i, ü→u
+```
+
+Dışarıda kalanlar tesadüfi değil, kararın taşıyıcısı:
+
+- **`o` ve `ö` yok** — ünlü uyumu ekte bu ünlüleri üretmez. `eur` kökünün "Eurovision" ve
+  "Europa"ya ulaşamamasının tek sebebi bu.
+- **`b`, `f`, `h`, `j`, `p`, `v` yok** — Türkçe ek ünsüzü değiller. Aynı korumanın ikinci yarısı.
+
+Bu, PM'in 2. kararını **beklenenden geniş** karşılıyor: kısaltmalara "serbest ek yok" yerine
+"kısıtlı ek var" verdim, çünkü kısıtlı zincir `eurovision`u zaten dilbilgisiyle engelliyor ve
+karşılığında `165 TLye` gibi kesme işaretsiz (yanlış yazılmış ama okunan) biçimi de kapatıyor.
+Kesme işaretli kanonik biçim (`TL'ye`, `TL'den`) **zaten yakalanıyordu** — kesme işareti kelime
+karakteri olmadığı için `(?!\w)` çapası onun önünde hiç durmuyordu; testle pinlendi.
+
+**Tek istisna `T.L.` kısaltması.** Ona ek ancak **başka bir ayırıcıdan sonra** gelebilir
+(`t[\W_]+l(?:[\W_]{1,2}<ek>)?`). Zinciri doğrudan `l`'den sonra başlatmak "Şef T. Lezzetli 5
+tarif" cümlesini para birimi yapardı: `ezzetli` baştan sona ek harflerinden oluşuyor. Ayırıcı,
+kısaltmayı baş harften ayıran şeydir.
+
+**Ay ve oran kuralları da aynı hatayı taşıyordu** ve ölçüldü — `1 agustosta`, `1 agustostan`,
+`1 subatta`, `15 mayista`, `2 ocakta`, `yuzdesi 20`, `yuzde yirmisi`, `agustos yirmisinde`:
+düzeltmeden önce **hepsi `None`**. Hepsi kapandı.
+
+**`yuzden` oyulup çıkarıldı.** "bu yüzden 20 kişi geldi" bir bağlaç + sayıdır ve kalıbın sayı
+şartı bunu **korumuyor** (PM'in sorusunun cevabı: hayır). `yuzde(?!n)` ile ayrıldı; hiçbir oran
+`yüzden` diye yazılmadığı için bedeli yok. Homograf oyuğu, atlatma oyuğu değil — iki yönü de
+testli.
+
+**Tarama sırasında çıkan ve kapatılan ikinci sınıf:** çekim ekini *sol* taraftaki yazılı sayı
+alıyorsa (`yuz altmis besi lira`) kalıp yine kaçırıyordu. Sol tarafa da zincir eklendi ve bu
+beklenmedik bir kazanç getirdi: **`yuzlerce lira`, `binlerce dolar`, `onlarca euro`** — modelin
+"rakam yazma" denince tam olarak sığındığı belirsiz para iddiaları — üçü de düzeltmeden önce
+geçiyordu, şimdi yakalanıyor. Tarih kuralının sol tarafına zincir **verilmedi**: Türkçede gün
+çekilmez ("bir Ağustos", "biri Ağustos" değil) ve vermek "Birlikte Mart ayında" cümlesini tarih
+yapardı.
+
+### 2 — Tarama (kabul kriteri 2): 46.918 varyant, **0 kaçış**
+
+Codex'in yöntemi kendi tarafımda yeniden üretildi ve büyütüldü. Boyutlar:
+
+| Boyut | Kapsam |
+|---|---|
+| Kabul edilen harfler | Parser'ın geçirdiği **773 ASCII-dışı harf** (`contains_unsupported_letter` False + tek ASCII harfe katlanan), 35 farklı ASCII hedefe iniyor |
+| Kökler | 12 para (`tl`, `try`, `usd`, `eur`, `gbp`, `lira`, `turk lirasi`, `kurus`, `dolar`, `euro`, `avro`, `sterlin`) + 12 ay + `yuzde` + 4 yazılı tutar |
+| Çekim | 28 para eki, 12 tarih eki, 5 oran eki (gerçek Türkçe ekler: `-yla`, `-larla`, `-nin`, `-ymis`, `-tan`, `-sini`, `-lardan`, …) |
+| Yerleşim | Her kökün her harfi, o harfe katlanan her kabul edilmiş harfle tek tek değiştirildi; her varyant hem `165 <x>` hem `<x> 165` (tarihte `1 <x>` / `<x> 2026`) biçiminde |
+| Ölçüt | `parse_text` şema kapısı → `find_fabrication`; sonuç `PASS` ise kaçış |
+
+**Sonuç: 46.918 varyant, 0 kaçış.** (Düzeltmeden önce aynı tarama **612 kaçış** veriyordu ve
+hepsi iki köke iniyordu: `lira*` çekimleri ve sol taraftaki yazılı sayı çekimi.)
+
+Taramanın sınırlı bir hâli **teste alındı** (`test_no_money_or_date_word_escapes_through_spelling_or_inflection`,
+Latin blokları × 10 kök × 12 ek, hedef başına 3 harf) — Codex'in 6. bulgusu "bu bulgu için
+regresyon testi yok" diyordu; artık jeneratif bir test var, çünkü elle yazılmış bir listeyi
+elle yazılmış örneklerle savunmak aynı hatanın tekrarı olurdu.
+
+Kayda geçsin: çok karakterli katlamalar (`ß`→`ss`, `æ`→`ae`, `œ`→`oe`, `þ`→`th`, `ĳ`→`ij`)
+taramada yer değiştirme üretmiyor, çünkü hiçbir para/ay kökü bu iki harfli dizileri içermiyor.
+
+### 3 — Yanlış pozitif ölçümü (kabul kriteri 4)
+
+| Girdi | Sonuç | Not |
+|---|---|---|
+| `Euro Kebap 5 yıldır hizmette` | **geçti** | `eur`/`euro` + ek zinciri "kebap"a uzanamıyor; `p` ek ünsüzü değil |
+| `Eurovision 2026 başlıyor` · `2026 Eurovision izle` · `Europa turu 5 gün` | **geçti** | `o` ve `v` ek alfabesinde yok — PM'in `\w*` uyarısının tam olarak engellediği şey |
+| `Bu yüzden 3 kişi daha katıldı` · `O yüzden 2 gün bekledik` · `bu yuzden 20 kisi geldi` | **geçti** | `yuzde(?!n)` oyuğu |
+| `Lirik bir sunum` | **geçti** | `lira` kökü "liri"ye uymuyor |
+| `3 tabak, 2 limon` | **geçti** | — |
+| Meşru aksanlı adların 8'i (`Café Nero`, `Łukasz Kebap`, `Straße Burger`, `Smørrebrød ve Æblekage`, `Æblekage`, `ǅakovo`, `Əge Lokantası`, Türkçe promosyon metni) | **8/8 geçti** | Codex'in 5. bulgusundaki küme, birebir |
+| `5 kurulum` · `2 dolapta` · `3 türlü menü` · `Beslenme 5 adımda` · `Birey 2 kez geldi` · `Onur 3 madalya aldı` · `Trendyol 5 yıldız` · `Martı Cafe açıldı` · `Nisan Butik 3 yıldır` | **geçti** | Kök gibi başlayan ama kök olmayan kelimeler |
+| W17'nin 25 girdilik sıradan-kopya kontrolü ve `165 tatlı lezzet` / `Şef T. Lezzetli 5 tarif` / `(1) madde (5) fıkra` | **hepsi geçti** | 1. turdan beri pinli, etkilenmedi |
+
+**Etkilenen üç girdi var ve üçü de aynı bilinçli sınıra düşüyor** (W16'nın "1 Ağustos böceğiyle"
+kararı):
+
+| Girdi | Sonuç | Neden bilinçli |
+|---|---|---|
+| `3 martı gördük` | `SCRIPT_FABRICATED_DATE` | `martı` = kuş; ay adı aynı zamanda sıradan bir Türkçe isim |
+| `2 ocakta pişiyor` | `SCRIPT_FABRICATED_DATE` | `ocak` = fırın/ocak |
+| `Ekim ekimi 5 dönüm` | `SCRIPT_FABRICATED_DATE` | `ekim` = tarım işi |
+
+Bunlar çekim eki eklenmeden de aynı sınıftaydı (`3 mart`, `2 ocak`, `1 Ağustos böceğiyle` bugün
+de reddediliyor); çekim sınırı genişletiyor, sınıfı değiştirmiyor. Bağlam beyaz listesi
+("martı", "ocakta") W16'da tam olarak bu gerekçeyle reddedilmişti: beyaz listenin kendisi
+atlatma kanalı olur. İkisi teste pinlendi, yorumuyla birlikte.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Redaksiyon** — Codex turu temiz, dokunulmadı. **Timeline `forbidden_matcher`** — 2D.
+  **Katlama mekanizması** — çalışıyor, dokunulmadı. `docs/index.md`, `docs/adr/README.md`,
+  `migrations/` — dokunulmadı.
+- **Yasak terim eşleşmesine çekim eklemedim** ve bu bir PM sorusu: marka `şeker`'i yasakladıysa
+  `şekerli`/`şekerle` de yasak olmalı mı? Bugün olmuyor (`\b…\b`), ve bunu değiştirmek
+  `test_a_forbidden_term_does_not_match_inside_a_longer_word` pinini ("az" yasakken "lezzetli"
+  serbest) doğrudan çiğner. Aynı dilbilgisi sınıfı ama **markanın listesi, bizim kalıbımız
+  değil** ve WO bu turda kapsamına almadı. Karar PM'in.
+
+### Doğrulama
+
+Araç zinciri: **Python 3.13.14 · pytest 9.1.1 · mypy 2.3.0 · ruff 0.16.0 · unicodedata 15.1.0 ·
+PostgreSQL 16.14 · MinIO · FFmpeg · Docker Engine 25.0.3 / Compose v2.24.6-desktop.1**. İzole
+stack `COMPOSE_PROJECT_NAME=sp-w17` (worktree kökünden, `--env-file .env.w17`; API 8021, PG
+55453, Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | **yeşil** |
+| `ruff format --check` | **yeşil** — 190 dosya |
+| `mypy .` (strict) | **yeşil** — 178 dosya |
+| `pytest` (`RUN_INTEGRATION_TESTS=1`, gerçek PG + MinIO + FFmpeg) | **yeşil** — **947 passed** (taban 864, +83) |
+| Kontrat drift | **fark yok** — şema konteynerde yeniden üretilip `docs/generated/openapi.json` ile karşılaştırıldı |
+| Alembic head | `0014_voiceover_assets` — değişmedi; `migrations/` altında değişiklik yok |
+
+| # | Kabul kriteri | Sonuç |
+|---|---|---|
+| 1 | 10 girdi birim **ve** HTTP'de reddediliyor, `document IS NULL` | ✅ Birim: `test_a_suffix_does_not_take_a_word_out_of_the_rule` (26 girdi) + `test_no_inflected_figure_can_be_resolved_into_a_document`. HTTP: `test_an_inflected_figure_never_reaches_a_stored_script` — 12 girdi × `422` + satır `("failed", <kod>, NULL)` |
+| 2 | Tarama yeniden üretildi, kaçış 0 | ✅ 46.918 varyant / 773 kabul edilen harf / 0 kaçış; sınırlı hâli teste alındı |
+| 3 | Tarih/oran çekimleri ölçüldü ve kapatıldı | ✅ düzeltme öncesi 8 biçim `None`'dı; tablo yukarıda |
+| 4 | Yanlış pozitif tablosu | ✅ yukarıda; WO'nun saydığı kontrollerin **hiçbiri** etkilenmedi, etkilenen 3 girdi mevcut bilinçli sınırın içinde |
+| 5 | `make verify` yeşil, taban 864'ün altına düşmüyor, kontrat farksız, migration yok | ✅ 864 → **947** |
+| 6 | Rapor + araç zinciri, merge yok | ✅ |
+
+### Açıkça belirtmem gerekenler
+
+1. **İlan listesi dışına çıkmadım.** Dokunulan dosyalar: `script.py`, iki test dosyası,
+   `modules/content/CLAUDE.md` (yeni değişmez: "sağ çapa ek zincirinin sonundadır"), bu rapor.
+   `error-handling.md` bu turda **değişmedi** — hata kodları ve anlamları aynı.
+
+2. **Kısaltmalara kısıtlı ek verdim** (PM kararı 2'den sapma, gerekçesi yukarıda): "serbest ek
+   yok" yerine "Türkçe ek alfabesiyle sınırlı ek var". Ölçüm PM'in uyardığı riski göstermiyor
+   (`Euro Kebap`, `Eurovision`, `Europa` geçiyor) ve karşılığında `165 TLye` kapanıyor. PM aksini
+   isterse kısaltma kökleri `(?:['’]<ek>)?` biçimine daraltılır; tek satır.
+
+3. **Ay adları sıradan isimlerdir ve çekim bunu genişletir** — `3 martı`, `2 ocakta`,
+   `Ekim ekimi 5`. Bilinçli sınırın içinde ama **kullanıcı yolu yalnızca yeniden üretim**;
+   bir marka adı "Martı" ise o işletme tarih içeren her metinde takılabilir. Ürün tarafında
+   bilinsin.
+
+4. **`main`'e merge etmedim.** Dal `main`'i (`6fd5ec2`) içeriyor, yani ileri sarma:
+
+   ```
+   git -C A:/socialpilot-ai merge --ff-only fix/w17-latin-fold
+   ```
+
+   `origin`'e push edilmedi.
+
 ## Doğrulama
 
 Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `282155c`) ·
