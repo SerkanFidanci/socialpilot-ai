@@ -183,6 +183,14 @@ substring pre-filter means an ordinary line never runs the full pattern. Non-str
 covered: an `httpx.URL` object, a nested dict, a list. The value on the record is replaced;
 the caller's object is never mutated.
 
+The parameter *name* is matched through percent encoding at any depth. `X-Amz-%53ignature` is
+still `X-Amz-Signature` to `urllib.parse.parse_qsl` and to a server, and `%2553` decodes to `%53`
+decodes to `S`, so the escape has no fixed depth to decode away; the name pattern accepts
+`%(?:25)*XX` in place of every character instead. Masking is applied to the raw text, so the log
+line still reads as the request that was actually made. The pre-filter is safe by a two-branch
+argument, and both branches are pinned by tests: a name written literally contains one of the
+marker fragments, and a name written any other way needs a `%` to do it.
+
 **Known residual:** a record that is both hand-built *and* passed to a `Handler` subclass which
 overrides `handle()` without calling `super()` escapes all three. That is application code
 bypassing the logging framework, not a library leaking; `RedactingFormatter` covers the handlers

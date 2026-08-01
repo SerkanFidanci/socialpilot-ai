@@ -18,7 +18,10 @@ even if the provider is compromised, swapped, or (as today) fake. It never runs 
 values — those came from a record and are supposed to contain digits. Matching runs on text that
 `text_normalization.normalize_for_matching` has already folded, because a rule written against
 characters is otherwise defeated by re-encoding the same sentence: zero-width spaces between the
-digits, a decomposed `ü`, a Cyrillic `Т` in `TL`.
+digits, a decomposed `ü`, a Cyrillic `Т` in `TL`. Folding alone is still an allowlist of known
+lookalikes, so `parse_text` also bounds the alphabet: a letter outside Latin script is refused
+before any rule runs, which is what makes "the next alphabet" — Coptic, Cherokee, Lisu — a closed
+question rather than the next finding.
 
 Two further §17.5 properties are structural rather than advisory. Untrusted text lifted out of
 uploaded media travels as **JSON data** in `input_data`, never concatenated into the instruction
@@ -42,7 +45,10 @@ from typing import Any, Final, Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.modules.content.text_normalization import normalize_for_matching
+from app.modules.content.text_normalization import (
+    contains_non_latin_letter,
+    normalize_for_matching,
+)
 from app.modules.content.validation import VerifiedValue
 
 # The capability name is PRD §17.1's, verbatim. It is what `provider_usage.capability` records,
@@ -163,6 +169,7 @@ SCHEMA_SLOT_MALFORMED: Final = "SCRIPT_SLOT_MALFORMED"
 SCHEMA_SLOT_KIND_UNKNOWN: Final = "SCRIPT_SLOT_KIND_UNKNOWN"
 SCHEMA_SLOT_LIMIT_EXCEEDED: Final = "SCRIPT_SLOT_LIMIT_EXCEEDED"
 SCHEMA_CONTROL_CHARACTER: Final = "SCRIPT_CONTROL_CHARACTER"
+SCHEMA_UNSUPPORTED_CHARACTER: Final = "SCRIPT_UNSUPPORTED_CHARACTER"
 
 ISSUE_FABRICATED_PRICE: Final = "SCRIPT_FABRICATED_PRICE"
 ISSUE_FABRICATED_DATE: Final = "SCRIPT_FABRICATED_DATE"
@@ -511,6 +518,12 @@ def parse_text(value: Any, pointer: str, *, max_chars: int) -> ScriptText:
         raise ScriptSchemaError(SCHEMA_FIELD_TYPE_INVALID, pointer)
     if _CONTROL_CHARACTERS.search(value):
         raise ScriptSchemaError(SCHEMA_CONTROL_CHARACTER, pointer)
+    if contains_non_latin_letter(value):
+        # The alphabet, not the wording. Every rule below matches characters, so an alphabet the
+        # rules were never written against is a bypass of all of them at once: `165 ⲦL` reads as
+        # a price and matched nothing. Bounding the alphabet is the only version of this defence
+        # that does not need a new entry every time someone finds another script.
+        raise ScriptSchemaError(SCHEMA_UNSUPPORTED_CHARACTER, pointer)
     if len(value) > max_chars:
         raise ScriptSchemaError(SCHEMA_TEXT_TOO_LONG, pointer)
     if not value.strip():

@@ -68,28 +68,80 @@ _SIGNED_QUERY_PARAMS = (
     "sig",
 )
 
+# Everything after the `=`, up to whatever ends a URL inside a log line.
+_SIGNED_VALUE = r"([^&\s\"'<>\\]+)"
+
+# `%53ignature` is still `Signature` to `urllib.parse.parse_qsl`, and a percent sign may itself be
+# encoded — `%2553` decodes to `%53` decodes to `S` — so the escape hatch is unbounded in depth.
+# Matching `%(?:25)*XX` closes it at every depth in one pass, which decoding a fixed number of
+# times would not. Both hex cases are listed because `%53` and `%73` are different digit pairs,
+# and `(?i)` does not relate them the way it relates `S` and `s`.
+_PERCENT = r"%(?:25)*"
+
+
+def _percent_tolerant(name: str) -> str:
+    return "".join(
+        "(?:"
+        + "|".join(
+            [re.escape(character)]
+            + [
+                f"{_PERCENT}{code:02x}"
+                for code in sorted({ord(character.lower()), ord(character.upper())})
+            ]
+        )
+        + ")"
+        for character in name
+    )
+
+
 _SIGNATURE_PATTERN = re.compile(
-    r"(?i)\b(" + "|".join(re.escape(name) for name in _SIGNED_QUERY_PARAMS) + r")=([^&\s\"'<>\\]+)"
+    r"(?i)\b("
+    + "|".join(re.escape(name) for name in _SIGNED_QUERY_PARAMS)
+    + r")(=)"
+    + _SIGNED_VALUE
 )
 
-# Cheap pre-filter. The scrub now runs over every attribute of every record, so the common case —
-# an ordinary log line with nothing signed in it — must not pay for the alternation above. Every
-# name in `_SIGNED_QUERY_PARAMS` contains one of these fragments, and a test asserts that, so the
-# fast path cannot turn into a silent false negative when a parameter is added.
+# The same rule with every character of the name — and the `=` — allowed to arrive percent
+# encoded. It is a strict superset of the pattern above and is used only when the text contains a
+# `%` at all, so an ordinary log line never pays for the wider alternation. `\b` is replaced by an
+# explicit lookbehind because a name whose *first* character is encoded starts with `%`, and there
+# is no word boundary in front of that.
+_ENCODED_SIGNATURE_PATTERN = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])("
+    + "|".join(_percent_tolerant(name) for name in _SIGNED_QUERY_PARAMS)
+    + r")((?:=|"
+    + _PERCENT
+    + r"3d))"
+    + _SIGNED_VALUE
+)
+
+# Cheap pre-filter. The scrub runs over every attribute of every record, so the common case — an
+# ordinary log line with nothing signed in it — must not pay for the alternations above. The fast
+# path is safe by a two-branch argument, and both branches are pinned by tests: a name written
+# literally contains one of these fragments, and a name written any other way needs a `%` to do
+# it.
 _CANDIDATE_MARKERS = re.compile(r"(?i)sig|cred|token|keyid|accessid")
+
+
+def _mask(match: re.Match[str]) -> str:
+    """Keep the parameter name and separator exactly as they were written, drop the value."""
+
+    return f"{match.group(1)}{match.group(2)}{REDACTED}"
 
 
 def redact_signature_material(text: str) -> str:
     """Mask the value of every signing query parameter in a piece of text.
 
-    Only the value is replaced. The parameter name, the host, the object key and the rest of
-    the query survive, because a log line that says *which* request was signed is the useful
-    half and the signature is the dangerous half — a presigned URL is a bearer credential.
+    Only the value is replaced, and the name is left in whatever form it arrived in. The host,
+    the object key and the rest of the query survive, because a log line that says *which*
+    request was signed is the useful half and the signature is the dangerous half — a presigned
+    URL is a bearer credential.
     """
 
-    if "=" not in text or _CANDIDATE_MARKERS.search(text) is None:
+    encoded = "%" in text
+    if not encoded and _CANDIDATE_MARKERS.search(text) is None:
         return text
-    return _SIGNATURE_PATTERN.sub(lambda match: f"{match.group(1)}={REDACTED}", text)
+    return (_ENCODED_SIGNATURE_PATTERN if encoded else _SIGNATURE_PATTERN).sub(_mask, text)
 
 
 def _redact(value: Any) -> Any:
