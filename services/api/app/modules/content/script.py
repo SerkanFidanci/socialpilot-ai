@@ -190,11 +190,14 @@ def fold(text: str) -> str:
 # These patterns run over literal text only. They are deliberately eager: a false rejection
 # costs one regeneration, while a false acceptance puts an invented price in front of a
 # customer. Written-out amounts ("yüz altmış beş lira") are covered because a model asked not to
-# write digits will reach for words next.
+# write digits will reach for words next. The detector recognizes a written percentage too:
+# without an approved-claim value to bind, even "yüzde yüz memnuniyet" is an unverified factual
+# claim, not safe model prose.
 
 _NUMBER: Final = r"\d{1,3}(?:[.\s ]\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?"
 _CURRENCY_WORD: Final = (
-    r"tl|try|lira|liras[ıi]|liray[ıa]|liradan|kuruş|usd|eur|euro|avro|dolar|gbp|sterlin"
+    r"tl|try|türk\s+liras[ıi]|lira|liras[ıi]|liray[ıa]|liradan|liral[ıi]k|kuruş|"
+    r"usd|eur|euro|avro|dolar(?:[ıi])?|dolar[lı][ıi]k|gbp|sterlin"
 )
 _CURRENCY_SYMBOL: Final = r"₺|\$|€|£"
 _NUMBER_WORD: Final = (
@@ -204,20 +207,29 @@ _NUMBER_WORD: Final = (
 _MONTH: Final = (
     r"ocak|şubat|mart|nisan|may[ıi]s|haziran|temmuz|ağustos|eylül|ekim|kas[ıi]m|aral[ıi]k"
 )
+_WRITTEN_NUMBER: Final = rf"(?:{_NUMBER_WORD})(?:\s+(?:{_NUMBER_WORD}))*"
+# A written calendar day has a much smaller grammar than a currency amount. Keeping it bounded
+# avoids turning arbitrary prose ending in a month name into a date, while covering 1–31.
+_WRITTEN_DAY: Final = (
+    r"bir|iki|üç|dört|beş|alt[ıi]|yedi|sekiz|dokuz|on(?:\s+(?:bir|iki|üç|dört|beş|alt[ıi]|"
+    r"yedi|sekiz|dokuz))?|yirmi(?:\s+(?:bir|iki|üç|dört|beş|alt[ıi]|yedi|sekiz|dokuz))?|"
+    r"otuz(?:\s+bir)?"
+)
 
 _PRICE_PATTERNS: Final = (
-    # 165 TL · 1.650,00 TRY · 20 dolar
+    # 165 TL · 1.650,00 TRY · 20 dolar · 165 Türk lirası
     re.compile(rf"(?<!\w)(?:{_NUMBER})\s*(?:{_CURRENCY_WORD})(?!\w)"),
-    # 165₺ and ₺1.650,00
+    # 165₺ and ₺1.650,00; currency prefixes are just as much a price as suffixes.
     re.compile(rf"(?<!\w)(?:{_NUMBER})\s*(?:{_CURRENCY_SYMBOL})"),
-    re.compile(rf"(?:{_CURRENCY_SYMBOL})\s*(?:{_NUMBER})"),
-    # yüz altmış beş lira
-    re.compile(
-        rf"(?<!\w)(?:{_NUMBER_WORD})(?:\s+(?:{_NUMBER_WORD}))*\s+(?:{_CURRENCY_WORD})(?!\w)"
-    ),
+    re.compile(rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s*(?:{_NUMBER})(?!\w)"),
+    # yüz altmış beş lira · Türk lirası yüz altmış beş
+    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER})\s+(?:{_CURRENCY_WORD})(?!\w)"),
+    re.compile(rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s+(?:{_WRITTEN_NUMBER})(?!\w)"),
     # %20 indirim · 20% indirim. A percentage in generated copy is either a discount (a verified
-    # field) or a claim (an approved claim); neither is the model's to write.
-    re.compile(r"%\s*\d|(?<!\w)\d+(?:[.,]\d+)?\s*%"),
+    # field) or a claim (an approved claim); neither is the model's to write. This includes
+    # the digit-free form "yüzde yirmi".
+    re.compile(rf"%\s*(?:{_NUMBER})|(?<!\w)(?:{_NUMBER})\s*%"),
+    re.compile(rf"(?<!\w)yüzde\s+(?:{_WRITTEN_NUMBER}|{_NUMBER})(?!\w)"),
 )
 
 _DATE_PATTERNS: Final = (
@@ -228,6 +240,9 @@ _DATE_PATTERNS: Final = (
     re.compile(rf"(?<!\w)\d{{1,2}}\s+(?:{_MONTH})(?!\w)"),
     # Ağustos 1 · Ağustos 2026
     re.compile(rf"(?<!\w)(?:{_MONTH})\s+\d{{1,4}}(?!\w)"),
+    # bir Ağustos · otuz bir Aralık. The month may still be followed by an apostrophe suffix.
+    re.compile(rf"(?<!\w)(?:{_WRITTEN_DAY})\s+(?:{_MONTH})(?!\w)"),
+    re.compile(rf"(?<!\w)(?:{_MONTH})\s+(?:{_WRITTEN_DAY})(?!\w)"),
 )
 
 # Only the unambiguous forms. A model naming a domain in a voiceover is a policy problem; a

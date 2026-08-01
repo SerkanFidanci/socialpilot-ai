@@ -257,7 +257,7 @@ def test_a_malformed_slot_is_a_parse_error(text: str) -> None:
         parse_script(document)
 
 
-# --- fabrication: five separate figures, one harmless one (criterion 4) ----------------------
+# --- fabrication: price/date bypasses and false-positive boundary (criterion 4) --------------
 
 
 @pytest.mark.parametrize(
@@ -292,10 +292,53 @@ def test_a_harmless_number_is_not_a_price(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["165TL", "1.650,00 TRY", "yüz altmış beş lira", "20 dolar", "20% indirim", "165 ₺"],
+    [
+        # Original spacing/unit variants.
+        "165TL",
+        "1.650,00 TRY",
+        "yüz altmış beş lira",
+        "20 dolar",
+        "20% indirim",
+        "165 ₺",
+        # Codex's real API bypasses: worded currency, worded percentage, written day and prefix.
+        "165 Türk lirası",
+        "yüzde yirmi indirim",
+        "TL 165",
+        # Additional adversarial forms: both directions, symbols and compound word numbers/days.
+        "TRY yüz altmış beş",
+        "₺ iki yüz",
+        "iki yüz dolar",
+        "dolar yirmi",
+        "on iki euro",
+        "yüzde 20",
+    ],
 )
 def test_spacing_wording_and_unit_variants_do_not_evade_the_detector(text: str) -> None:
     assert find_fabrication(text) == "SCRIPT_FABRICATED_PRICE"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["bir Ağustos'a kadar", "otuz bir Aralık", "Eylül yirmi üç"],
+)
+def test_written_dates_are_reported_as_dates(text: str) -> None:
+    assert find_fabrication(text) == "SCRIPT_FABRICATED_DATE"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "üç dakikada hazır",
+        "yüzde yüz memnuniyet",
+        "Dolar gibi değerli bir deneyim",
+        "Ağustos esintisiyle serinleyin",
+    ],
+)
+def test_written_price_date_and_percentage_boundaries_are_deliberate(text: str) -> None:
+    """A written percentage is an unverifiable factual claim, so it follows the same safe rule."""
+
+    expected = "SCRIPT_FABRICATED_PRICE" if text == "yüzde yüz memnuniyet" else None
+    assert find_fabrication(text) == expected
 
 
 def test_an_invented_price_in_a_generation_is_rejected_with_a_pointer() -> None:

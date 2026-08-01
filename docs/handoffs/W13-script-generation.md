@@ -257,10 +257,30 @@ bağımsız olarak yeniden üretilemedi.
 
 | # | Bulgu | Şiddet | Yeniden üretim | Durum |
 |---|---|---|---|---|
-| 1 | Fiyat/tarih literal koruması Türkçe yazım varyantlarında aşılabiliyor; bunlar doğrulanmış slot olmadan kalıcı `generated` script'e giriyor. | kritik | Sağlayıcı çıktısındaki `segments[1].voice_text` sırasıyla `165 Türk lirası`, `yüzde yirmi indirim`, `bir Ağustos'a kadar` ve para birimi önekli `TL 165` yapıldı. Her biri `201` / `status=generated` döndü; test DB'sinde beş generated satır görüldü (dört bypass + normal idempotency ilk isteği). | açık |
+| 1 | Fiyat/tarih literal koruması Türkçe yazım varyantlarında aşılabiliyor; bunlar doğrulanmış slot olmadan kalıcı `generated` script'e giriyor. | kritik | Sağlayıcı çıktısındaki `segments[1].voice_text` sırasıyla `165 Türk lirası`, `yüzde yirmi indirim`, `bir Ağustos'a kadar` ve para birimi önekli `TL 165` yapıldı. Her biri `201` / `status=generated` döndü; test DB'sinde beş generated satır görüldü (dört bypass + normal idempotency ilk isteği). | düzeltildi (2026-08-01) |
 | 2 | Başka tenant'a ait gerçek product UUID'siyle `{{price:<rival-id>}}` slotu çözdürülemedi; kimlik veya değer sızmadı. | — | İki ayrı business oluşturuldu; ilk tenant'ın sağlayıcı çıktısına ikinci tenant product UUID'si kondu. `422 SCRIPT_VALIDATION_FAILED`, yalnız `SCRIPT_VERIFIED_FIELD_NOT_FOUND` döndü. | kabul edildi |
 | 3 | Prompt-injection ile sağlayıcı çıktısına şema dışı `tool_calls` alanı eklenemedi. | — | Üst düzey `tool_calls: [{name: exfiltrate, arguments: {url: …}}]` içeren JSON gönderildi. `422 SCRIPT_PROVIDER_OUTPUT_INVALID` / `SCRIPT_UNKNOWN_FIELD`, pointer `$.tool_calls`; script failed kaldı. | kabul edildi |
 | 4 | Aynı `Idempotency-Key` ile farklı gövde sessiz replay olmadı. | — | İlk `POST /scripts` normal gövdeyle `201`; aynı anahtarla yalnız `target_duration_ms=10000` değiştirilmiş ikinci gövde `409 IDEMPOTENCY_CONFLICT`. | kabul edildi |
 | 5 | “production + fake HTTP'de 503 ve boot devam eder” iddiası gerçek production ayarıyla uçtan uca doğrulanamadı. | orta | `app_env=production` altında fake script fabrikası bağımsız olarak `DisabledScriptGenerationAdapter` seçiyor ve fake adapter constructor'ı `SCRIPT_GENERATION_FAKE_ADAPTER_NOT_ALLOWED_IN_PRODUCTION` ile reddediyor. Ancak uygulama HTTP isteğine gelmeden `LocalIdentityVerifier` / fake storage üretimde yasak olduğundan startup'ta duruyor (`STORAGE_PRODUCTION_ADAPTER_NOT_CONFIGURED`; normal Settings doğrulaması ayrıca local identity'yi reddediyor). Dolayısıyla gerçek production boot üzerinden gözlenen bir `503` yok. | açık |
 
 **Karar:** düzeltme gerekiyor
+
+### Düzeltme notu — 2026-08-01 · W13 sıcak oturumu
+
+- `main` (W14 dahil) `slice/2b-script-generation` dalına fast-forward alındı; imza redaksiyonu
+  ve kanonik patch fingerprint değişiklikleri bu düzeltmenin tabanında.
+- `find_fabrication` sayıyla ve yazıyla para birimi adlarını (lira / `Türk lirası`, TL / ₺ /
+  TRY, dolar, euro), hem önek hem sonek yazımını; yazıyla oranları (`yüzde yirmi`); yazıyla
+  gün+ay tarihlerini (`bir Ağustos`, `otuz bir Aralık`) yakalayacak şekilde genişletildi.
+- Kritik dört eski bypass kötü niyetli sağlayıcı çıktısıyla yeniden HTTP'den denendi: `165
+  Türk lirası`, `yüzde yirmi indirim` ve `TL 165` → `422 SCRIPT_VALIDATION_FAILED` /
+  `SCRIPT_FABRICATED_PRICE`; `bir Ağustos'a kadar` → `422` /
+  `SCRIPT_FABRICATED_DATE`. Ek birim/önek/yazıyla-sayı ve yazıyla-tarih varyantları birim test
+  listesine eklendi.
+- Yanlış-pozitif sınırı: `üç dakikada hazır`, yalnız `dolar` adı ve ay adı içeren sıradan
+  metinler geçer. `yüzde yüz memnuniyet` ise serbest model metninde doğrulanamayan nicel bir
+  iddia olduğu için bilinçli olarak `SCRIPT_FABRICATED_PRICE` ile reddedilir; onaylı iddia
+  kaynağı/slotu gelene kadar güvenli taraf budur.
+- Doğrulama: temiz `sp-w13` PostgreSQL/MinIO ortamında `pytest -q` (integration açık) →
+  **628 passed**; W13 unit → **81 passed**; W13 integration → **30 passed**; Ruff lint/format
+  ve strict mypy temiz. Mevcut geliştirme verisi için temizlik yapılmadı.
