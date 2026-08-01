@@ -169,7 +169,7 @@ rejected text itself is never stored:
 | `SCRIPT_SCENE_TAG_INVALID` | a scene tag outside the permitted character set or count |
 | `SCRIPT_SLOT_MALFORMED` / `SCRIPT_SLOT_KIND_UNKNOWN` / `SCRIPT_SLOT_LIMIT_EXCEEDED` | a broken `{{kind:id}}` reference |
 | `SCRIPT_CONTROL_CHARACTER` | control characters in generated text |
-| `SCRIPT_UNSUPPORTED_CHARACTER` | a letter from an alphabet the product does not write in. Every content rule matches characters, so an unexpected alphabet bypasses all of them at once — `165 ⲦL` with a Coptic tau reads as a price and matched nothing (W16 verification). Literal prose is Latin script; the check runs before any rule |
+| `SCRIPT_UNSUPPORTED_CHARACTER` | a letter the matching fold cannot spell in ASCII. Every content rule matches characters, so a letter the rules cannot read bypasses all of them at once — `165 ⲦL` with a Coptic tau reads as a price and matched nothing (W16 verification), and so did `165 ŦL`, which is Latin (W16 round 2). The bound is the fold itself (W17): a letter is admitted exactly when `normalize_for_matching` can reduce it to ASCII, so an alphabet nobody thought of and a diacritic nobody mapped both fail closed. Accented European names (`Café`, `Łukasz`, `Straße`) fold and are admitted. The check runs before any rule |
 
 `meta.issues[].code` values (content):
 

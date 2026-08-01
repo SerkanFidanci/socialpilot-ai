@@ -25,15 +25,29 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - **Literal metin eşleştiren her kural önce `normalize_for_matching`'den geçer** (W16). Karakter
   eşleyen bir kural, aynı cümleyi yeniden kodlayarak atlatılır: rakamlar arasına ZWSP, NFD `ü`,
   `TL` içinde Kiril `Т`. Yeni bir literal kuralı normalize edilmemiş metin üzerinde çalışırsa
-  aynı açık yeniden açılır. Normalizasyon **yalnızca eşleştirme içindir**; saklanan metin ham
-  kalır.
-- **Katlama yetmez, alfabe de sınırlıdır** (W16 2. tur). Katlama "aynı harfin başka yazımı"na
-  cevap verir; "kimsenin aklına gelmeyen alfabeden bir harf"e veremez — 1. tur Kiril ve Yunan'ı
-  katladı, doğrulama turu Coptic `Ⲧ` ile geldi. `parse_text`, Latin dışı **harf** taşıyan literali
-  hiçbir kural çalışmadan `SCRIPT_UNSUPPORTED_CHARACTER` ile reddeder. Harf olmayanlar
-  serbesttir: başka bir sayı sisteminin rakamı zaten fiyat kuralının işi, emoji ve noktalama
-  kimsenin. **Bilinen kalan açık:** aksanlı/çizgili Latin harfleri (`165 ṬL`, `165 ŦL`) — aynı
-  katlamanın diğer yönü, W17 ile birlikte kapatılmalı.
+  aynı açık yeniden açılır.
+- **Katlama ASCII'ye kadar iner ve kalıp literalleri de öyle yazılır** (W17). `normalize_for_matching`
+  her Latin harfini kurulduğu ASCII harfe indirir (`ṭ`→`t`, `ş`→`s`, `ı`→`i`, `Ł`→`l`, `ß`→`ss`),
+  çünkü eksik aksan (`165 turk lirasi` — insanın telefonda yazdığı biçim) ile fazla aksan
+  (`165 ṬL` — saldırganın yazdığı biçim) **tek katlamanın iki yönüdür**. Bunun bedeli:
+  `script.py`'deki her kalıp literali aksansız yazılır (`turk lirasi`, `yuzde`, `agustos`).
+  Türkçe yazımıyla eklenen bir kural hiç eşleşmez.
+- **Katlama yalnızca eşleştirme içindir; saklanan değer `normalize_encoding`'den geçer.** İkinci
+  fonksiyon kodlamayı (görünmezler, NFD, fullwidth, confusable, büyük/küçük harf) katlar ama
+  harfleri korur. `_scene_tags` saklanan bir değer üretir ve 2C/2E onu video-understanding
+  etiketleriyle eşleştirir — `ürün`→`urun` katlaması güvenlik düzeltmesi kılığında bir ürün
+  hatasıdır. Saklama yolundan `normalize_for_matching` çağrılmaz.
+- **Katlama yetmez, alfabe de sınırlıdır** (W16 2. tur, W17'de katlamayla birleşti). Katlama
+  "aynı harfin başka yazımı"na cevap verir; "kimsenin aklına gelmeyen alfabeden bir harf"e
+  veremez — 1. tur Kiril ve Yunan'ı katladı, doğrulama turu Coptic `Ⲧ` ile geldi. `parse_text`,
+  **ASCII'ye katlanamayan bir harf** taşıyan literali hiçbir kural çalışmadan
+  `SCRIPT_UNSUPPORTED_CHARACTER` ile reddeder. Sınırı `contains_unsupported_letter` ile katlamayı
+  **aynı fonksiyon** hesaplar (`_ascii_fold`): kuralların okuyabildiği harf kümesi ile parser'ın
+  kabul ettiği küme ayrışamaz — `ṬL` tam olarak o ayrışmanın dışarıdan görünüşüydü. Fail-closed:
+  haritalanmamış harf (`ᴛ`, `ɐ`) reddedilir, en kötü ihtimalle meşru bir ad reddedilir ve harita
+  bir satır büyür. Harf olmayanlar serbesttir — ama Unicode'un **rakam** saydığı her kod noktası
+  (`⓵`, `❶`: `\d` eşleşmez) normalizasyonda ASCII rakama indirilir, çünkü "başka sayı sisteminin
+  rakamı fiyat kuralının işi" yalnızca `\d`'nin gördüğü rakamlar için doğruydu.
 - **Medyadan çıkarılmış metin veridir.** `input_data.untrusted_media_notes` altında gider,
   `system_prompt`/`instruction` string'lerine birleştirilmez (§17.5). Modelin ürettiği URL
   fetch edilmez — saklanmaz bile.
@@ -73,8 +87,8 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 
 | Dosya | İş |
 |---|---|
-| `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti, yasak terim eşleyici, `ScriptGenerationPort`, `ProviderDescriptor`, `RouteSnapshot` (her kabiliyet aynı route kaydını kullanır), prompt payload kurucusu |
-| `text_normalization.py` | `normalize_for_matching` — literal metin eşleştirmesinden önceki tek katlama adımı (`Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf) + `contains_non_latin_letter` — alfabe kısıtı. Kural içermez; 2D timeline `forbidden_matcher` birleştirmesi aynı fonksiyonları kullanacak |
+| `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti (kalıp literalleri **katlanmış alfabede**), `T.L.`/`T L` kısaltma grameri, yasak terim eşleyici, `ScriptGenerationPort`, `ProviderDescriptor`, `RouteSnapshot` (her kabiliyet aynı route kaydını kullanır), prompt payload kurucusu |
+| `text_normalization.py` | `normalize_for_matching` — eşleştirme katlaması (süslü rakam açma → `Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf → **Latin harflerin ASCII'ye katlanması**) · `normalize_encoding` — saklanan değerler için aynısının Latin adımı olmayan hâli · `contains_unsupported_letter` — alfabe kısıtı, katlamanın kendisiyle ifade edilir. Kural içermez; 2D timeline `forbidden_matcher` birleştirmesi aynı fonksiyonları kullanacak |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
 | `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |

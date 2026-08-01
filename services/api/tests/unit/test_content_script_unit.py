@@ -55,7 +55,9 @@ from app.modules.content.script import (
 from app.modules.content.text_normalization import (
     _CONFUSABLE_PAIRS,
     _IGNORED_CATEGORIES,
-    contains_non_latin_letter,
+    _NAMED_BASES,
+    contains_unsupported_letter,
+    normalize_encoding,
     normalize_for_matching,
 )
 from app.modules.content.validation import VerifiedValue
@@ -455,9 +457,9 @@ def test_a_hidden_character_does_not_unban_a_forbidden_claim() -> None:
 def test_normalization_leaves_ordinary_turkish_copy_alone() -> None:
     """The false-positive control for the normalizer itself, at both ends of the fold."""
 
-    assert normalize_for_matching("Günün en TAZE molası hazır.") == "günün en taze molası hazır."
+    assert normalize_for_matching("Günün en TAZE molası hazır.") == "gunun en taze molasi hazir."
     assert normalize_for_matching("İki dakikada servis") == "iki dakikada servis"
-    assert normalize_for_matching("IŞIK ve ışık") == "ışık ve ışık"
+    assert normalize_for_matching("IŞIK ve ışık") == "isik ve isik"
     assert find_fabrication("Günün en taze molası hazır.") is None
 
 
@@ -465,16 +467,49 @@ def test_normalization_leaves_ordinary_turkish_copy_alone() -> None:
     ("text", "expected"),
     [
         ("1\u200b6\u200b5", "165"),
-        ("Tu\u0308rk", "türk"),
+        ("Tu\u0308rk", "turk"),
         ("I\u0307NDI\u0307RI\u0307M", "indirim"),
         ("\uff11\uff16\uff15", "165"),
         ("\u0422L", "tl"),
-        ("Ağustos", "ağustos"),
+        ("Ağustos", "agustos"),
+        # W17 — the two directions of one fold. A spelling with its diacritics missing and a
+        # spelling wearing an unexpected one arrive at the same string, which is why they could
+        # not have been closed in separate rounds: the second would come back as the first.
+        ("Türk lirası", "turk lirasi"),
+        ("turk lirasi", "turk lirasi"),
+        ("ṬL", "tl"),
+        ("ŦL", "tl"),
+        ("Łukasz", "lukasz"),
+        ("Straße", "strasse"),
+        # NFKC expands a parenthesized digit into punctuation *inside* a run of digits. The
+        # matching fold undoes the decoration instead of teaching every pattern to skip
+        # punctuation between digits, which would have cost "(1) madde (5) fıkra".
+        ("⑴⑸", "15"),
         ("", ""),
     ],
 )
 def test_the_normalizer_folds_each_channel_on_its_own(text: str, expected: str) -> None:
     assert normalize_for_matching(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The *stored* half of the fold. Re-encodings still collapse...
+        ("Günün", "günün"),
+        ("ＴＬ", "tl"),
+        # ...but the letters Turkish is written in survive it, because a scene tag is stored and
+        # then compared against labels video understanding produced, and `urun` matches none of
+        # them. Nothing on a storage path may call `normalize_for_matching`.
+        ("Ürün", "ürün"),
+        ("Ağustos", "ağustos"),
+        ("Türk lirası", "türk lirası"),
+    ],
+)
+def test_the_stored_fold_keeps_the_letters_and_drops_only_the_encoding(
+    text: str, expected: str
+) -> None:
+    assert normalize_encoding(text) == expected
 
 
 # --- the alphabet, not the spelling (W16 fix round 2) -----------------------------------------
@@ -508,7 +543,7 @@ FOREIGN_ALPHABETS = [
     ids=[label for label, _ in FOREIGN_ALPHABETS],
 )
 def test_a_letter_from_another_alphabet_is_refused_before_any_rule_runs(text: str) -> None:
-    assert contains_non_latin_letter(text) is True
+    assert contains_unsupported_letter(text) is True
 
     document = script_document()
     document["segments"][1]["voice_text"] = f"Sadece {text}."
@@ -531,10 +566,17 @@ def test_a_letter_from_another_alphabet_is_refused_before_any_rule_runs(text: st
         ("decomposed turkish", "Gu\u0308nu\u0308n en taze molası"),
         ("fullwidth latin", "165 \uff34\uff2c"),
         ("lira sign", "Sadece ₺"),
+        # W17: a business name may carry a diacritic the Turkish alphabet does not have. The
+        # fold spells these in ASCII, so admitting them costs nothing — and refusing them would
+        # block every generation for that business, permanently, with no user path out.
+        ("accented european name", "Café Nero şubemizde"),
+        ("polish stroke", "Łukasz Kebap açıldı"),
+        ("german sharp s", "Straße Burger"),
+        ("nordic and ligature", "Smørrebrød ve Æblekage"),
     ],
 )
 def test_latin_copy_is_not_collateral_damage(label: str, text: str) -> None:
-    assert contains_non_latin_letter(text) is False
+    assert contains_unsupported_letter(text) is False
 
 
 UNASSIGNED_AND_PRIVATE = [
@@ -571,6 +613,196 @@ def test_the_confusable_table_is_aligned_and_only_rewrites_non_ascii() -> None:
         assert len(source) == len(target)
         assert not source.isascii()
         assert target.isascii()
+
+
+# --- one fold, both directions (W17) ----------------------------------------------------------
+#
+# W16 closed "a letter from an alphabet nobody thought of" and left "the same letter wearing a
+# different diacritic" open in both directions at once: `165 turk lirasi` is how a person types
+# it on a phone, `165 ṬL` is how an attacker types it, and a single fold closes both. Splitting
+# them across rounds would have brought the second back as the next critical finding — which is
+# the entire argument for doing them together.
+
+W17_BYPASSES = [
+    # Diacritics missing. Not adversarial at all: this is ordinary typing, so a well-behaved
+    # model that copied a customer's own caption could land here.
+    ("undotted currency", "165 turk lirasi", "SCRIPT_FABRICATED_PRICE"),
+    ("undotted percentage", "yuzde yirmi indirim", "SCRIPT_FABRICATED_PRICE"),
+    ("undotted month", "1 agustos", "SCRIPT_FABRICATED_DATE"),
+    ("undotted written amount", "yuz altmis bes lira", "SCRIPT_FABRICATED_PRICE"),
+    # Diacritics added: U+1E6C, U+0166 and U+2C66. None is in the Turkish alphabet, all three
+    # draw a `T`, and all three are Latin — so the W16 alphabet rule let them past by design.
+    ("t with dot below", "165 ṬL", "SCRIPT_FABRICATED_PRICE"),
+    ("t with stroke", "165 ŦL", "SCRIPT_FABRICATED_PRICE"),
+    ("t with diagonal stroke", "165 ⱦl", "SCRIPT_FABRICATED_PRICE"),
+    # Pattern grammar rather than spelling: the abbreviation split by punctuation, and a run of
+    # digits split by the punctuation NFKC itself inserts.
+    ("dotted abbreviation", "165 T.L.", "SCRIPT_FABRICATED_PRICE"),
+    ("spaced abbreviation", "165 T L", "SCRIPT_FABRICATED_PRICE"),
+    ("parenthesized digits", "⑴⑸ TL", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [(text, code) for _, text, code in W17_BYPASSES],
+    ids=[label for label, _, _ in W17_BYPASSES],
+)
+def test_a_missing_or_an_unexpected_diacritic_is_the_same_figure(text: str, code: str) -> None:
+    assert find_fabrication(text) == code
+
+
+@pytest.mark.parametrize(
+    "text",
+    [text for _, text, _ in W17_BYPASSES],
+    ids=[label for label, _, _ in W17_BYPASSES],
+)
+def test_none_of_those_can_be_resolved_into_a_document(text: str) -> None:
+    """The pure function is only half of it — the rejection has to survive resolution."""
+
+    document = script_document()
+    document["segments"][1]["voice_text"] = f"Sadece {text}."
+    outcome = resolve_script(parse_script(document), context=context())
+
+    assert outcome.document is None
+
+
+FOUND_WHILE_ATTACKING_THE_FIX = [
+    # Both of these passed the first version of this slice and are pinned here so the fix cannot
+    # quietly regress to it.
+    #
+    # A capped separator run is a rule about the spellings someone thought of: `T....L` cleared
+    # a three-character cap. The run is unbounded now and safe because it may hold no word
+    # character, so any word between the letters ends the match.
+    ("wide separator", "165 T....L", "SCRIPT_FABRICATED_PRICE"),
+    ("spaced wide separator", "165 T ... L", "SCRIPT_FABRICATED_PRICE"),
+    # W16 left non-letters to the price rule, reasoning that another numbering system's digit is
+    # already its business. That holds for `١٦٥`, which `\d` matches, and fails for `⓵` — a
+    # character Unicode calls a digit, NFKC leaves alone and `\d` does not match.
+    ("double circled digits", "⓵⓹ TL", "SCRIPT_FABRICATED_PRICE"),
+    ("dingbat digits", "❶❺ TL", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [(text, code) for _, text, code in FOUND_WHILE_ATTACKING_THE_FIX],
+    ids=[label for label, _, _ in FOUND_WHILE_ATTACKING_THE_FIX],
+)
+def test_the_bypasses_this_slice_found_against_itself_stay_closed(text: str, code: str) -> None:
+    assert find_fabrication(text) == code
+
+
+UNFOLDABLE_LATIN = [
+    # Latin script, but nothing says what ASCII letter they are: the name carries a base this
+    # module refuses to guess at (`SMALL CAPITAL T`, `TURNED A`, `TWO WITH STROKE`).
+    ("small capital t and l", "165 ᴛʟ"),
+    ("turned a", "Sadece ɐ tadında"),
+    ("two with stroke", "165 ƻ lezzet"),
+]
+
+
+@pytest.mark.parametrize(
+    "text", [text for _, text in UNFOLDABLE_LATIN], ids=[label for label, _ in UNFOLDABLE_LATIN]
+)
+def test_a_latin_letter_the_fold_cannot_spell_is_refused_rather_than_guessed_at(text: str) -> None:
+    """Fail-closed, which is what makes the fold map safe to keep small.
+
+    An unmapped letter cannot reach a rule that would not recognise it; the worst case is a
+    legitimate business name refused and one row added here, and that is the cheap direction.
+    """
+
+    assert contains_unsupported_letter(text) is True
+
+    document = script_document()
+    document["segments"][1]["voice_text"] = f"{text}."
+    with pytest.raises(ScriptSchemaError) as error:
+        parse_script(document)
+
+    assert error.value.code == "SCRIPT_UNSUPPORTED_CHARACTER"
+
+
+def test_the_alphabet_that_is_admitted_is_exactly_the_alphabet_that_folds() -> None:
+    """Both questions are answered by one function, so the two answers cannot drift apart.
+
+    `ṬL` is what that drift looked like from the outside: `Ṭ` was Latin enough for the admission
+    rule and unknown enough for every matching rule, and it walked between them.
+    """
+
+    for admitted in ("165 ṬL", "Łukasz Kebap", "Café Nero", "Straße"):
+        assert contains_unsupported_letter(admitted) is False
+        assert normalize_for_matching(admitted).isascii()
+    assert contains_unsupported_letter("165 ᴛʟ") is True
+
+
+def test_the_fold_map_is_an_allowlist_of_bases_rather_than_a_reading_of_the_name() -> None:
+    """A Unicode name does not spell its own fold: `THORN` is `th` and `SCHWA` is `e`.
+
+    So the base is looked up, never lowercased blindly. The generated half — one entry per ASCII
+    letter — is what makes `LATIN … LETTER T WITH <anything>` a closed question.
+    """
+
+    assert len([base for base in _NAMED_BASES if len(base) == 1]) == 26
+    assert all(
+        value.isascii() and value.isalpha() and value.islower() for value in _NAMED_BASES.values()
+    )
+    assert _NAMED_BASES["THORN"] == "th"
+
+
+@pytest.mark.parametrize("phrase", ["şeker", "seker", "sekER", "ṣeker"])
+def test_a_forbidden_term_survives_its_diacritics_being_dropped(phrase: str) -> None:
+    """PM decision (W17): folding both sides widens the ban, and wider is the safe direction.
+
+    A brand that forbade `şeker` did not mean to permit `seker` — which is how the word gets
+    typed anyway — and a term list is not a place where a missing cedilla should be an escape.
+    """
+
+    document = script_document()
+    document["segments"][1]["voice_text"] = f"Bol {phrase} yok."
+    outcome = resolve_script(parse_script(document), context=context(forbidden_terms=("şeker",)))
+
+    assert "SCRIPT_FORBIDDEN_TERM" in outcome.codes
+
+
+def test_the_matching_fold_never_reaches_a_stored_scene_tag() -> None:
+    """The fold destroys information, so it stops at the values that are kept.
+
+    A scene tag is stored and later matched against labels video understanding produced. Folding
+    it would turn `ürün` into `urun` and quietly stop it selecting anything — a product bug
+    wearing a security fix. Storage uses `normalize_encoding`; only rules use the other one.
+    """
+
+    document = script_document()
+    document["segments"][1]["required_scene_tags"] = ["Ürün Yakın", "SOĞUK-İÇECEK", "preparation"]
+    draft = parse_script(document)
+
+    assert draft.segments[1].required_scene_tags == ("ürün_yakın", "soğuk_içecek", "preparation")
+    # The other fold would have produced a different tag, which is the whole point of the split.
+    assert normalize_for_matching("Ürün Yakın") == "urun yakin"
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        # The work order's own boundary: `T` and `L` are admitted as single-letter tokens, so a
+        # `t`, a space and an `l` inside ordinary words are not a currency.
+        ("t and l inside words", "165 tatlı lezzet"),
+        ("initial before a word", "Şef T. Lezzetli tarifler sunuyor."),
+        # The alternative design — letting the patterns skip punctuation between digits — would
+        # have cost these. Undecorating one compatibility character costs nothing here, because
+        # ASCII parentheses are not a compatibility character.
+        ("legal citation", "(1) madde (5) fıkra"),
+        ("numbered branches", "(1) ve (5) numaralı şubeler"),
+        # Folding brings more words into the patterns' reach, so the ordinary-copy control is
+        # re-run against the folded spelling too.
+        ("counted items", "3 tabak, 2 limon"),
+        ("menu line", "Menu: 4 tost, 2 limonata"),
+        ("undotted ordinary copy", "Tas firin lezzeti, 5 tane"),
+    ],
+)
+def test_the_pattern_grammar_stops_at_ordinary_punctuation(label: str, text: str) -> None:
+    assert find_fabrication(text) is None
+    assert contains_url(text) is False
 
 
 def test_only_the_script_module_uses_the_shared_normalizer_so_far() -> None:
