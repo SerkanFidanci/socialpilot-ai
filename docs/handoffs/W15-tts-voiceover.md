@@ -187,6 +187,10 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir.
    `test_schema_debt_migration.py`'de head'i `0013_script_generation` diye **sabitleyen**
    assertion. İkincisini sürüm-bağımsız hale getirdim (head'i önce okuyup sonra
    karşılaştırıyor), yoksa her migration slice'ı ilgisiz bir testi düzenlemek zorunda kalacaktı.
+   **W16'ya çakışma notu:** `test_content_script_unit.py` W16'nın ilan listesinde de var
+   ("script test dosyaları"). Benim değişikliğim kaçınılmazdı — test *her* `ContentAction`'ın
+   eşlendiğini iddia ediyor, yani yeni bir eylem eklemek onu kırıyor. W16 `main`'den dallandığı
+   sürece güncel hali gelir; W16 iş emri yazıldığında W15 henüz merge edilmemişti.
 4. **Bu uç senkron ve dayanıklı bir job değil**, senaryo üretimiyle aynı borç. Bir koşu birkaç
    çağrı olduğu için çağrı başına timeout'un üstüne `TTS_TOTAL_TIMEOUT_SECONDS` (varsayılan 180 s)
    koydum. Gerçek sağlayıcı takıldığında bu dayanıklı bir job'a taşınmalı (2E) — `pending`'de
