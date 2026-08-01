@@ -191,6 +191,9 @@ def test_downgrade_refuses_in_the_open_when_an_upload_id_cannot_fit() -> None:
 
     long_upload_id = "aBcDeF0123456789" * 18  # 288 chars, the length AWS actually returns
     session_id = asyncio.run(_insert_upload_graph(long_upload_id))
+    # Read the head rather than naming it: what this test asserts is that the refusal moved
+    # nothing, and pinning a revision id here made every later slice edit an unrelated test.
+    before = _run_alembic("current").stdout
 
     refused = _run_alembic("downgrade", "0010_brand_catalog")
 
@@ -203,8 +206,7 @@ def test_downgrade_refuses_in_the_open_when_an_upload_id_cannot_fit() -> None:
     # And nothing moved: same head, same column width, same value.
     assert asyncio.run(_current_column_length()) == 512
     assert asyncio.run(_read_storage_upload_id(session_id)) == long_upload_id
-    head = _run_alembic("current")
-    assert "0013_script_generation" in head.stdout + head.stderr
+    assert _run_alembic("current").stdout == before
 
     # Once the offending session is gone, the same reversal runs to completion.
     asyncio.run(_clear())

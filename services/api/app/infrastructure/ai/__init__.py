@@ -5,22 +5,34 @@ from __future__ import annotations
 from typing import Final
 
 from app.core.config import Settings
+from app.infrastructure.ai.audio_probe import FFprobeAudioProbe
 from app.infrastructure.ai.fake_script import (
     DisabledScriptGenerationAdapter,
     FakeScriptGenerationAdapter,
 )
+from app.infrastructure.ai.fake_tts import DisabledTTSAdapter, FakeTTSAdapter
 from app.modules.content.script import ScriptGenerationPort
+from app.modules.content.tts import AudioProbePort, TTSPort
 
 __all__ = [
     "DisabledScriptGenerationAdapter",
+    "DisabledTTSAdapter",
+    "FFprobeAudioProbe",
     "FakeScriptGenerationAdapter",
+    "FakeTTSAdapter",
+    "create_audio_probe",
     "create_script_generator",
+    "create_tts",
 ]
 
 PRODUCTION_DISABLED_REASON: Final = (
     "no production script-generation provider is configured; the fixture adapter is refused"
 )
 CONFIGURED_DISABLED_REASON: Final = "script generation is switched off by configuration"
+TTS_PRODUCTION_DISABLED_REASON: Final = (
+    "no production text-to-speech provider is configured; the fixture adapter is refused"
+)
+TTS_CONFIGURED_DISABLED_REASON: Final = "text-to-speech is switched off by configuration"
 
 
 def create_script_generator(settings: Settings) -> ScriptGenerationPort:
@@ -45,3 +57,37 @@ def create_script_generator(settings: Settings) -> ScriptGenerationPort:
     if settings.app_env == "production":
         return DisabledScriptGenerationAdapter(reason=PRODUCTION_DISABLED_REASON)
     return FakeScriptGenerationAdapter(settings)
+
+
+def create_tts(settings: Settings) -> TTSPort:
+    """Build the configured speech adapter; the fixture never produces shippable audio.
+
+    Same rule, same reason as `create_script_generator`, and it is the general one now: a
+    capability whose output a human could approve and publish falls back to a `disabled` adapter
+    with a documented error (`503 TTS_NOT_CONFIGURED`) instead of taking the deployment down.
+    Speech qualifies twice over — it is read from copy a reviewer already approved, and an
+    audience cannot tell a fixture voice from a purchased one by listening.
+
+    `TTS_ADAPTER` is therefore absent from `reject_non_production_adapters`, exactly like
+    `SCRIPT_GENERATION_ADAPTER`. The infrastructure adapters (storage, identity, materializer,
+    render) keep being refused at startup, because a deployment running those as fakes is broken
+    from its first request rather than quietly wrong on one endpoint.
+    """
+
+    if settings.tts_adapter == "disabled":
+        return DisabledTTSAdapter(reason=TTS_CONFIGURED_DISABLED_REASON)
+    if settings.app_env == "production":
+        return DisabledTTSAdapter(reason=TTS_PRODUCTION_DISABLED_REASON)
+    return FakeTTSAdapter(settings)
+
+
+def create_audio_probe(settings: Settings) -> AudioProbePort:
+    """Build the audio probe. There is no fake: measurement is the guarantee.
+
+    Every other port here has a fixture because the thing under test is the pipeline around a
+    provider. The probe is the opposite — it *is* the check that a provider's account of its own
+    output is not taken at face value — so a fixture probe would be a fixture verifying a
+    fixture. It runs ffprobe in development and in production alike.
+    """
+
+    return FFprobeAudioProbe(settings)

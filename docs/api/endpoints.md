@@ -3,7 +3,7 @@
 <!-- ÜRETİLMİŞ DOSYA — elle düzenlenmez. Kaynak: docs/generated/openapi.json
      Üreten: services/api/scripts/generate_endpoints_doc.py (`make generate-docs`) -->
 
-**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **32 endpoint**
+**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **35 endpoint**
 
 > Bu dosya [`../generated/openapi.json`](../generated/openapi.json) yerine okunur:
 > aynı kontrat, ~%98 daha az token. Şema/alan detayı gerekiyorsa tek endpoint'i
@@ -67,6 +67,9 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 | `GET` | `/v1/businesses/{business_id}/scripts` | List this business's scripts newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `POST` | `/v1/businesses/{business_id}/scripts` | Generate one script (PRD §18.1) from verified records, synchronously | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
 | `GET` | `/v1/businesses/{business_id}/scripts/{script_id}` | Read one script: the resolved contract, the slot template, and its provenance | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `GET` | `/v1/businesses/{business_id}/voiceovers` | List this business's voiceovers newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/voiceovers` | Voice one generated script (PRD §14.8), synchronously, one object per line | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
+| `GET` | `/v1/businesses/{business_id}/voiceovers/{voiceover_id}` | Read one voiceover: its measured segments, its drift, and its provenance | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 
 ## identity — kimlik
 

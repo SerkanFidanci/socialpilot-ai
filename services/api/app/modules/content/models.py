@@ -17,6 +17,14 @@ which prompt version, which route, which usage row — beside the script itself,
 whose origin is unknown cannot be audited when a customer disputes what a post said.
 `prompt_templates` (PRD §17.6) is platform configuration rather than tenant data and therefore
 carries no `business_id`; it is the one table here a tenant filter would be meaningless on.
+
+Slice 2C adds `voiceover_assets` (PRD §28.5, migration `0014`). Its one structural decision is
+that the per-line records live in a JSONB column rather than a child table: PRD §28.5 names one
+table, the lines are written and read as a set in a single transaction, and their shape is a
+contract (`VoiceoverSegment.as_document`) rather than a query surface. What is *not* in JSONB is
+everything a later slice filters or joins on — status, total duration, drift, the voice profile
+version, the route and usage references — because those are the questions QC and entitlement
+will ask across rows.
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
 from app.modules.content.script import ScenarioCode, ScriptStatus
+from app.modules.content.tts import VoiceoverStatus
 from app.modules.identity.models import Base
 
 
@@ -260,6 +269,77 @@ class ContentScript(Base):
     prompt_code: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_version: Mapped[int] = mapped_column(Integer, nullable=False)
     route_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    provider_usage_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("provider_usage.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    failure_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class VoiceoverAsset(Base):
+    """One voiceover produced from one script (PRD §28.5, §14.8).
+
+    Like `content_scripts`, the row is written and committed **before** the first provider call,
+    carrying the route snapshot (ADR-007), so calls that were billed and never settled leave a
+    `pending` row naming the provider, the model and the ceiling they ran under.
+
+    Two columns are the reason this table exists rather than a field on the script.
+    `total_duration_ms` is the sum of **ffprobe measurements**, never a provider's declaration —
+    it is what §18.3's "seslendirme süresi" check compares against the canvas, so a number
+    nobody verified would make that check theatre. `drift_ms` is that measurement minus the
+    script's own target: slice 2D decides what an unacceptable drift is; this slice only records
+    it, which is why there is no threshold anywhere in this module.
+
+    `voice_profile` stores the exact document handed to the provider, beside its code and
+    version (§17.6's pattern). Audio whose voice and speaking rate cannot be named later is
+    audio nobody can reproduce, and a registry edited tomorrow must not rewrite what was true
+    today.
+    """
+
+    __tablename__ = "voiceover_assets"
+    __table_args__ = (
+        Index("ix_voiceover_assets_business_created", "business_id", "created_at", "id"),
+        Index("ix_voiceover_assets_business_script", "business_id", "script_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    # RESTRICT, not CASCADE: the script is the evidence of what was said, and the audio is the
+    # evidence of how it was said. Deleting one must not silently orphan the other.
+    script_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_scripts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[VoiceoverStatus] = mapped_column(_enum(VoiceoverStatus, "voiceover_status"))
+
+    voice_profile_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    voice_profile_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    voice_profile: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    audio_format: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # One entry per script segment: object key, measured duration, the provider's declaration,
+    # and the script's target. Written even for a failed run, so partially produced objects are
+    # visible rather than orphaned in storage.
+    segments: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    total_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drift_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    route_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # The usage row that settled the run. Every call writes its own row (§39.1 attributes each
+    # external call); they share this request's `correlation_id`, and this column names the last
+    # one, whose `outcome` therefore matches this row's `status`.
     provider_usage_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("provider_usage.id", ondelete="SET NULL"),

@@ -199,17 +199,34 @@ class Timeline:
 
     @property
     def asset_ids(self) -> tuple[UUID, ...]:
-        """Every distinct asset the document references, in first-seen order."""
+        """Every distinct **media asset** the document references, in first-seen order.
+
+        A `voiceover` track's `asset_id` is deliberately not here: it names a `voiceover_assets`
+        row produced by slice 2C, not an uploaded `media_assets` row. Including it would make
+        the worker try to materialize a voiceover as a source video and would make validation
+        look it up in the wrong table — both failures of the "not accessible" kind, reported
+        about the wrong thing.
+        """
 
         seen: dict[UUID, None] = {}
         for clip in self.clips:
             seen.setdefault(clip.asset_id, None)
         for track in self.audio_tracks:
-            if track.asset_id is not None:
+            if track.asset_id is not None and track.kind is not AudioTrackKind.VOICEOVER:
                 seen.setdefault(track.asset_id, None)
         for overlay in self.overlays:
             if overlay.asset_id is not None:
                 seen.setdefault(overlay.asset_id, None)
+        return tuple(seen)
+
+    @property
+    def voiceover_ids(self) -> tuple[UUID, ...]:
+        """Every voiceover the document places, in first-seen order."""
+
+        seen: dict[UUID, None] = {}
+        for track in self.audio_tracks:
+            if track.kind is AudioTrackKind.VOICEOVER and track.asset_id is not None:
+                seen.setdefault(track.asset_id, None)
         return tuple(seen)
 
 

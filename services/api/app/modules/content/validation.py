@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -33,6 +33,7 @@ from app.modules.content.render import (
 )
 from app.modules.content.timeline import (
     TEXT_STYLES,
+    AudioTrack,
     AudioTrackKind,
     Overlay,
     OverlayKind,
@@ -93,6 +94,20 @@ class AssetFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceoverFacts:
+    """What validation needs to know about one voiceover (slice 2C), already tenant-scoped.
+
+    `duration_ms` is the sum of ffprobe measurements taken when the audio was produced, never a
+    provider's declaration. §18.3's "seslendirme süresi" rule compares it against the canvas, and
+    a rule that compared an unverified number would be theatre.
+    """
+
+    voiceover_id: UUID
+    usable: bool
+    duration_ms: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class VerifiedValue:
     """A value resolved from a verified record, with its validity window if it has one."""
 
@@ -109,6 +124,9 @@ class ValidationContext:
     forbidden_terms: tuple[str, ...]
     verified_values: Mapping[tuple[str, UUID], VerifiedValue]
     now: datetime
+    # Keyed by voiceover id. Empty by default so every existing caller keeps compiling and every
+    # timeline without a voiceover track behaves exactly as before.
+    voiceovers: Mapping[UUID, VoiceoverFacts] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,8 +286,19 @@ def _check_audio(
     issues: list[ValidationIssue] = []
     for index, track in enumerate(timeline.audio_tracks):
         pointer = f"$.audio_tracks[{index}]"
-        if track.kind not in capabilities.audio_sources:
+        supported = track.kind in capabilities.audio_sources
+        if not supported:
             issues.append(ValidationIssue("TIMELINE_UNSUPPORTED_AUDIO_SOURCE", pointer))
+        if track.kind is AudioTrackKind.VOICEOVER:
+            # Run regardless of the capability answer. Both statements are independently true —
+            # "this adapter cannot mix speech yet" and "this speech does not fit the canvas" —
+            # and collecting both is what lets the duration rule be a real rule rather than
+            # something that only exists once some adapter grows a filter.
+            issues.extend(
+                _check_voiceover(track, timeline=timeline, context=context, pointer=pointer)
+            )
+            continue
+        if not supported:
             continue
         if track.kind is AudioTrackKind.ORIGINAL:
             if track.asset_id is not None:
@@ -278,6 +307,38 @@ def _check_audio(
         if track.asset_id is None or track.asset_id not in context.assets:
             issues.append(ValidationIssue("TIMELINE_ASSET_NOT_ACCESSIBLE", pointer))
     return issues
+
+
+def _check_voiceover(
+    track: AudioTrack, *, timeline: Timeline, context: ValidationContext, pointer: str
+) -> list[ValidationIssue]:
+    """§18.3's "seslendirme süresi", bound to a real measurement (slice 2C).
+
+    A voiceover track names a `voiceover_assets` row rather than an uploaded asset: the audio was
+    produced by this pipeline from an already-validated script, so it resolves through its own
+    tenant-scoped query and a `media_assets` id is simply not found here.
+
+    The rule itself is one comparison — speech may not outlast the canvas it is laid over. Before
+    2C there was no measured duration to compare, so the check could not exist honestly; now it
+    can, and `TIMELINE_VOICEOVER_DURATION_OVERFLOW` costs a refused render instead of an output
+    whose last sentence is cut off mid-word. The *drift* between the speech and the script's
+    target is recorded on the voiceover row and deliberately not judged here: which drift is
+    unacceptable is slice 2D's threshold to set.
+    """
+
+    if track.asset_id is None:
+        return [ValidationIssue("TIMELINE_VOICEOVER_NOT_ACCESSIBLE", pointer)]
+    facts = context.voiceovers.get(track.asset_id)
+    if facts is None:
+        # Absent means "not this tenant's, or not there at all" — the query is tenant-scoped.
+        return [ValidationIssue("TIMELINE_VOICEOVER_NOT_ACCESSIBLE", pointer)]
+    if not facts.usable or facts.duration_ms is None:
+        # A run still pending, or one that failed with partial audio. Neither has a duration
+        # anything may be laid out against.
+        return [ValidationIssue("TIMELINE_VOICEOVER_NOT_READY", pointer)]
+    if facts.duration_ms > timeline.canvas.duration_ms:
+        return [ValidationIssue("TIMELINE_VOICEOVER_DURATION_OVERFLOW", pointer)]
+    return []
 
 
 def _check_captions(

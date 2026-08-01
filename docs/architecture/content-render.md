@@ -1,8 +1,9 @@
 # İçerik üretim ve render mimarisi
 
-**Kapsam:** senaryo üretimi (`script_generation` portu), timeline dokümanı, render öncesi
-doğrulama, parametrik düzenleme ve `RenderPort` arkasındaki render hattı. Slice 2A (W11) render
-yolunu, slice 2B (W13) senaryo yolunu getirdi.
+**Kapsam:** senaryo üretimi (`script_generation` portu), seslendirme (`tts` portu), timeline
+dokümanı, render öncesi doğrulama, parametrik düzenleme ve `RenderPort` arkasındaki render hattı.
+Slice 2A (W11) render yolunu, slice 2B (W13) senaryo yolunu, slice 2C (W15) seslendirmeyi
+getirdi.
 **İlgili:** PRD §17, §18, §19 → [35](../product/requirements/35-ai-routing-cost.md) ·
 [40a](../product/requirements/40a-content-planning-scenarios.md) ·
 [40b](../product/requirements/40b-scenario-render-lifecycle.md) ·
@@ -87,6 +88,86 @@ paylaşabileceği akıcı Türkçe reklam metni yazar. Bu yüzden üretim, uygul
 `DisabledScriptGenerationAdapter` alıyor: `503 SCRIPT_GENERATION_NOT_CONFIGURED`, diğer tüm
 endpoint'ler çalışmaya devam ediyor.
 
+## Seslendirme (slice 2C)
+
+PRD §14.8'in sırası: *önce senaryo ve seslendirme oluşturulur, ses segment süreleri çıkarılır,
+her cümleye uygun kesit atanır.* Bu slice ilk ikisini yapar; kesit ataması 2E'dir.
+
+```
+İstemci ──POST /voiceovers──► VoiceoverService
+   (yalnızca script id +          │ yetki (content.generate), aktif işletme
+    kayıtlı ses profili kodu)     │ senaryo `generated` mi (tenant-kapsamlı, yoksa 404)
+                                  │ maliyet tavanı — HEM ÇAĞRI BAŞI HEM TÜM KOŞU İÇİN
+                                  ├─ T1 COMMIT: voiceover_assets(pending) + route snapshot
+                                  │
+                                  │  her satır için, sırayla:
+                                  │    TTSPort.synthesize(...)      ◄── fake adapter (gerçek WAV)
+                                  │    AudioProbePort.measure(...)  ◄── ffprobe
+                                  │    storage.persist_file(...)    ◄── mevcut depolama adapter'ı
+                                  │
+                                  └─ T2 COMMIT: çağrı başına provider_usage
+                                     └─► generated (segments + ölçülmüş süreler + sapma)
+                                         | failed (failure_code + üretilmiş segmentler)
+```
+
+**Serbest metin seslendirilemiyor, çünkü isteğin metin alanı yok.** Gövde script id ve ses
+profili kodu taşır. Seslendirilen metin senaryonun **çözülmüş** dokümanıdır — `{{price:…}}`'in
+kod tarafından `product_prices`'tan basıldığı hali — yani dinleyicinin duyduğu fiyat bir kaydın
+tuttuğu fiyattır. 2B'nin üç katmanı buraya kadar taşınıyor; bu slice yeni bir katman eklemiyor
+ve eklemesi gerekmiyor, çünkü başka bir yerden metin kabul etmiyor.
+
+**Süre ölçülür, beyan edilmez.** Sağlayıcının kendi çıktısının uzunluğu hakkındaki beyanı
+doğrulanmamış bir sayıdır ve aşağı akıştaki her karar ona dayanır. `AudioProbePort` (ffprobe)
+dosyadan yeniden türetir; `AudioResult.declared_duration_ms` yine de kaydedilir, böylece
+uyuşmazlık kayıtta **görünür** kalır — sessizce düzeltilmiş olmaz. `duration_ms`, `total_duration_ms`
+ve §18.3 kontrolü yalnızca ölçümü kullanır.
+
+**Sapma ölçülür, yargılanmaz.** `drift_ms = ölçülen − senaryonun `target_duration_ms`'i`, segment
+başına ve toplamda. Hangi sapmanın kabul edilemez olduğu 2D'nin eşiğidir; bu modülde eşik yok.
+
+**Kısmi koşu gerçek bir durumdur.** Satırlar sırayla sentezlenir; üçüncüde düşen bir koşu iki
+objeyi zaten depolamıştır. O ikisi `failed` satırın `segments` alanına yazılır — byte'lar
+kayıtsız kalmaz — ve gerçekleşen her çağrı kendi `provider_usage` satırını alır (§39.1). Satırlar
+isteğin `correlation_id`'siyle gruplanır; `voiceover_assets.provider_usage_id` koşuyu
+sonuçlandıran satırı gösterir, dolayısıyla o satırın `outcome`'u ile voiceover'ın `status`'ü
+çelişemez.
+
+**Ses profili sürümlüdür (§17.6 deseni).** Kapalı bir registry (`VOICE_PROFILES`) — çağıranın
+serbest konuşma hızı veya ham sağlayıcı ses kimliği seçmesi ifade edilemez. Sağlayıcıya verilen
+profil dokümanının **tamamı** sesin yanında saklanır, böylece registry yarın düzenlense de
+bugün üretilen ses hangi sesle üretildiğini söyleyebilir.
+
+**Ses objeleri mevcut depolama adapter'ıyla yazılır**, ikinci bir yükleme yolu yok:
+`tenant/<business>/voiceovers/<voiceover>/segment-NNN.wav`. Depolamanın gözlemlediği boyut,
+content-type ve SHA-256, adapter'ın yazdığını söylediğiyle karşılaştırılır; uyuşmazlık
+reddedilir. Yanıt gövdesinde ve kayıtta **object key** vardır, imzalı URL değil.
+
+**Bu uç senkron ve dayanıklı bir job değil.** Bir koşu birkaç çağrıdır, bu yüzden çağrı başına
+timeout'un üstüne koşunun tamamı için `TTS_TOTAL_TIMEOUT_SECONDS` konuldu. Gerçek bir sağlayıcı
+takıldığında bu dayanıklı bir job'a taşınır (2E) — senaryo üretimiyle aynı borç.
+
+**Üretimde fake yok, boot da çökmüyor.** W13'ün kuralı, PM'in genelleştirdiği haliyle: çıktısı
+insan-onaylanabilir olan kabiliyet üretimde `disabled` adapter'a düşer (`503
+TTS_NOT_CONFIGURED`). Seslendirme iki kez niteliyor — zaten onaylanmış metni okuyor ve dinleyici
+fixture sesi ile satın alınmış sesi kulakla ayırt edemiyor. `TTS_ADAPTER` bu yüzden
+`reject_non_production_adapters` listesinde **yok**; storage/identity/materializer/render orada
+kalmaya devam ediyor.
+
+**Timeline hizalaması.** Üretilen ses `audio_tracks`'e `voiceover` olarak bağlanır; `asset_id`
+bir `voiceover_assets` satırını gösterir, yüklenmiş bir medya asset'ini değil — iki farklı
+tablo, iki farklı tenant-kapsamlı sorgu. `Timeline.asset_ids` bu yüzden voiceover kimliğini
+**içermez** (worker onu kaynak video sanıp indirmeye çalışırdı); `Timeline.voiceover_ids` ayrı.
+§18.3'ün "seslendirme süresi" kontrolü artık gerçeğe bağlı: seslendirme süresi canvas süresini
+aşamaz (`TIMELINE_VOICEOVER_DURATION_OVERFLOW`). Bu slice **yeni ses işleme yazmaz** — müzik
+ducking (`duck_under_voice`) 2A şemasında zaten var, miksaj filtresi yok.
+
+> **Açık, PM'e:** hiçbir render adapter'ı `voiceover` ses kaynağını kabiliyetinde bildirmiyor
+> (`audio_sources = {original}`), çünkü ses miksajı bu iş emrinin kapsamı dışında. Doğrulama
+> bunu temiz biçimde `TIMELINE_UNSUPPORTED_AUDIO_SOURCE` ile reddediyor, yani seslendirmeli bir
+> timeline bugün **kaydedilemiyor**. Süre kuralı yine de koşuyor ve iki bulgu birlikte
+> dönüyor — kural "bir gün bir adapter özellik kazanınca var olmaya başlayan" bir şey olmasın
+> diye. FFmpeg adapter'ına voiceover miksajı eklemek ayrı bir slice (2E).
+
 ## Render akışı
 
 ```
@@ -156,6 +237,9 @@ keşfettirmek yerine.
 | `TIMELINE_LOGO_ASSET_INVALID` | markanın logo olarak kaydetmediği görsel |
 | `TIMELINE_UNSUPPORTED_TRANSITION` / `_CROP_MODE` / `_AUDIO_SOURCE` / `_CAPTION_SOURCE` | adapter kabiliyeti dışında |
 | `TIMELINE_TOO_MANY_VIDEO_TRACKS` | bu adapter tek track destekliyor |
+| `TIMELINE_VOICEOVER_NOT_ACCESSIBLE` | olmayan, başka tenant'ın ya da medya asset'ine işaret eden seslendirme referansı (2C) |
+| `TIMELINE_VOICEOVER_NOT_READY` | sonuçlanmamış (`pending`) veya kısmi (`failed`) seslendirme — ölçülmüş süresi yok (2C) |
+| `TIMELINE_VOICEOVER_DURATION_OVERFLOW` | §18.3 "seslendirme süresi": ffprobe ile ölçülen ses canvas'ı aşıyor (2C) |
 
 Şema (parse) hataları ayrı: `422 TIMELINE_SCHEMA_INVALID` + `meta.issue`/`meta.pointer`.
 Başlıcaları `TIMELINE_UNKNOWN_FIELD` (ham koordinat buraya düşer),
@@ -215,15 +299,16 @@ verildiğinde konfigürasyon değişikliğidir.
 
 Katılık K3 (pazar kapsamı) ile ölçeklenir; alanların varlığı K3'e bağlı değil.
 
-## Bu iki slice'ın taşımadıkları
+## Bu üç slice'ın taşımadıkları
 
-TTS ve ses hizalama (2C), otomatik QC (2D), yaşam döngüsü ve entitlement tüketimi (2E),
-onay/revizyon akışı (2F), planlayıcı (2G). Yayınlama Phase 4. Gerçek C2PA manifest yazımı ayrı
-iş. `fade` geçişi ve voiceover/music ses kaynakları adapter kabiliyetinde **bildirilmiyor**,
-dolayısıyla doğrulama onları temiz biçimde reddediyor.
+Otomatik QC (2D), yaşam döngüsü ve entitlement tüketimi (2E), onay/revizyon akışı (2F),
+planlayıcı (2G). Yayınlama Phase 4. Gerçek C2PA manifest yazımı ayrı iş. `fade` geçişi ve
+voiceover/music ses kaynakları adapter kabiliyetinde **bildirilmiyor**, dolayısıyla doğrulama
+onları temiz biçimde reddediyor — seslendirmeli timeline'ın bugün kaydedilememesinin sebebi bu
+(yukarıdaki açık).
 
-Senaryo tarafında ayrıca: **gerçek AI sağlayıcısı yok** (W08 benchmark'ı + route politikası
-ADR'ından sonra), senaryodan timeline **otomatik kurulmuyor** (senaryo `required_scene_tags`
-taşır ama sahne ataması yapmaz — 2C/2E), ve senaryo üretimi **dayanıklı bir job değil**:
-istek-yanıt döngüsünde, sınırlı timeout ile koşuyor. `pending`'de takılı kalan satırları
-süpüren bir kurtarma taraması 2E'nin işi.
+Senaryo ve seslendirme tarafında ayrıca: **gerçek AI sağlayıcısı yok** (W08 benchmark'ı + route
+politikası ADR'ından sonra), senaryodan timeline **otomatik kurulmuyor** (senaryo
+`required_scene_tags` ve seslendirme segment süreleri taşır ama sahne ataması yapmaz — 2E), ve
+ikisi de **dayanıklı bir job değil**: istek-yanıt döngüsünde, sınırlı timeout ile koşuyorlar.
+`pending`'de takılı kalan satırları süpüren bir kurtarma taraması 2E'nin işi.

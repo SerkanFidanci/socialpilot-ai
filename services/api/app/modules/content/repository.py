@@ -46,7 +46,13 @@ from app.modules.brands.models import (
     ProductPrice,
 )
 from app.modules.content.domain import format_money
-from app.modules.content.models import ContentScript, ContentTimeline, PromptTemplate, RenderOutput
+from app.modules.content.models import (
+    ContentScript,
+    ContentTimeline,
+    PromptTemplate,
+    RenderOutput,
+    VoiceoverAsset,
+)
 from app.modules.content.script import (
     BrandBrief,
     CampaignBrief,
@@ -59,7 +65,8 @@ from app.modules.content.script import (
     sanitize_untrusted,
 )
 from app.modules.content.timeline import TextSource
-from app.modules.content.validation import AssetFacts, VerifiedValue
+from app.modules.content.tts import VoiceoverStatus
+from app.modules.content.validation import AssetFacts, VerifiedValue, VoiceoverFacts
 from app.modules.media.models import (
     IngestStatus,
     MediaAsset,
@@ -82,7 +89,7 @@ class ContentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def add(self, value: ContentScript | ContentTimeline | RenderOutput) -> None:
+    def add(self, value: ContentScript | ContentTimeline | RenderOutput | VoiceoverAsset) -> None:
         self._session.add(value)
 
     # --- timelines -----------------------------------------------------------------------
@@ -194,6 +201,44 @@ class ContentRepository:
         ).limit(fetch_size(limit))
         return list((await self._session.scalars(paged)).all())
 
+    # --- voiceovers ----------------------------------------------------------------------
+
+    async def get_voiceover(
+        self, business_id: UUID, voiceover_id: UUID, *, lock: bool = False
+    ) -> VoiceoverAsset | None:
+        statement = select(VoiceoverAsset).where(
+            VoiceoverAsset.business_id == business_id, VoiceoverAsset.id == voiceover_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(VoiceoverAsset | None, await self._session.scalar(statement))
+
+    async def list_voiceovers(
+        self,
+        business_id: UUID,
+        *,
+        cursor: Cursor | None,
+        limit: int,
+        script_id: UUID | None = None,
+        status: VoiceoverStatus | None = None,
+    ) -> list[VoiceoverAsset]:
+        """Return at most `limit + 1` rows so the caller can detect a next page."""
+
+        statement: Select[tuple[VoiceoverAsset]] = select(VoiceoverAsset).where(
+            VoiceoverAsset.business_id == business_id
+        )
+        if script_id is not None:
+            statement = statement.where(VoiceoverAsset.script_id == script_id)
+        if status is not None:
+            statement = statement.where(VoiceoverAsset.status == status)
+        paged = apply_cursor(
+            statement,
+            created_at=VoiceoverAsset.created_at,
+            identifier=VoiceoverAsset.id,
+            cursor=cursor,
+        ).limit(fetch_size(limit))
+        return list((await self._session.scalars(paged)).all())
+
     async def active_prompt_template(self, code: str) -> PromptTemplate | None:
         """The one live version of a prompt. No tenant filter: §17.6 is platform configuration.
 
@@ -249,6 +294,36 @@ class ContentFactsReader:
                 source_object_key=asset.storage_object_key,
             )
         return facts
+
+    async def voiceover_facts(
+        self, business_id: UUID, voiceover_ids: Sequence[UUID]
+    ) -> dict[UUID, VoiceoverFacts]:
+        """Facts for the tenant's own voiceovers; unknown ids are simply absent.
+
+        A `voiceover` audio track names a `voiceover_assets` row, not a `media_assets` row —
+        the audio was produced by this pipeline, never uploaded — so it resolves through its own
+        query. Absence covers "does not exist" and "belongs to another tenant" with one rule,
+        the same way asset facts do.
+        """
+
+        if not voiceover_ids:
+            return {}
+        statement = select(VoiceoverAsset).where(
+            VoiceoverAsset.business_id == business_id,
+            VoiceoverAsset.id.in_(tuple(voiceover_ids)),
+        )
+        return {
+            row.id: VoiceoverFacts(
+                voiceover_id=row.id,
+                # Only a settled run may be placed on a timeline: a `pending` row means calls
+                # may still be in flight, and a `failed` one has at best partial audio.
+                usable=row.status is VoiceoverStatus.GENERATED,
+                # The ffprobe-measured total. `None` would mean nothing measured it, which is
+                # exactly the case §18.3's duration check must refuse rather than skip.
+                duration_ms=row.total_duration_ms,
+            )
+            for row in (await self._session.scalars(statement)).all()
+        }
 
     async def logo_asset_ids(self, business_id: UUID) -> frozenset[UUID]:
         statement = select(BrandAsset.media_asset_id).where(

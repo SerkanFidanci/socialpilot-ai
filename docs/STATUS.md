@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | `7621b61`+ — W01→W14 + W13 kritik düzeltmesi merge edildi (yalnız W06 bekliyor), origin ile senkron |
-| Alembic head | `0013_script_generation` (tek head; zincir 0001→0013, merge sonrası up/down/up doğrulandı) |
-| Backend doğrulama | **628 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | W01→W15 merge edildi (yalnız W06 bekliyor); son dilim **W15 — Phase 2C seslendirme** |
+| Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
+| Backend doğrulama | **674 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -35,7 +35,9 @@
 
 ### Sırada
 
-**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.**
+**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.** 2A/2B/2C kapandı; sırada **2D (otomatik QC)**.
+
+> **2E'ye taşınan açık (W15):** hiçbir render adapter'ı `voiceover` ses kaynağını kabiliyetinde bildirmiyor, çünkü ses miksajı W15'in kapsamı dışındaydı. Seslendirme üretiliyor ve ffprobe ile ölçülüyor, ama `voiceover` track'i taşıyan timeline bugün `TIMELINE_UNSUPPORTED_AUDIO_SOURCE` ile reddediliyor. FFmpeg adapter'ına voiceover + ducking miksajı eklemek ayrı bir dilim.
 
 ### Başlamadı
 
@@ -130,7 +132,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 
 | [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · merge + **kritik düzeltme merge edildi** (`7621b61`): dedektör yazıyla/önekli Türkçe varyantları da yakalıyor, +16 test · birleşik Codex turu bekliyor | dal + worktree duruyor (tur bitene kadar) | Opus 5 / high | kullanıldı |
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **tamamlandı** · merge (`4e643fe`) — imza sızıntısı süreç genelinde kapandı, envanter 2 ek fingerprint eksiği bulup düzeltti | dal silinebilir (kendi Codex turu W13 düzeltmesiyle birleşecek) | Opus 5 / high | — |
-| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **şimdi** | `slice/2c-tts-voiceover` | Opus 5 / high | **SENDE** (`0014`) |
+| [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **tamamlandı** · `0014` · 674 test (+46) · bağımsız doğrulama bekliyor · **açık:** hiçbir render adapter'ı `voiceover` ses kaynağını bildirmiyor (miksaj kapsam dışıydı) → 2E | `slice/2c-tts-voiceover` | Opus 5 / high | kullanıldı |
 
 ### Dosya sahipliği (çakışma önleme)
 

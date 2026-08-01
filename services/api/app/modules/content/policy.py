@@ -34,6 +34,8 @@ class ContentAction(StrEnum):
     RENDER_REQUEST = "content.render.request"
     SCRIPT_READ = "content.script.read"
     SCRIPT_GENERATE = "content.script.generate"
+    VOICEOVER_READ = "content.voiceover.read"
+    VOICEOVER_GENERATE = "content.voiceover.generate"
 
 
 ACTION_PERMISSIONS: dict[ContentAction, Permission] = {
@@ -43,6 +45,10 @@ ACTION_PERMISSIONS: dict[ContentAction, Permission] = {
     ContentAction.RENDER_REQUEST: Permission.CONTENT_GENERATE,
     ContentAction.SCRIPT_READ: Permission.BUSINESS_READ,
     ContentAction.SCRIPT_GENERATE: Permission.CONTENT_GENERATE,
+    # Producing a voiceover is producing content, not changing the business — same line the rest
+    # of this table draws, and the same one PRD §4 draws when it gives an editor "içerik üretir".
+    ContentAction.VOICEOVER_READ: Permission.BUSINESS_READ,
+    ContentAction.VOICEOVER_GENERATE: Permission.CONTENT_GENERATE,
 }
 
 

@@ -424,6 +424,9 @@ class ContentTimelineService:
             forbidden_terms=await self._facts.forbidden_terms(business_id),
             verified_values=await self._facts.verified_values(business_id, references, now=now),
             now=now,
+            # A voiceover track names a `voiceover_assets` row, so it resolves through its own
+            # tenant-scoped query rather than through `asset_facts`.
+            voiceovers=await self._facts.voiceover_facts(business_id, timeline.voiceover_ids),
         )
 
     def _parse(self, document: Any) -> Timeline:

@@ -183,6 +183,35 @@ rejected text itself is never stored:
 | `SCRIPT_CTA_NOT_APPROVED` | a CTA the request did not name. Free CTA text cannot be expressed at all — the contract has no field for it |
 | `SCRIPT_RESOLVED_TEXT_TOO_LONG` | the line exceeded its ceiling after substitution |
 
+## Voiceover (PRD §14.8, §17.3 — slice 2C)
+
+Request-level rejections. All of these happen **before** a provider is called, so a refused
+request costs nothing and leaves no row:
+
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 404 | `VOICEOVER_SCRIPT_NOT_FOUND` | The script does not exist in the authorized tenant. Another tenant's real id answers exactly like a made-up one — the query is tenant-scoped, so the two are indistinguishable by construction. |
+| 404 | `VOICEOVER_NOT_FOUND` | The voiceover does not exist in the authorized tenant. |
+| 409 | `VOICEOVER_SCRIPT_NOT_USABLE` | The script is `pending` or `failed`. Only a script that settled successfully carries a resolved document, and only a resolved document contains values a record vouched for. |
+| 422 | `VOICEOVER_SCRIPT_NOT_VOICEABLE` | The stored document has no synthesizable lines, or a line is empty, over-long, or carries control characters. `meta.issue`/`meta.pointer` name the location; the text is never echoed. |
+| 422 | `VOICEOVER_VOICE_PROFILE_UNKNOWN` | The requested voice is not in the closed `VOICE_PROFILES` registry. |
+| 409 | `VOICEOVER_VOICE_PROFILE_NOT_CONFIGURED` | The deployment's default voice is not in the registry. Kept apart from the code above on purpose: a `422` there would blame the caller for a configuration error. |
+| 409 | `TTS_COST_LIMIT_EXCEEDED` | The estimated cost — per call **and** for the whole run — exceeds `TTS_MAX_COST_MINOR`. Also raised mid-run when settled cost passes the ceiling, which stops the remaining lines. |
+| 503 | `TTS_NOT_CONFIGURED` | No speech provider is configured for this environment. Production never serves fixture audio as real content, and declining here is why the application still boots without a provider. |
+
+Run-level failures. Calls happened, so every one of them has a `provider_usage` row and any
+audio already stored is recorded on the `failed` row rather than orphaned in the bucket:
+
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 502 | `TTS_GENERATION_FAILED` | The provider rejected a line permanently. |
+| 503 | `TTS_PROVIDER_UNAVAILABLE` | A line's provider call was unavailable, or the call or the whole run exceeded its timeout. |
+| 502 | `TTS_ROUTE_MISMATCH` | The provider answered as a different provider/model than the persisted route snapshot named. |
+| 503 | `VOICEOVER_AUDIO_UNMEASURABLE` | The probe could not run. The file may be fine; nothing may assume a duration it did not measure. |
+| 502 | `VOICEOVER_AUDIO_INVALID` | The produced file is not measurable audio, or its measured length is outside the permitted per-line or per-run bounds. |
+| 503 | `VOICEOVER_STORAGE_UNAVAILABLE` | The audio could not be stored. |
+| 502 | `VOICEOVER_STORAGE_METADATA_INVALID` | What storage observed differs from what the adapter said it wrote. The row must not describe one file while the bucket holds another. |
+
 ## Mapping and logging
 
 - Domain/application errors are typed and mapped in one HTTP exception boundary; controllers do not construct ad hoc error payloads.

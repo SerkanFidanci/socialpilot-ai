@@ -33,8 +33,10 @@ buradaki hiçbir sınıf domain kararı vermez.
 | `media/fake_ingest.py` | Byte'sız içerik denetimi / malware tarama / materialize fake'leri |
 | `media/fake_scene_speech.py` | Deterministik sahne tespiti, ses çıkarma ve ASR fake'leri |
 | `media/fake_video_understanding.py` | Deterministik frame çıkarma ve video-understanding fake'leri |
-| `ai/__init__.py` | `create_script_generator` — `SCRIPT_GENERATION_ADAPTER`'a göre fake/disabled seçimi; **üretim `fake` yerine disabled alır**, boot düşürülmez (gerekçe dosyanın içinde) |
+| `ai/__init__.py` | `create_script_generator` / `create_tts` — `SCRIPT_GENERATION_ADAPTER` ve `TTS_ADAPTER`'a göre fake/disabled seçimi; **üretim `fake` yerine disabled alır**, boot düşürülmez (gerekçe dosyanın içinde). `create_audio_probe` — fake'i **yoktur**, ölçüm garantinin kendisidir |
 | `ai/fake_script.py` | `FakeScriptGenerationAdapter` (fixture senaryo yazarı; düşman çıktıları için `output_json`/`failure`/`echo_untrusted_notes`) + `DisabledScriptGenerationAdapter` |
+| `ai/fake_tts.py` | `FakeTTSAdapter` — **gerçek WAV yazar** (metin uzunluğundan türetilmiş süre, yer tutucu olduğu belli 220 Hz ton); süre beyanını/dosya süresini ayrı ayrı bozabilen test kancaları + `DisabledTTSAdapter` |
+| `ai/audio_probe.py` | `FFprobeAudioProbe` — ses dosyasını ffprobe ile ölçer. Ayrı adapter, çünkü `media/technical.py`'nin probe'u video akışı şart koşar; ortak olan kod değil disiplin: sabit binary, shell yok, timeout, sınırlı çıktı |
 | `__init__.py` (ve alt paket `__init__`'leri) | Paket sınırları |
 
 ## Gereksinim, karar, mimari
@@ -46,5 +48,5 @@ buradaki hiçbir sınıf domain kararı vermez.
 ## Testler
 
 `tests/unit/test_frame_extraction.py` · `tests/unit/test_celery_publisher.py` ·
-`tests/unit/test_content_script_unit.py` · `tests/integration/test_alembic.py` ·
-ilgili modül testleri
+`tests/unit/test_content_script_unit.py` · `tests/unit/test_voiceover_unit.py` ·
+`tests/integration/test_alembic.py` · ilgili modül testleri

@@ -1,8 +1,9 @@
-# content — senaryo, timeline, parametrik düzenleme ve render modülü
+# content — senaryo, seslendirme, timeline, parametrik düzenleme ve render modülü
 
-**Sahibi:** senaryo contract'ı (PRD §18.1) ve `script_generation` kabiliyet portu, timeline
-dokümanı (§18.2), render öncesi doğrulama (§18.3), parametrik düzenleme (K4), `RenderPort`
-kabiliyet portu ve dayanıklı render job'ı, prompt versiyonlama (§17.6).
+**Sahibi:** senaryo contract'ı (PRD §18.1) ve `script_generation` kabiliyet portu, seslendirme
+(§14.8) ve `tts` kabiliyet portu, timeline dokümanı (§18.2), render öncesi doğrulama (§18.3),
+parametrik düzenleme (K4), `RenderPort` kabiliyet portu ve dayanıklı render job'ı, prompt ve ses
+profili versiyonlama (§17.6).
 **Sahibi değil:** FFmpeg/render ve AI adapter uygulamaları (→ `../../infrastructure/render/`,
 `../../infrastructure/ai/`), medya byte'ı ve materializer (→ `../media/`, ADR-002), doğrulanmış
 kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../operations/`), HTTP taşıma
@@ -41,22 +42,35 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   Timeline oluşturma `serialize_timeline`'ı, patch `serialize_patch`'i, senaryo üretimi
   `ScriptRequest.as_payload`'ı kullanır. Operasyon *sayısını* saklamak parmak izi değildi:
   aynı anahtarla farklı metin ilk revizyonu tekrar oynatıyordu (W11 doğrulaması, W14'te kapandı).
-- **Yazma yetkisi tek çizgidedir:** timeline yazma, patch, render isteği ve senaryo üretimi
-  `content.generate`. PRD §4'te editor içerik üretir; `business.update` yalnızca **işletmenin
-  kendisini** değiştirmektir.
+- **Yazma yetkisi tek çizgidedir:** timeline yazma, patch, render isteği, senaryo üretimi ve
+  seslendirme `content.generate`. PRD §4'te editor içerik üretir; `business.update` yalnızca
+  **işletmenin kendisini** değiştirmektir.
+- **Seslendirilen metin senaryonun çözülmüş dokümanıdır, isteğin değil.** `VoiceoverRequest`'in
+  metin alanı yoktur — ifade edilemeyen prose kontrolden kaçamaz. Şablon (`{{price:…}}`)
+  seslendirilmez; dinleyicinin duyduğu değer kaydın tuttuğu değerdir.
+- **Ses süresi ölçülür, beyan edilmez.** `AudioProbePort` dosyadan türetir; sağlayıcının
+  `declared_duration_ms` beyanı kayda **eklenir** ama hiçbir karar onu okumaz. §18.3'ün
+  "seslendirme süresi" kontrolü, sapma kaydı ve toplamlar yalnızca ölçümü kullanır.
+- **Sapma ölçülür, yargılanmaz.** `drift_ms` = ölçülen − senaryonun hedefi. Eşik 2D'nindir; bu
+  modülde eşik yoktur.
+- **`voiceover` ses track'i `voiceover_assets`'i gösterir**, `media_assets`'i değil. Bu yüzden
+  `Timeline.asset_ids` voiceover kimliğini içermez (`voiceover_ids` ayrı): worker onu kaynak
+  video sanıp materialize etmeye çalışırdı.
 
 ## Dosyalar
 
 | Dosya | İş |
 |---|---|
-| `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti, yasak terim eşleyici, `ScriptGenerationPort`, `RouteSnapshot`, prompt payload kurucusu |
+| `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti, yasak terim eşleyici, `ScriptGenerationPort`, `ProviderDescriptor`, `RouteSnapshot` (her kabiliyet aynı route kaydını kullanır), prompt payload kurucusu |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
+| `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
+| `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |
 | `timeline.py` | §18.2 dokümanı: kapalı şema, çapa/stil/metin-kaynağı enum'ları, parse + serialize |
 | `validation.py` | §18.3 kuralları (saf), `ValidationContext`, satır kaydırma, dokümante hata kodları |
 | `patch.py` | K4 parametrik düzenleme: kapalı operasyon kümesi, segment sınırına snap, track yeniden dizilimi, `serialize_patch` (idempotency fingerprint'inin alındığı kanonik biçim) |
 | `render.py` | `RenderPort`, `RenderCapabilities`, `RenderPlan`, §19.2 profilleri, disclosure/provenance durumları |
-| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` + `content_scripts` + `prompt_templates` |
-| `repository.py` | `ContentRepository` (tenant-kapsamlı, senaryo okumaları ve prompt sürümü dahil) + `ContentFactsReader` + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim |
+| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) |
+| `repository.py` | `ContentRepository` (tenant-kapsamlı; senaryo, prompt sürümü ve seslendirme okumaları dahil) + `ContentFactsReader` (`voiceover_facts` dahil) + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim |
 | `service.py` | `ContentTimelineService` — yetki, doğrulama, revizyon, render isteği, idempotency, audit |
 | `render_service.py` | `ContentRenderService` — job claim, materialize, render, depolama, dead-letter |
 | `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (**her yazma** `content.generate`, her okuma `business.read`) |
@@ -64,7 +78,7 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 
 ## Gereksinim, karar, mimari
 
-- [40a-content-planning-scenarios.md](../../../../../docs/product/requirements/40a-content-planning-scenarios.md) (§14) ·
+- [40a-content-planning-scenarios.md](../../../../../docs/product/requirements/40a-content-planning-scenarios.md) (§14, §14.8 seslendirmeli reklam) ·
   [40b-scenario-render-lifecycle.md](../../../../../docs/product/requirements/40b-scenario-render-lifecycle.md) (§18, §19) ·
   [35-ai-routing-cost.md](../../../../../docs/product/requirements/35-ai-routing-cost.md) (§17.5 çıktı güvenliği, §17.6 prompt versiyonlama) ·
   [99-external-platform-facts.md](../../../../../docs/product/requirements/99-external-platform-facts.md) (Meta AI etiketi, C2PA)
@@ -72,11 +86,13 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   [ADR-013](../../../../../docs/adr/ADR-013-single-server-deployment-topology.md) ·
   [ADR-015](../../../../../docs/adr/ADR-015-parametric-editing-model.md) · `ADR-016-render-port.md`
 - Mimari: [content-render.md](../../../../../docs/architecture/content-render.md) ·
-  [error-handling.md](../../../../../docs/architecture/error-handling.md) (SCRIPT_* kataloğu) ·
+  [error-handling.md](../../../../../docs/architecture/error-handling.md) (SCRIPT_* / TTS_* /
+  VOICEOVER_* katalogları) ·
   [Phase 2 planı](../../../../../docs/plans/active/phase-2-content-generation.md) §2
 
 ## Testler
 
 `tests/unit/test_content_timeline.py` · `tests/unit/test_render_port.py` ·
 `tests/unit/test_content_render_worker.py` · `tests/unit/test_content_script_unit.py` ·
-`tests/integration/test_content_render.py` · `tests/integration/test_content_script.py`
+`tests/unit/test_voiceover_unit.py` · `tests/integration/test_content_render.py` ·
+`tests/integration/test_content_script.py` · `tests/integration/test_content_voiceover.py`

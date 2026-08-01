@@ -161,6 +161,30 @@ class Settings(BaseSettings):
     script_generation_max_note_chars: int = Field(default=400, ge=50, le=4_000)
     script_generation_max_brief_chars: int = Field(default=400, ge=50, le=4_000)
     script_generation_target_duration_ms: int = Field(default=20_000, ge=5_000, le=90_000)
+    # --- text to speech (W15, PRD §17.3) ---
+    # The `tts` adapter. `fake` writes a real but obviously synthetic tone file; `disabled`
+    # declines every call with a documented code. Absent from `reject_non_production_adapters`
+    # for the same reason `script_generation_adapter` is: synthesized speech reading approved
+    # copy is publishable, so production is swapped onto `disabled` rather than refused at boot.
+    # See `app/infrastructure/ai/__init__.py`.
+    tts_adapter: Literal["fake", "disabled"] = "fake"
+    tts_timeout_seconds: int = Field(default=60, ge=1, le=600)
+    # One voiceover is several calls, and this endpoint answers synchronously. The per-call
+    # timeout alone would let eight slow lines hold a request open for eight times as long, so
+    # the whole run carries its own ceiling. A real provider moves this to a durable job.
+    tts_total_timeout_seconds: int = Field(default=180, ge=1, le=1_800)
+    tts_probe_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    # The per-call ceiling checked *before* any provider is called, in the adapter's own minor
+    # units; the whole run's estimate is checked against it too. Zero by default: a route that
+    # costs money is refused until someone sets a budget for it.
+    tts_max_cost_minor: int = Field(default=0, ge=0, le=10_000_000)
+    tts_route_revision: int = Field(default=1, ge=1, le=1_000_000)
+    tts_quality_tier: Literal["draft", "standard", "professional"] = "standard"
+    tts_data_region: str = Field(default="unspecified", min_length=1, max_length=32)
+    # The voice profile used when a request does not name one. Must be a code in
+    # `VOICE_PROFILES`; validated at startup rather than on the first synthesis.
+    tts_default_voice_profile: str = Field(default="tr-warm-v1", min_length=1, max_length=64)
+    tts_max_audio_bytes: int = Field(default=20_971_520, ge=1_024, le=268_435_456)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.
@@ -377,6 +401,13 @@ class Settings(BaseSettings):
             )
         if self.render_job_timeout_seconds < self.render_step_timeout_seconds:
             raise ValueError("RENDER_JOB_TIMEOUT_SECONDS cannot be below one render step")
+        if (
+            self.tts_total_timeout_seconds
+            < self.tts_timeout_seconds + self.tts_probe_timeout_seconds
+        ):
+            raise ValueError(
+                "TTS_TOTAL_TIMEOUT_SECONDS cannot be below one synthesis call plus its probe"
+            )
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,
             self.scene_speech_job_timeout_seconds,

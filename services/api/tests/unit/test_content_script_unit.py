@@ -729,8 +729,15 @@ def test_every_content_write_answers_the_same_way_for_the_same_role() -> None:
         ContentAction.TIMELINE_WRITE,
         ContentAction.RENDER_REQUEST,
         ContentAction.SCRIPT_GENERATE,
+        # W15: producing a voiceover is producing content, so it answers the same way.
+        ContentAction.VOICEOVER_GENERATE,
     )
-    reads = (ContentAction.TIMELINE_READ, ContentAction.RENDER_READ, ContentAction.SCRIPT_READ)
+    reads = (
+        ContentAction.TIMELINE_READ,
+        ContentAction.RENDER_READ,
+        ContentAction.SCRIPT_READ,
+        ContentAction.VOICEOVER_READ,
+    )
 
     assert {required_permission(action) for action in writes} == {Permission.CONTENT_GENERATE}
     assert {required_permission(action) for action in reads} == {Permission.BUSINESS_READ}

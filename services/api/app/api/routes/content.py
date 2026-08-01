@@ -25,17 +25,26 @@ from app.core.config import Settings
 from app.core.correlation import get_correlation_id
 from app.core.errors import ProblemException
 from app.core.pagination import MAX_PAGE_SIZE, decode_cursor
-from app.infrastructure.ai import create_script_generator
+from app.infrastructure.ai import create_audio_probe, create_script_generator, create_tts
 from app.infrastructure.database.session import get_session
 from app.infrastructure.render import create_render
-from app.modules.content.models import ContentScript, RenderOutput, RenderStatus, RenderTrigger
+from app.modules.content.models import (
+    ContentScript,
+    RenderOutput,
+    RenderStatus,
+    RenderTrigger,
+    VoiceoverAsset,
+)
 from app.modules.content.patch import MAX_PATCH_OPERATIONS, parse_patch
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
 from app.modules.content.script import ScenarioCode, ScriptGenerationPort, ScriptStatus
 from app.modules.content.script_service import ScriptGenerationService, ScriptRequest
 from app.modules.content.service import ContentTimelineService, TimelineView
 from app.modules.content.timeline import TimelineSchemaError
+from app.modules.content.tts import TTSPort, VoiceoverStatus
+from app.modules.content.tts_service import VoiceoverRequest, VoiceoverService
 from app.modules.identity.models import User
+from app.modules.media.storage import MultipartStoragePort
 
 router = APIRouter(prefix="/v1", tags=["content"])
 
@@ -64,6 +73,30 @@ def script_service(
 ) -> ScriptGenerationService:
     settings = cast(Settings, request.app.state.settings)
     return ScriptGenerationService(session, settings, generator)
+
+
+def get_tts(request: Request) -> TTSPort:
+    """The speech port, resolved through FastAPI so a test can substitute one adapter.
+
+    Same reason as `get_script_generator`: the interesting cases are a provider that fails part
+    way through a multi-line run, and one that misreports the length of the file it just wrote.
+    Neither can be produced without handing the service an adapter that does exactly that.
+    """
+
+    return create_tts(cast(Settings, request.app.state.settings))
+
+
+def voiceover_service(session: AsyncSession, request: Request, tts: TTSPort) -> VoiceoverService:
+    settings = cast(Settings, request.app.state.settings)
+    return VoiceoverService(
+        session,
+        settings,
+        tts,
+        # No fixture probe exists: measurement is the guarantee this slice makes, so it runs
+        # ffprobe in every environment.
+        create_audio_probe(settings),
+        cast(MultipartStoragePort, request.app.state.storage),
+    )
 
 
 def correlation() -> str:
@@ -438,3 +471,159 @@ async def get_script(
         user_id=user.id, business_id=business_id, script_id=script_id
     )
     return ScriptResponse.make(script)
+
+
+class VoiceoverGenerateRequest(BaseModel):
+    """Which script to voice, and in which registered voice — nothing else.
+
+    There is no text field, and adding one would be the shortest path around the rule slice 2B
+    exists for. What gets spoken is the script's resolved document, where every price and date
+    was substituted by code from a verified record. `voice_profile_code` names an entry in the
+    closed `VOICE_PROFILES` registry; a speaking rate or a raw provider voice id is not a
+    caller's to choose, so neither is expressible here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    script_id: UUID
+    voice_profile_code: str | None = Field(default=None, max_length=64)
+
+
+class VoiceoverSegmentResponse(BaseModel):
+    index: int
+    purpose: str
+    # The object key, never a signed URL. A download link is minted on demand by the storage
+    # adapter; putting one in a response body would put it in logs and caches.
+    object_key: str
+    content_type: str
+    byte_size: int
+    duration_ms: int
+    # What the provider claimed. Returned beside the measurement rather than instead of it, so a
+    # provider that misreports its own output is visible to a client too.
+    declared_duration_ms: int | None
+    target_duration_ms: int
+    drift_ms: int
+
+
+class VoiceoverResponse(BaseModel):
+    id: UUID
+    business_id: UUID
+    script_id: UUID
+    status: VoiceoverStatus
+    voice_profile_code: str
+    voice_profile_version: int
+    audio_format: str
+    segments: list[VoiceoverSegmentResponse]
+    total_duration_ms: int | None
+    target_duration_ms: int | None
+    drift_ms: int | None
+    provider: str | None
+    model_name: str | None
+    failure_code: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+    @classmethod
+    def make(cls, voiceover: VoiceoverAsset) -> VoiceoverResponse:
+        route = voiceover.route_snapshot or {}
+        return cls(
+            id=voiceover.id,
+            business_id=voiceover.business_id,
+            script_id=voiceover.script_id,
+            status=voiceover.status,
+            voice_profile_code=voiceover.voice_profile_code,
+            voice_profile_version=voiceover.voice_profile_version,
+            audio_format=voiceover.audio_format,
+            segments=[
+                VoiceoverSegmentResponse.model_validate(segment)
+                for segment in voiceover.segments or []
+            ],
+            total_duration_ms=voiceover.total_duration_ms,
+            target_duration_ms=voiceover.target_duration_ms,
+            drift_ms=voiceover.drift_ms,
+            # Provider and model only. The cost ceiling and data region are operational and stay
+            # out of a tenant-facing body.
+            provider=_route_text(route, "provider"),
+            model_name=_route_text(route, "model"),
+            failure_code=voiceover.failure_code,
+            created_at=voiceover.created_at,
+            completed_at=voiceover.completed_at,
+        )
+
+
+class VoiceoverPageResponse(BaseModel):
+    items: list[VoiceoverResponse]
+    next_cursor: str | None
+
+
+@router.post(
+    "/businesses/{business_id}/voiceovers",
+    response_model=VoiceoverResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_voiceover(
+    business_id: UUID,
+    payload: VoiceoverGenerateRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    tts: Annotated[TTSPort, Depends(get_tts)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> VoiceoverResponse:
+    """Voice one generated script (PRD §14.8), synchronously, one object per line."""
+
+    voiceover = await voiceover_service(session, request, tts).generate(
+        user_id=user.id,
+        business_id=business_id,
+        request=VoiceoverRequest(
+            script_id=payload.script_id, voice_profile_code=payload.voice_profile_code
+        ),
+        idempotency_key=idempotency_key,
+        correlation_id=correlation(),
+    )
+    return VoiceoverResponse.make(voiceover)
+
+
+@router.get("/businesses/{business_id}/voiceovers", response_model=VoiceoverPageResponse)
+async def list_voiceovers(
+    business_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    tts: Annotated[TTSPort, Depends(get_tts)],
+    cursor: Annotated[str | None, Query(max_length=256)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
+    script_id: Annotated[UUID | None, Query()] = None,
+    voiceover_status: Annotated[VoiceoverStatus | None, Query(alias="status")] = None,
+) -> VoiceoverPageResponse:
+    """List this business's voiceovers newest first, with an opaque cursor"""
+
+    page = await voiceover_service(session, request, tts).list_voiceovers(
+        user_id=user.id,
+        business_id=business_id,
+        cursor=decode_cursor(cursor),
+        limit=limit,
+        script_id=script_id,
+        status=voiceover_status,
+    )
+    return VoiceoverPageResponse(
+        items=[VoiceoverResponse.make(voiceover) for voiceover in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.get("/businesses/{business_id}/voiceovers/{voiceover_id}", response_model=VoiceoverResponse)
+async def get_voiceover(
+    business_id: UUID,
+    voiceover_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    tts: Annotated[TTSPort, Depends(get_tts)],
+) -> VoiceoverResponse:
+    """Read one voiceover: its measured segments, its drift, and its provenance"""
+
+    voiceover = await voiceover_service(session, request, tts).get_voiceover(
+        user_id=user.id, business_id=business_id, voiceover_id=voiceover_id
+    )
+    return VoiceoverResponse.make(voiceover)
