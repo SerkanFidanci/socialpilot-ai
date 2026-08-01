@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | W01→W16 merge edildi (yalnız W06 bekliyor). **Codex teyit turu döndü (2026-08-01): W15 TEMİZ (6/6); W16'da 2 kritik + 1 orta → düzeltme turu 2 sıcak oturumda** (confusable kapsamı, `Cn` görünmezler, yüzde-kodlu parametre adları) |
+| `main` | W01→W16 merge edildi (yalnız W06 bekliyor). Codex teyit turu (2026-08-01): W15 TEMİZ (6/6); W16'da 2 kritik + 1 orta → **düzeltme turu 2 tamamlandı, `fix/verification-followups-3` dalında merge bekliyor** (alfabe kısıtı, `Cn`/`Co` kategori kuralı, yüzde-kodlu parametre adları) |
 | Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
-| Backend doğrulama | **743 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **743 pytest** `main`'de · **792** W16 düzeltme turu 2 dalında (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -133,7 +133,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — Unicode görünmez/normalizasyon varyantları dedektörü atlatıyor → **W16**; 2 yanlış pozitif bilinçli politika olarak pinlenecek | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
 | [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **KAPANDI** · merge · `0014` · **Codex doğrulaması geçti (6/6)** — serbest metin yolu yok, tenant sızıntısı yok, tavan çağrı öncesi duruyor, beyan ölçümü ezemiyor, idempotency kanonik, imza sızmıyor · **açık:** render adapter'ları `voiceover` kaynağını bildirmiyor → 2E | dal + worktree silindi | Opus 5 / high | kullanıldı |
-| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektöre NFKC+Cf normalizasyonu, yanlış pozitif pinleri | merge edildi ama **düzeltme turu 2 AÇIK** (teyit turu: Coptic `Ⲧ` confusable'da yok, `Cn` U+2065 temizlenmiyor, `%53ignature` fast-path'i atlatıyor) · ayrıca 3 kalıp-grameri açığı → W17 | `fix/verification-followups-3` (sıcak oturum, worktree duruyor) | Opus 5 / high | — (0014 kullanıldı, W16'da yok) |
+| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | 1. tur merge edildi · **düzeltme turu 2 tamamlandı, merge edilmedi** (792 pytest yeşil): Latin dışı **alfabe kısıtı** (`SCRIPT_UNSUPPORTED_CHARACTER`), görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde kodlu adları `%(?:25)*XX` ile görüyor · **W17 kapsamı genişletilmeli:** Latin harf katlaması **iki yön** (`turk lirasi` + `ṬL`/`ŦL`) tek değişiklik | `fix/verification-followups-3` (merge bekliyor) | Opus 5 / high | — (0014 kullanıldı, W16'da yok) |
 
 ### Dosya sahipliği (çakışma önleme)
 

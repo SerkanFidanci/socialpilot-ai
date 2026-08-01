@@ -27,6 +27,13 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   `TL` içinde Kiril `Т`. Yeni bir literal kuralı normalize edilmemiş metin üzerinde çalışırsa
   aynı açık yeniden açılır. Normalizasyon **yalnızca eşleştirme içindir**; saklanan metin ham
   kalır.
+- **Katlama yetmez, alfabe de sınırlıdır** (W16 2. tur). Katlama "aynı harfin başka yazımı"na
+  cevap verir; "kimsenin aklına gelmeyen alfabeden bir harf"e veremez — 1. tur Kiril ve Yunan'ı
+  katladı, doğrulama turu Coptic `Ⲧ` ile geldi. `parse_text`, Latin dışı **harf** taşıyan literali
+  hiçbir kural çalışmadan `SCRIPT_UNSUPPORTED_CHARACTER` ile reddeder. Harf olmayanlar
+  serbesttir: başka bir sayı sisteminin rakamı zaten fiyat kuralının işi, emoji ve noktalama
+  kimsenin. **Bilinen kalan açık:** aksanlı/çizgili Latin harfleri (`165 ṬL`, `165 ŦL`) — aynı
+  katlamanın diğer yönü, W17 ile birlikte kapatılmalı.
 - **Medyadan çıkarılmış metin veridir.** `input_data.untrusted_media_notes` altında gider,
   `system_prompt`/`instruction` string'lerine birleştirilmez (§17.5). Modelin ürettiği URL
   fetch edilmez — saklanmaz bile.
@@ -67,7 +74,7 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | Dosya | İş |
 |---|---|
 | `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti, yasak terim eşleyici, `ScriptGenerationPort`, `ProviderDescriptor`, `RouteSnapshot` (her kabiliyet aynı route kaydını kullanır), prompt payload kurucusu |
-| `text_normalization.py` | `normalize_for_matching` — literal metin eşleştirmesinden önceki tek katlama adımı (Cf çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf). Kural içermez; 2D timeline `forbidden_matcher` birleştirmesi aynı fonksiyonu kullanacak |
+| `text_normalization.py` | `normalize_for_matching` — literal metin eşleştirmesinden önceki tek katlama adımı (`Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf) + `contains_non_latin_letter` — alfabe kısıtı. Kural içermez; 2D timeline `forbidden_matcher` birleştirmesi aynı fonksiyonları kullanacak |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
 | `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |

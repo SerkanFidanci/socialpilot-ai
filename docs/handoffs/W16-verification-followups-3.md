@@ -1,7 +1,7 @@
 # W16 — Doğrulama bulguları 3. tur: log `extra` sızıntısı + dedektör Unicode atlatması
 
 **Dal:** `fix/verification-followups-3` · **Base:** `main` · **Migration slotu: YOK** (`0014` W15'te — migration dosyalarına dokunma)
-**Durum:** merge edildi (`5505537`) · **DÜZELTME TURU 2 AÇIK** — teyit turu 2 kritik + 1 orta buldu, aşağıdaki "Düzeltme turu 2" bölümüne bak
+**Durum:** merge edildi (`5505537`) · **düzeltme turu 2 tamamlandı** (`fix/verification-followups-3`, merge edilmedi) — bkz. "Rapor — düzeltme turu 2"
 
 ## Düzeltme turu 2 — teyit bulguları (PM, 2026-08-01)
 
@@ -292,3 +292,195 @@ Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fc5555f`) · `COMPOS
 | 6 | Mevcut odaklı süitler yeni #1–#3 girdilerini kapsamıyor. | orta | `RUN_INTEGRATION_TESTS=1 python -m pytest -q tests/unit/test_logging_redaction.py tests/unit/test_content_script_unit.py tests/integration/test_content_script.py` → `191 passed` (1 Starlette/httpx deprecation uyarısı). | açık |
 
 **Karar:** düzeltme gerekiyor. Normalizasyonun görünmez/uyumlu karakter seti ve confusable kapsamı genişletilmeli; redaksiyon, query parametre adını eşleştirmeden önce güvenli şekilde yüzde-çözülmüş biçimi de incelemelidir. Her üç açık HTTP/Queue regresyon testleriyle kapatılmalıdır.
+
+## Rapor — düzeltme turu 2 · 2026-08-02 · yürüten oturum (Opus 5)
+
+**Dal:** `fix/verification-followups-3` (`git merge main` ile `96ba2f1` üzerine güncellendi) ·
+**Durum:** tamamlandı, dalda bırakıldı
+
+### 1 — Confusable kapsamı: sınıf kapatıldı
+
+**Seçim: WO'nun (b) seçeneği, ama daha katı hâliyle — "karma yazı" değil, "tek yazı".** Gerekçe,
+ikisini de deneyerek:
+
+- **(a) UTS #39 tablosundan üretilmiş eşleme** dış bir Unicode veri dosyası ister ve her Unicode
+  sürümüyle bayatlar. Daha önemlisi kendisi bir *bilinen-kötü listesi*: az önce Coptic karşısında
+  düşen savunmanın aynı şekli. Bir sonraki tur tabloya girmemiş bir çifti bulur.
+- **(b) karma-yazı token kuralı** yazıldığı gibi eksik: `165 ⲦⲚ` tokeninde **hiç Latin harf yok**,
+  yani "Latin + Latin-olmayan karışımı" tetiklenmez ve metin geçer. Bunu ölçtüm; tabloda
+  "coptic throughout" satırı bu girdiyi pinliyor.
+- **Uygulanan:** `contains_non_latin_letter` — normalize edilmiş literalde **Latin dışı bir harf**
+  varsa metin `SCRIPT_UNSUPPORTED_CHARACTER` ile reddedilir. Kontrol `parse_text`'te, kontrol
+  karakteri kuralının hemen yanında: hiçbir içerik kuralı çalışmadan önce. Latin olma testi
+  `unicodedata.name(...)` ile yapılır (`LATIN SMALL LETTER DOTLESS I`, `LATIN CAPITAL LETTER I
+  WITH DOT ABOVE` — Türkçe alfabesinin tamamı tek bir string karşılaştırmasının beri tarafında).
+
+Bu, bir tablo değil bir **sınır**: Coptic, Cherokee, Lisu, Deseret, N'Ko, Osage, Vai, Tifinagh,
+Hangul, Katakana, Han — hepsi "Latin değil" olduğu için tek kuralla kapanıyor ve yeni bir Unicode
+sürümü kuralı bayatlatmıyor. Harf **olmayanlar** serbest bırakıldı: başka bir sayı sisteminin
+rakamı zaten fiyat kuralının işi (Arap-Hint `١٦٥ TL` yakalanıyor), emoji ve noktalama kimsenin.
+
+Confusable tablosu **kaldırılmadı**: artık taşıyıcı değil, ama gerçekten karşılaşılan
+alfabelerde (Kiril/Yunan) reddin *gerekçesini* doğru tutuyor — "uydurulmuş fiyat", "yanlış
+alfabe" değil.
+
+### 2 — Görünmezler kategoriyle
+
+`_INVISIBLE_CODE_POINTS` enumerasyonu tek başına U+2065'i kaçırdı çünkü karakter **atanmamış**;
+hiçbir görünmez-karakter listesinde yoktu ve arkasında ~800 bin atanmamış kod noktası daha var.
+Normalizasyon artık kategoriyle çalışıyor: `Cf` (format), **`Cn` (atanmamış)**, **`Co` (private
+use)** ve `Cs` (surrogate). `Cc` bilinçli olarak **dışarıda** — kontrol karakteri sessizce
+temizlenecek bir şey değil, `SCRIPT_CONTROL_CHARACTER` ile dokümante bir rettir.
+
+Kalan tek enumerasyon, *atanmış, adı olan ve yine de hiçbir şey çizmeyen* dört kod noktası
+(Hangul dolgu harfleri ve braille boşluğu). Bunları adlandıran bir kategori yok; Hangul
+dolguları `Lo`, yani **kelime karakteri**, ve bir rakamın yanına konduğunda `(?<!\w)` sınırını
+çökertiyorlar. Bunlar ayrıca alfabe kuralının da kapsamında (Latin değiller), yani iki katman.
+
+### 3 — Yüzde kodlu parametre adları
+
+`X-Amz-%53ignature` sunucu ve `parse_qsl` için hâlâ `X-Amz-Signature`, ama ham metinde `sig`
+yok — hızlı yol satırı atlıyordu. Kaçış **derinliği sınırsız**: `%2553` → `%53` → `S`. Sabit
+sayıda çözme turu bunu kapatmaz, o yüzden çözmek yerine kalıp genişletildi: adın her karakteri
+`(?:c|%(?:25)*XX)` olarak kabul ediliyor, `=` da `%3d` biçiminde gelebiliyor. Her iki hex
+büyük/küçük hâli listeleniyor çünkü `%53` ile `%73` farklı **rakam** çiftleri ve `(?i)` onları
+`S`/`s` gibi ilişkilendirmiyor.
+
+Maskeleme **ham biçimde** uygulanıyor: parametre adı ve ayırıcı geldiği gibi kalıyor, yalnızca
+değer düşüyor — log satırı hâlâ gerçekten yapılan isteği okutuyor.
+
+Geniş kalıp yalnızca metinde `%` varsa çalışıyor, yani sıradan bir log satırı bedelini ödemiyor.
+Hızlı yolun güvenliği artık **iki dallı bir argüman** ve iki dal da testli: (i) harfi harfine
+yazılmış bir ad işaretçilerden (`sig`/`cred`/`token`/`keyid`/`accessid`) birini içerir; (ii)
+başka türlü yazılmış bir ad bunu yapmak için `%` gerektirir.
+
+### 4 — Regresyon testleri
+
+| Bulgu | Test | Ne kanıtlıyor |
+|---|---|---|
+| #1 Coptic | `test_a_letter_from_another_alphabet_is_refused_before_any_rule_runs` (12 alfabe) + `test_an_unknown_alphabet_or_code_point_never_reaches_a_stored_script` | HTTP'de `422`, satır `failed`, **`document IS NULL`** |
+| #2 U+2065 | `test_an_unassigned_or_private_code_point_cannot_break_a_figure_apart` (5 girdi) + aynı HTTP testi | fiyat kalıbı bölünmüyor; kalıcı doküman yok |
+| #3 yüzde kodlama | `test_a_percent_encoded_parameter_name_still_loses_its_value` (10 biçim) · `..._on_the_extra_surface_too` (10 biçim) · `test_a_percent_encoded_parameter_name_cannot_ride_a_queue_out` | mesaj, `extra` ve **QueueHandler/QueueListener** çıktısında sentinel yok |
+| yanlış pozitif | `test_latin_copy_is_not_collateral_damage` (7 girdi) · `test_an_ordinary_percent_sign_is_not_mistaken_for_an_encoded_name` | Türkçe alfabesinin tamamı, emoji, tire, `₺`, `progress=50%` etkilenmiyor |
+
+Ayrıca: bu turda test dosyalarındaki **görünmez saldırı karakterleri `\uXXXX` kaçış metnine
+çevrildi** (17 karakter entegrasyon dosyasında, 101 birim dosyasında). Payload'ı görünmez olan
+bir güvenlik testi diff'te de görünmez — saldırının dayandığı özelliğin ta kendisi. Okunur Türkçe
+harfler, tireler ve emoji olduğu gibi bırakıldı; yalnızca bir atlatma taşıyan karakterler kaçışa
+çevrildi.
+
+### 5 — Kendi düzeltmeme saldırı
+
+**Dedektör** (35 girdi, `sp-w16` konteynerinde gerçek kodda):
+
+| Sınıf | Denenen | Sonuç |
+|---|---|---|
+| Farklı yazı sistemleri | Coptic (karışık ve tamamen), Cherokee (ikisi), Lisu, Deseret, N'Ko, Osage, Vai, Tifinagh, Hangul jamo, Katakana, Han | **12/12 reddedildi** (`SCRIPT_UNSUPPORTED_CHARACTER`) |
+| `Cn`/`Co`/`Cs` | U+2065, U+0378, U+05EB, U+E000, U+F8FF, U+FDD0 (noncharacter), U+10FFFF, tek başına surrogate | **8/8 engellendi** (fiyat olarak yakalandı) |
+| Uyumluluk formları | modifier capital T, daire içi `ⓉⓁ`, script small l, matematiksel kalın `𝐓𝐋`, fullwidth | **hepsi katlandı ve yakalandı** |
+| Kombinasyon | Coptic+ZWSP, Cherokee+U+2065 | **2/2 reddedildi** |
+| Yanlış pozitif kontrolü | Türkçe alfabesinin tamamı, emoji'li kopya, `₺`, sıradan sayılar | **4/4 doğru geçti** |
+
+**Redaksiyon** (21 biçim). Kritik ölçüt: bir biçim ancak `parse_qsl` onu **kanonik bir imza
+parametresi adına çözüyorsa** gerçek bir kaçış kanalıdır; aksi hâlde hiçbir S3/GCS/Azure sunucusu
+onu imza parametresi saymaz.
+
+| Biçim | `parse_qsl` çözümü | Redaktör |
+|---|---|---|
+| `%53` · küçük harf `%73` · ilk karakter `%58` · tamamı kodlu · kodlu tire · `%3D` ayırıcı · credential · security-token · GoogleAccessId · Azure `sig` | **kanonik** | **maskelendi** |
+| `%2553` · `%252553` · `%25252553` · karışık seviye · `%253D` | kanonik **değil** (tek tur çözülüyor) | yine de maskelendi (iki kez çözen bir proxy/sunucu için güvenli taraf) |
+| `+` boşluk · `%C2%53` · overlong `%C1%93` · HTML entity `&#83;` · fullwidth `Ｓ` · `%00` | kanonik **değil** (`X-Amz-Sign ature`, `X-Amz-\ufffdSignature`, …) | maskelenmedi — **kaçış kanalı değil**: sunucu bu adları imza parametresi olarak kabul etmez |
+
+Fork edilmiş çocuk süreç, `logging.makeLogRecord`, record'u değiştiren filtre, `LoggerAdapter`,
+doğrudan `Handler.handle` ve iç içe `extra` yolları 1. turdan beri testli ve bu turda tekrar
+koşuldu.
+
+**Bulduğum ve DÜZELTMEDİĞİM tek sınıf — PM kararı gerektiriyor:**
+
+`165 ṬL` (nokta altlı T, U+1E6C) ve `165 ŦL` (çizgili T, U+0166) **geçiyor**. Bunlar Latin
+harfleri, yani alfabe kuralı onları reddetmiyor; katlama da `t`'ye indirmiyor.
+
+Bunu bilerek bırakmamın nedeni, WO'nun kendi ilkesi — *örneği değil sınıfı kapat*:
+
+- `Ṭ` ayrıştırılabilir (NFD → `T` + birleşen nokta), yani bir "Latin aksanlarını at" adımı onu
+  kapatır. **Ama `Ŧ`, `Ⱦ`, `Ƭ`, `Đ`, `Ł` ayrıştırılamaz** — tek kod noktası, kanonik ayrıştırması
+  yok. Sadece `Ṭ`'yi kapatmak tam olarak "örneği kapatmak" olurdu.
+- Sınıfın tamamını kapatan iki yol var ve **ikisi de PM kararı**: (i) aksanları atan katlama +
+  kalıp literallerinin aksansız biçimde yeniden yazılması — bu **PM'in zaten W17'ye yazdığı
+  "diyakritiksiz Türkçe" işiyle aynı değişiklik, sadece diğer yönü** (`165 turk lirasi` ile
+  `165 ṬL` tek bir katlamayla birlikte kapanır, ayrı ayrı değil); (ii) alfabeyi Türkçe alfabesine
+  daraltmak — bu sınıfı bütünüyle kapatır ama **işletme adı aksanlıysa üretimi kalıcı olarak
+  bloke eder** ("Café Nero" yazan model her seferinde reddedilir ve yeniden üretim bunu çözmez),
+  yani ürün kararı.
+- Bu WO'nun kapsam-dışı maddesi hâlâ "dedektörün kural setini genişletme" diyor ve (i) her kalıp
+  literalini yeniden yazmayı gerektiriyor.
+
+**PM'e somut istek:** W17 "diyakritiksiz Türkçe" olarak değil, **"Latin harf katlaması, iki yön"**
+olarak kapsanmalı — eksik aksan (`turk lirasi`) ve fazla/farklı aksan (`ṬL`, `ŦL`) tek bir
+normalizasyon + kalıp yeniden yazımıyla kapanır; ayrı turlar hâlinde yapılırsa ikinci yön
+kaçınılmaz olarak bir sonraki doğrulama turunda kritik olarak geri gelir. Ayrıca ayrıştırılamayan
+Latin harfleri için (ii)'nin dar bir hâli gerekebilir; onun ürün maliyeti yukarıda.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **UTS #39 tablosu üretici script'i yazılmadı** — yukarıdaki (a)/(b) gerekçesi; kısıt kuralı
+  tablonun kapsadığı her şeyi ve kapsamadıklarını da kapatıyor.
+- **Latin harf katlaması** — yukarıda, W17.
+- **`165 T.L.` / `165 T L` / `⑴⑸`** — 1. turda raporlandı, kalıp grameri, W17.
+- `docs/index.md` ve `docs/adr/README.md`'ye dokunulmadı (W03 tekeli); yeni ADR dosyası yok.
+
+### Doğrulama
+
+Araç zinciri: **Python 3.13.14 · pytest 9.1.1 · mypy 2.3.0 · ruff 0.16.0 · PostgreSQL 16.14 ·
+MinIO · FFmpeg · Docker Engine 25.0.3 / Compose v2.24.6-desktop.1**. İzole stack
+`COMPOSE_PROJECT_NAME=sp-w16` (worktree kökünden, `--env-file .env.w16`; API 8020, PG 55452,
+Redis 56399, MinIO 59020/59021). Tüm koşular **konteyner içinde**.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | **yeşil** |
+| `ruff format --check` | **yeşil** — 190 dosya |
+| `mypy .` (strict) | **yeşil** — 178 dosya |
+| `pytest` (`RUN_INTEGRATION_TESTS=1`, gerçek PG + MinIO + FFmpeg) | **yeşil** — **792 passed** (taban 743, +49) |
+| `check-openapi` (kontrat drift) | **yeşil** — yeniden üretildi, **fark yok** (yeni kod `meta.issue` değeri, şema değil) |
+| Alembic head | `0014_voiceover_assets` — **değişmedi**; `migrations/` altında değişiklik yok |
+
+| # | WO maddesi | Sonuç |
+|---|---|---|
+| 1 | Confusable sınıfı kapatıldı, gerekçeli | ✅ tek-yazı kısıtı; (a) ve (b)'nin neden seçilmediği ölçümle yukarıda |
+| 2 | Görünmezler kategoriyle | ✅ `Cf`/`Cn`/`Co`/`Cs`; `Cc` bilinçli dışarıda, testle pinli |
+| 3 | Yüzde kodlu parametre adları, ham biçimde maskeleme, fast-path testi güncel | ✅ `%(?:25)*XX`, 10 biçim × 2 yüzey + queue; fast-path testi iki dallı argümanı anlatıyor |
+| 4 | Üç bulgu için regresyon; `document IS NULL`; queue'da sentinel yok | ✅ yukarıdaki tablo |
+| 5 | Düşman turu + tablo | ✅ 35 dedektör + 21 redaksiyon girdisi; bulunan tek sınıf ve neden düzeltilmediği yukarıda |
+| 6 | `make verify` yeşil, taban 743'ün altına düşmüyor, migration yok | ✅ 743 → **792** |
+| 7 | Rapor + araç zinciri | ✅ |
+
+### Açıkça belirtmem gerekenler
+
+1. **Yeni bir hata kodu eklendi: `SCRIPT_UNSUPPORTED_CHARACTER`** (şema kodu, `meta.issue`).
+   1. turda "yeni hata kodu yok" denmişti; alfabe kısıtı bunu gerektirdi çünkü reddin *nedeni*
+   uydurulmuş fiyat değil. `docs/architecture/error-handling.md`'ye işlendi. OpenAPI şeması
+   değişmiyor (issue kodları string), kontrat yeniden üretimi farksız.
+
+2. **İlan listesi dışında 5 dosyaya dokundum:** `docs/architecture/error-handling.md` (yeni kod —
+   DoD), `docs/architecture/observability.md` (redaksiyon davranışı), `app/core/CLAUDE.md` ve
+   `app/modules/content/CLAUDE.md` (DoD), `docs/STATUS.md` (yalnız W16 satırı + test sayısı).
+   W15 kapandığı için dosya çakışması yok.
+
+3. **Alfabe kısıtı `parse_text`'te, yani şema katmanında.** Sonucu: `resolve_script`'in "tüm
+   sorunları birlikte topla" davranışı bu kural için geçerli değil — ilk ihlalde durur. Bilinçli:
+   karakter kümesi metnin *iddiasının* değil *kendisinin* özelliği ve kontrol karakteri kuralı da
+   aynı yerde.
+
+4. **Türkçe olmayan Latin harfleri şu an serbest** (`é`, `Š`, `ñ`). Bu bilinçli: aksanlı bir
+   işletme adı ("Café Nero") aksi hâlde her üretimi kalıcı olarak bloke ederdi. Maliyeti yukarıdaki
+   `ṬL` açığı; ikisi aynı madalyonun yüzleri ve karar PM'in.
+
+5. **`main`'e merge etmedim** (talimat gereği). Dal `main`'i içeriyor (`96ba2f1` merge edildi),
+   yani ileri sarma:
+
+   ```
+   git -C A:/socialpilot-ai merge --ff-only fix/verification-followups-3
+   ```
+
+   `origin`'e push edilmedi.

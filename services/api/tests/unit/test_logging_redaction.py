@@ -16,6 +16,8 @@ both created after the guard was installed.
 from __future__ import annotations
 
 import logging
+import logging.handlers
+import queue
 import subprocess
 import sys
 from collections.abc import Generator, Iterator
@@ -357,10 +359,12 @@ def test_every_signing_parameter_is_masked_on_both_the_message_and_the_extra_sur
 
 
 def test_the_fast_path_cannot_hide_a_parameter_from_the_scrubber() -> None:
-    """The cheap pre-filter is only safe while every parameter name contains one of its markers.
+    """The cheap pre-filter skips a line on a two-branch argument; this pins the first branch.
 
-    This is the test that fails when someone adds a signing parameter the fast path would skip,
-    which would otherwise be a silent false negative rather than a broken build.
+    A parameter name written *literally* contains one of the markers. The second branch — a name
+    written any other way needs a `%` to do it — is pinned by the percent-encoding tests below.
+    Together they are why skipping a line is safe. Adding a parameter that satisfies neither
+    would be a silent false negative rather than a broken build, so it fails here instead.
     """
 
     missed = [name for name in _SIGNED_QUERY_PARAMS if _CANDIDATE_MARKERS.search(name) is None]
@@ -372,6 +376,82 @@ def test_a_line_with_no_signing_material_is_returned_untouched() -> None:
     ordinary = "GET /v1/businesses/1/media 200 in 12ms user=owner count=3"
 
     assert redact_signature_material(ordinary) is ordinary
+
+
+# --- percent-encoded parameter names (W16 fix round 2) ----------------------------------------
+#
+# `X-Amz-%53ignature` is `X-Amz-Signature` to `urllib.parse.parse_qsl` and to a server, but it
+# carries no `sig` for the fast path to find, so the whole scrub was skipped. Codex got a raw
+# sentinel out of a QueueHandler and out of `extra` that way. The escape is unbounded in depth —
+# `%2553` decodes to `%53` decodes to `S` — so the fix has to be a rule, not two decode rounds.
+
+ENCODED_NAMES = [
+    ("single encoding", f"?X-Amz-%53ignature={SIGNATURE}"),
+    ("lowercase hex", f"?X-Amz-%73ignature={SIGNATURE}"),
+    ("double encoding", f"?X-Amz-%2553ignature={SIGNATURE}"),
+    ("triple encoding", f"?X-Amz-%252553ignature={SIGNATURE}"),
+    ("first character encoded", f"?%58-Amz-Signature={SIGNATURE}"),
+    ("every character encoded", f"?%73%69%67={SIGNATURE}"),
+    ("encoded separator", f"?X-Amz-Signature%3D{SIGNATURE}"),
+    ("credential", f"?X-Amz-%43redential={SIGNATURE}"),
+    ("google access id", f"?%47oogleAccessId={SIGNATURE}"),
+    ("azure sig", f"?sv=2024-11-04&%73ig={SIGNATURE}"),
+]
+
+
+@pytest.mark.parametrize(
+    "url", [url for _, url in ENCODED_NAMES], ids=[label for label, _ in ENCODED_NAMES]
+)
+def test_a_percent_encoded_parameter_name_still_loses_its_value(url: str) -> None:
+    scrubbed = redact_signature_material(url)
+
+    assert SIGNATURE not in scrubbed
+    # The name is left in the form it arrived in — masking is applied to the raw text, so the
+    # log line still reads as the request that was actually made.
+    assert REDACTED in scrubbed
+
+
+@pytest.mark.parametrize(
+    "url", [url for _, url in ENCODED_NAMES], ids=[label for label, _ in ENCODED_NAMES]
+)
+def test_a_percent_encoded_parameter_name_is_masked_on_the_extra_surface_too(url: str) -> None:
+    with fresh_logger("w16.encoded.extra", "%(message)s extra=%(url)s") as (logger, handler):
+        logger.info("call to %s", Url(url), extra={"url": Url(url)})
+
+    assert SIGNATURE not in handler.text
+
+
+def test_a_percent_encoded_parameter_name_cannot_ride_a_queue_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex's repro used a QueueHandler, so the regression test uses one too."""
+
+    install_signature_redaction()
+    records: queue.Queue[logging.LogRecord] = queue.Queue()
+    handler = CapturingHandler("%(message)s extra=%(url)s")
+    listener = logging.handlers.QueueListener(records, handler)
+    listener.start()
+    logger = logging.getLogger("w16.encoded.queue")
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    logger.addHandler(logging.handlers.QueueHandler(records))
+    try:
+        url = f"?X-Amz-%53ignature={SIGNATURE}&X-Amz-%43redential={SIGNATURE}"
+        logger.info("call to %s", Url(url), extra={"url": Url(url)})
+    finally:
+        listener.stop()
+        logger.handlers.clear()
+
+    assert handler.lines, "the record never reached the listener's handler"
+    assert SIGNATURE not in handler.text
+
+
+def test_an_ordinary_percent_sign_is_not_mistaken_for_an_encoded_name() -> None:
+    """The wider pattern only runs when a `%` is present, so it must stay quiet on real ones."""
+
+    line = "render progress=50% elapsed=12ms user=owner"
+
+    assert redact_signature_material(line) == line
 
 
 # --- the worker process (W16 criterion 1, worker half) ----------------------------------------

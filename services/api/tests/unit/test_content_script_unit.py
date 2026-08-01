@@ -52,7 +52,12 @@ from app.modules.content.script import (
     sanitize_untrusted,
     serialize_draft,
 )
-from app.modules.content.text_normalization import _CONFUSABLE_PAIRS, normalize_for_matching
+from app.modules.content.text_normalization import (
+    _CONFUSABLE_PAIRS,
+    _IGNORED_CATEGORIES,
+    contains_non_latin_letter,
+    normalize_for_matching,
+)
 from app.modules.content.validation import VerifiedValue
 
 MODULES = Path(__file__).resolve().parents[2] / "app" / "modules"
@@ -365,55 +370,59 @@ def test_a_known_false_positive_is_pinned_rather_than_narrowed(text: str, code: 
     ("label", "text", "code"),
     [
         # The three inputs that reached a stored `generated` script over HTTP (Codex, W13).
-        ("zero-width spaces", "1​6​5​TL", "SCRIPT_FABRICATED_PRICE"),
-        ("decomposed ü and ı", "165 Türk lirası", "SCRIPT_FABRICATED_PRICE"),
+        ("zero-width spaces", "1\u200b6\u200b5\u200bTL", "SCRIPT_FABRICATED_PRICE"),
+        ("decomposed ü and ı", "165 Tu\u0308rk lirası", "SCRIPT_FABRICATED_PRICE"),
         (
             "combining dot above",
-            "YÜZDE YİRMİ İNDİRİM",
+            "YÜZDE YI\u0307RMI\u0307 İNDİRİM",
             "SCRIPT_FABRICATED_PRICE",
         ),
         # The rest of the `Cf` family, one code point per case.
-        ("zero-width non-joiner", "1‌6‌5 TL", "SCRIPT_FABRICATED_PRICE"),
-        ("zero-width joiner", "165‍TL", "SCRIPT_FABRICATED_PRICE"),
-        ("word joiner", "165⁠TL", "SCRIPT_FABRICATED_PRICE"),
-        ("byte order mark", "165﻿TL", "SCRIPT_FABRICATED_PRICE"),
-        ("soft hyphen", "1­65 TL", "SCRIPT_FABRICATED_PRICE"),
-        ("left-to-right mark", "165‎TL", "SCRIPT_FABRICATED_PRICE"),
-        ("right-to-left mark", "‏165 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("zero-width non-joiner", "1\u200c6\u200c5 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("zero-width joiner", "165\u200dTL", "SCRIPT_FABRICATED_PRICE"),
+        ("word joiner", "165\u2060TL", "SCRIPT_FABRICATED_PRICE"),
+        ("byte order mark", "165\ufeffTL", "SCRIPT_FABRICATED_PRICE"),
+        ("soft hyphen", "1\u00ad65 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("left-to-right mark", "165\u200eTL", "SCRIPT_FABRICATED_PRICE"),
+        ("right-to-left mark", "\u200f165 TL", "SCRIPT_FABRICATED_PRICE"),
         # Compatibility forms NFKC folds.
-        ("fullwidth digits", "１６５ TL", "SCRIPT_FABRICATED_PRICE"),
-        ("fullwidth currency", "165 ＴＬ", "SCRIPT_FABRICATED_PRICE"),
+        ("fullwidth digits", "\uff11\uff16\uff15 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("fullwidth currency", "165 \uff34\uff2c", "SCRIPT_FABRICATED_PRICE"),
         (
             "mathematical bold digits",
             "\U0001d7cf\U0001d7d4\U0001d7d3 TL",
             "SCRIPT_FABRICATED_PRICE",
         ),
-        ("circled digit", "⑤ TL", "SCRIPT_FABRICATED_PRICE"),
-        ("superscript digits", "¹⁶⁵ TL", "SCRIPT_FABRICATED_PRICE"),
-        ("arabic-indic digits", "١٦٥ TL", "SCRIPT_FABRICATED_PRICE"),
+        ("circled digit", "\u2464 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("superscript digits", "\u00b9\u2076\u2075 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("arabic-indic digits", "\u0661\u0666\u0665 TL", "SCRIPT_FABRICATED_PRICE"),
         # Combining marks that compose (NFKC) and that do not (stripped afterwards).
-        ("decomposed yüzde", "yüzde yirmi", "SCRIPT_FABRICATED_PRICE"),
-        ("uncomposable mark on TL", "165 T́L", "SCRIPT_FABRICATED_PRICE"),
-        ("decomposed Ağustos", "1 Ağustos", "SCRIPT_FABRICATED_DATE"),
+        ("decomposed yüzde", "yu\u0308zde yirmi", "SCRIPT_FABRICATED_PRICE"),
+        ("uncomposable mark on TL", "165 T\u0301L", "SCRIPT_FABRICATED_PRICE"),
+        ("decomposed Ağustos", "1 Ag\u0306ustos", "SCRIPT_FABRICATED_DATE"),
         # Invisible code points that are not `Cf` — the Hangul filler is a *word* character, so
         # it defeats the `(?<!\w)` boundary rather than merely padding the string.
-        ("hangul filler", "1ᅟ65 TL", "SCRIPT_FABRICATED_PRICE"),
-        ("braille blank", "165⠀TL", "SCRIPT_FABRICATED_PRICE"),
+        ("hangul filler", "1\u115f65 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("braille blank", "165\u2800TL", "SCRIPT_FABRICATED_PRICE"),
         # Confusable alphabets: a Cyrillic capital Te is drawn exactly like a Latin T.
-        ("cyrillic Т in TL", "165 ТL", "SCRIPT_FABRICATED_PRICE"),
-        ("cyrillic а in lira", "165 lirа", "SCRIPT_FABRICATED_PRICE"),
-        ("greek ο in dolar", "165 dοlar", "SCRIPT_FABRICATED_PRICE"),
+        ("cyrillic \u0422 in TL", "165 \u0422L", "SCRIPT_FABRICATED_PRICE"),
+        ("cyrillic \u0430 in lira", "165 lir\u0430", "SCRIPT_FABRICATED_PRICE"),
+        ("greek \u03bf in dolar", "165 d\u03bflar", "SCRIPT_FABRICATED_PRICE"),
         # Dates and percentages, same treatment.
-        ("zero-width in a date", "1​ Ağustos", "SCRIPT_FABRICATED_DATE"),
-        ("fullwidth date", "３１.０８.２０２６", "SCRIPT_FABRICATED_DATE"),
-        ("soft hyphen in a date", "31.0­8.2026", "SCRIPT_FABRICATED_DATE"),
-        ("zero-width percentage", "%​20 indirim", "SCRIPT_FABRICATED_PRICE"),
-        ("fullwidth percentage", "％２０ indirim", "SCRIPT_FABRICATED_PRICE"),
+        ("zero-width in a date", "1\u200b Ağustos", "SCRIPT_FABRICATED_DATE"),
+        (
+            "fullwidth date",
+            "\uff13\uff11.\uff10\uff18.\uff12\uff10\uff12\uff16",
+            "SCRIPT_FABRICATED_DATE",
+        ),
+        ("soft hyphen in a date", "31.0\u00ad8.2026", "SCRIPT_FABRICATED_DATE"),
+        ("zero-width percentage", "%\u200b20 indirim", "SCRIPT_FABRICATED_PRICE"),
+        ("fullwidth percentage", "\uff05\uff12\uff10 indirim", "SCRIPT_FABRICATED_PRICE"),
         # Combinations, because a real attempt would not pick one channel.
-        ("zero-width plus NFD", "1​6​5 Türk lirası", "SCRIPT_FABRICATED_PRICE"),
+        ("zero-width plus NFD", "1\u200b6\u200b5 Tu\u0308rk lirası", "SCRIPT_FABRICATED_PRICE"),
         (
             "BOM plus fullwidth plus zero-width",
-            "﻿１６５​ TL",
+            "\ufeff\uff11\uff16\uff15\u200b TL",
             "SCRIPT_FABRICATED_PRICE",
         ),
     ],
@@ -429,7 +438,7 @@ def test_a_re_encoded_figure_is_the_same_figure(label: str, text: str, code: str
 
 @pytest.mark.parametrize(
     "text",
-    ["www​.acme.com", "ｗｗｗ.acme.com", "https://acme­.com/kampanya"],
+    ["www\u200b.acme.com", "\uff57\uff57\uff57.acme.com", "https://acme\u00ad.com/kampanya"],
 )
 def test_a_re_encoded_link_is_still_a_link(text: str) -> None:
     assert contains_url(text) is True
@@ -437,7 +446,7 @@ def test_a_re_encoded_link_is_still_a_link(text: str) -> None:
 
 def test_a_hidden_character_does_not_unban_a_forbidden_claim() -> None:
     document = script_document()
-    document["segments"][1]["voice_text"] = "Sağlı​ğa iyi gelir diyorlar."
+    document["segments"][1]["voice_text"] = "Sağlı\u200bğa iyi gelir diyorlar."
     outcome = resolve_script(parse_script(document), context=context())
 
     assert "SCRIPT_FORBIDDEN_TERM" in outcome.codes
@@ -455,17 +464,104 @@ def test_normalization_leaves_ordinary_turkish_copy_alone() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("1​6​5", "165"),
-        ("Türk", "türk"),
-        ("İNDİRİM", "indirim"),
-        ("１６５", "165"),
-        ("ТL", "tl"),
+        ("1\u200b6\u200b5", "165"),
+        ("Tu\u0308rk", "türk"),
+        ("I\u0307NDI\u0307RI\u0307M", "indirim"),
+        ("\uff11\uff16\uff15", "165"),
+        ("\u0422L", "tl"),
         ("Ağustos", "ağustos"),
         ("", ""),
     ],
 )
 def test_the_normalizer_folds_each_channel_on_its_own(text: str, expected: str) -> None:
     assert normalize_for_matching(text) == expected
+
+
+# --- the alphabet, not the spelling (W16 fix round 2) -----------------------------------------
+#
+# Folding answers "the same letter written another way". It cannot answer "a letter from an
+# alphabet nobody thought of": round 1 folded Cyrillic and Greek, and the verification round
+# arrived with Coptic `\u2ca6`. Adding a row for Coptic buys one round. These tests pin the
+# complement instead — the alphabet a literal may be *written in* is bounded, so there is no
+# next character to find.
+
+FOREIGN_ALPHABETS = [
+    ("coptic", "165 \u2ca6L"),
+    # No Latin letter left in the token at all, which is what a mixed-script rule would miss.
+    ("coptic throughout", "165 \u2ca6\u2c9a"),
+    ("cherokee", "165 \u13a1L"),
+    ("cherokee throughout", "165 \u13a1\u13de"),
+    ("lisu", "165 \ua4d4L"),
+    ("deseret", "165 \U0001040aL"),
+    ("n'ko", "165 \u07d5L"),
+    ("armenian", "165 \u0539L"),
+    ("georgian", "165 \u10d8L"),
+    ("tifinagh", "165 \u2d4dL"),
+    ("cyrillic", "165 \u0422L"),
+    ("greek", "165 \u03a4L"),
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [text for _, text in FOREIGN_ALPHABETS],
+    ids=[label for label, _ in FOREIGN_ALPHABETS],
+)
+def test_a_letter_from_another_alphabet_is_refused_before_any_rule_runs(text: str) -> None:
+    assert contains_non_latin_letter(text) is True
+
+    document = script_document()
+    document["segments"][1]["voice_text"] = f"Sadece {text}."
+    with pytest.raises(ScriptSchemaError) as error:
+        parse_script(document)
+
+    assert error.value.code == "SCRIPT_UNSUPPORTED_CHARACTER"
+    assert error.value.pointer == "$.segments[1].voice_text"
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        # The whole Turkish alphabet in both cases, plus the punctuation and emoji real ad copy
+        # carries. A restriction that rejected any of these would be worse than the bypass.
+        ("turkish letters", "İıŞşĞğÜüÖöÇç"),
+        ("ordinary copy", "Günün en taze molası hazır."),
+        ("emoji", "Bugün \U0001f389 harika!"),
+        ("punctuation and dashes", "Taze — her gün, her saat (gerçekten)."),
+        ("decomposed turkish", "Gu\u0308nu\u0308n en taze molası"),
+        ("fullwidth latin", "165 \uff34\uff2c"),
+        ("lira sign", "Sadece ₺"),
+    ],
+)
+def test_latin_copy_is_not_collateral_damage(label: str, text: str) -> None:
+    assert contains_non_latin_letter(text) is False
+
+
+UNASSIGNED_AND_PRIVATE = [
+    # Codex's repro: U+2065 is *unassigned*, so it was on no list of invisible characters.
+    ("U+2065 unassigned", "1\u20656\u20655\u2065TL"),
+    ("U+0378 unassigned", "1\u03786\u03785 TL"),
+    ("U+05EB unassigned", "165\u05ebTL"),
+    ("U+E000 private use", "1\ue0006\ue0005 TL"),
+    ("lone surrogate", "165\ud800TL"),
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [text for _, text in UNASSIGNED_AND_PRIVATE],
+    ids=[label for label, _ in UNASSIGNED_AND_PRIVATE],
+)
+def test_an_unassigned_or_private_code_point_cannot_break_a_figure_apart(text: str) -> None:
+    """Covered by category, because there are ~800k unassigned code points to enumerate."""
+
+    assert find_fabrication(text) == "SCRIPT_FABRICATED_PRICE"
+
+
+def test_the_ignored_categories_are_a_rule_rather_than_a_list() -> None:
+    """`Cc` is deliberately absent: a control character is a documented rejection, not litter."""
+
+    assert _IGNORED_CATEGORIES == {"Cf", "Cn", "Co", "Cs"}
 
 
 def test_the_confusable_table_is_aligned_and_only_rewrites_non_ascii() -> None:

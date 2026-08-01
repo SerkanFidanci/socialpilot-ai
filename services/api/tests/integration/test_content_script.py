@@ -454,28 +454,28 @@ def test_a_harmless_number_does_not_block_a_generation() -> None:
         # built from explicit escapes because the characters that carry the attack are invisible.
         (
             "zero-width spaces",
-            "Sadece 1​6​5​TL.",
+            "Sadece 1\u200b6\u200b5\u200bTL.",
             "SCRIPT_FABRICATED_PRICE",
         ),
         (
             "decomposed diaeresis",
-            "Sadece 165 Türk lirası.",
+            "Sadece 165 Tu\u0308rk lirası.",
             "SCRIPT_FABRICATED_PRICE",
         ),
         (
             "combining dot above",
-            "YÜZDE YİRMİ İNDİRİM.",
+            "YU\u0308ZDE YI\u0307RMI\u0307 I\u0307NDİRİM.",
             "SCRIPT_FABRICATED_PRICE",
         ),
         # And the same class applied to a date and to a link.
         (
             "fullwidth date",
-            "３１.０８.２０２６ tarihine kadar.",
+            "\uff13\uff11.\uff10\uff18.\uff12\uff10\uff12\uff16 tarihine kadar.",
             "SCRIPT_FABRICATED_DATE",
         ),
         (
             "zero-width in a link",
-            "Detaylar www​.acme.com adresinde.",
+            "Detaylar www\u200b.acme.com adresinde.",
             "SCRIPT_LITERAL_URL_REJECTED",
         ),
     ],
@@ -506,6 +506,38 @@ def test_a_re_encoded_figure_never_reaches_a_stored_script(
     assert query("SELECT status, failure_code, document FROM content_scripts") == [
         ("failed", issue, None)
     ]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("label", "phrase"),
+    [
+        # The two inputs that reached `201` + `status=generated` against W16's *first* fix. The
+        # Coptic tau is a letter no folding table knew about; U+2065 is unassigned, so it was on
+        # no list of invisible characters. Both are now refused by the alphabet rule and by the
+        # category rule respectively, before any pattern runs.
+        ("coptic capital tau", "Sadece 165 ⲦL."),
+        ("unassigned separator", "Sadece 1⁥6⁥5⁥TL."),
+    ],
+)
+def test_an_unknown_alphabet_or_code_point_never_reaches_a_stored_script(
+    label: str, phrase: str
+) -> None:
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-alphabet", "s-alphabet@example.com"), "Alphabet")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 422, response.text
+    rows = query("SELECT status, failure_code, document FROM content_scripts")
+    status, failure, document = rows[0]
+    assert status == "failed"
+    assert failure in {"SCRIPT_UNSUPPORTED_CHARACTER", "SCRIPT_FABRICATED_PRICE"}
+    assert document is None
 
 
 @requires_postgres
