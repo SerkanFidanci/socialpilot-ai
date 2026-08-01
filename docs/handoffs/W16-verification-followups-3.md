@@ -1,7 +1,7 @@
 # W16 — Doğrulama bulguları 3. tur: log `extra` sızıntısı + dedektör Unicode atlatması
 
 **Dal:** `fix/verification-followups-3` · **Base:** `main` · **Migration slotu: YOK** (`0014` W15'te — migration dosyalarına dokunma)
-**Durum:** hazır, tetiklenmedi
+**Durum:** tamamlandı (dalda, merge edilmedi) — bkz. Rapor
 **Model/effort:** Opus 5 / high
 **Neden bu iş:** Codex'in 2026-08-01 düşman turu iki **kritik** bulgu döndürdü (kayıtları [W14-verification-followups-2.md](W14-verification-followups-2.md) ve [W13-script-generation.md](W13-script-generation.md) "Doğrulama" bölümlerinde — ikisini de oku, yeniden üretim adımları orada):
 
@@ -81,9 +81,188 @@ Sayılı girdiler + atlatma senaryoları düşman gözüyle:
 
 Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. (Redaksiyon mekanizması değişikliği ADR gerektirmeyebilir — mevcut ADR/doküman hangisiyse oraya ek yeterli; emin değilsen raporda sor.)
 
-## Rapor
+## Rapor — 2026-08-01 · yürüten oturum (Opus 5)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `fix/verification-followups-3` (base `main` @ `362777a`) · **Commit:** `3c7e095` · **Durum:** tamamlandı
+
+### Yapılanlar
+
+**1 — `extra` yüzeyi.** Record factory korundu ama artık tek kanca değil. `Logger.makeRecord`
+`extra`'yı factory döndükten **sonra** kayda yazdığı için factory o yüzeyi hiç göremiyor; bu
+yüzden redaksiyon **üç kancaya** dağıtıldı ve her biri diğerinin göremediği bir yolu kapatıyor:
+
+| Kanca | Kapsadığı |
+|---|---|
+| record factory | `msg` + traceback, kayıt oluşurken. Bir handler'a hiç uğramadan doğrudan `Formatter`'a verilen kaydı da kapsar |
+| `Logger.callHandlers` | Kaydın **tamamı**, `extra` dahil, herhangi bir handler çalışmadan hemen önce. `Logger.handle` değil: 3.12+ bir filtre **başka bir record döndürebilir**, `handle` onu görmeden önce temizlerdi. `logging.makeLogRecord` ile yeniden kurulmuş kaydı (kuyruk/soket dinleyicisi) da kapsar |
+| `Handler.handle` | Elde kurulup logger'a hiç uğramadan handler'a verilen kayıt. **Bu yolu kendi düzeltmeme saldırırken buldum** (aşağıdaki tablo), sonra kapattım |
+
+- Redaksiyon rezerve olmayan **tüm** record attribute'larını kapsıyor. `str` olmayan değerler
+  ele alınıyor: `httpx.URL` gibi objeler `str()` üzerinden, iç içe dict/list **derinlik sınırıyla
+  yürünerek** (sınırın altında değer bir kez render edilip metin olarak temizleniyor — atlanmıyor).
+  Yürüyüşün tanımadığı bir şekil (`set`) de metin olarak temizleniyor.
+- **Çağıranın nesnesi mutasyona uğratılmıyor**: record üzerindeki referans redakte edilmiş
+  değerle değişiyor, kaynak dict/obje aynı kalıyor. Sayılı testi var.
+- **Maliyet:** kayıt bir kez taranıp işaretleniyor, beş handler beş tarama etmiyor. Hızlı yol
+  ortak: `"=" yok → çık`, sonra `sig|cred|token|keyid|accessid` ön filtresi. Ön filtrenin
+  **yanlış negatif üretemeyeceği** testle sabitlendi — her imza parametresi bu işaretçilerden
+  birini içermek zorunda, içermeyen bir parametre eklenirse test düşer. Mesaj yüzeyindeki eski
+  `"=" not in message` kısayolu kaldırıldı; artık tek fast-path var.
+- `GoogleAccessId` eklendi. W14 dosyasına erratum satırı düşüldü.
+
+**2 — Dedektör normalizasyonu.** `services/api/app/modules/content/text_normalization.py`
+(yeni) tek fonksiyon: `normalize_for_matching`. Adım sırası taşıyıcı:
+
+1. `Cf` **önce** çıkarılır — görünmez bir karakter taban harf ile birleşen işaretinin arasında
+   otururken NFKC'nin bunları birleştirmesini engellerdi;
+2. NFKC — `u`+`¨` → `ü`, `I`+`◌̇` → `İ`, fullwidth/superscript/matematiksel/NBSP katlanır;
+3. kalanlar atılır: `Cf` tekrar (NFKC soft hyphen ve BOM'u korur), birleşememiş `Mn/Me/Mc`
+   işaretleri, ve `Cf` sınıfında **olmayan** görünmez kod noktaları. Sonuncusunun sebebi Hangul
+   filler'ları: kategori `Lo`, yani `\w` için **harf** — bir fiyatın yanına konduğunda
+   `(?<!\w)` sınırını çökertiyorlar, sadece dolgu yapmıyorlar;
+4. confusable katlaması — Kiril/Yunan'ın ASCII ile aynı çizilen harfleri;
+5. Türkçe küçük harf katlaması **en son**, artık birleşmiş metin üzerinde.
+
+`script.py`'nin eski `fold`'u bu fonksiyonla değiştirildi, yani `find_fabrication`,
+`contains_url` ve **yasak terim eşleştirmesi** aynı katlamayı kullanıyor (gizli karakterle
+yasak iddia serbest bırakılamıyor). Yeni hata kodu yok, migration yok, kalıcılık davranışı aynı.
+
+**3 — Yanlış pozitif pinleri.** Codex #3 (`1 Ağustos böceğiyle tanışın`) ve #4
+(`Yüzde yüz pamuk dokusuyla`) reddedilmeye devam ediyor;
+`test_a_known_false_positive_is_pinned_rather_than_narrowed` bunu sabitliyor ve testin içindeki
+yorum bunun bilinçli politika olduğunu, bağlam beyaz listesinin kendisinin bir atlatma kanalı
+olacağını söylüyor.
+
+### Kabul kriteri 3 — kendi düzeltmeme saldırı
+
+**Dedektör.** 66 girdi, gerçek kodda (`sp-w16` konteyneri) koşuldu.
+
+| Sınıf | Denenen | Sonuç |
+|---|---|---|
+| `Cf` görünmezler | ZWSP·ZWNJ·ZWJ·WJ·BOM·soft hyphen·LRM/RLM·Mongolian vowel sep·invisible times·interlinear annotation | **10/10 engellendi** |
+| NFD / birleşen | `u+¨`, `I+◌̇`, `g+˘` (Ağustos), `s+¸` (Şubat), `o+¨`, `c+¸` | **6/6 engellendi** |
+| `Mn` zincirleri | `T`+3 işaret, rakam aralarına işaret, CGJ (U+034F) | **3/3 engellendi** |
+| Uyumluluk formları | fullwidth rakam/harf/yüzde, matematiksel kalın rakam **ve harf**, daire içi, üst simge, NBSP, ideographic space | **8/8 engellendi** |
+| Rakam sistemleri | Arap-Hint, Devanagari | **2/2 engellendi** |
+| Homoglif | Kiril `Т`/`а`/`о`/`е`, Yunan `ο`/`Τ` | **6/6 engellendi** |
+| `Cf` olmayan görünmezler | Hangul filler L/V/uyumluluk/halfwidth, braille blank | **5/5 engellendi** |
+| Kombinasyonlar | zwsp+NFD+fullwidth, Kiril+zwsp, BOM+işaret+fullwidth | **3/3 engellendi** |
+| Tarih | zwsp, fullwidth, soft hyphen, ay adında Kiril, ISO içinde zwsp | **5/5 engellendi** |
+| URL | zwsp, fullwidth `ｗｗｗ`, soft hyphen, Kiril | **4/4 engellendi** |
+| Yanlış pozitif kontrolü | 6 zararsız Türkçe cümle | **6/6 geçti (doğru)** |
+
+**Geçemediklerim — üçü de kalıp grameri açığı, normalizasyon açığı değil ve üçü de W16 öncesi
+de vardı** (aşağıda "PM'e" başlığı altında):
+
+| Girdi | Sonuç | Neden |
+|---|---|---|
+| `165 turk lirasi`, `yuzde yirmi`, `1 agustos`, `1 subat`, `yuz altmis bes lira` | `PASS` | Diyakritiksiz Türkçe yazım. Kapatmak `türk`/`ağustos`/`yüzde` gibi **her anahtar kelimeyi** yeniden yazmak demek — kural değişikliği |
+| `165 T L`, `165 T.L.` | `PASS` | Kalıp bitişiklik istiyor. `T.L.` yaygın bir Türkçe kısaltma |
+| `⑴⑸ TL` | `PASS` | NFKC parantezli rakamı `(1)(5)` yapıyor, araya noktalama giriyor |
+
+**Redaksiyon.** 11 senaryo denendi: `extra` düz string · `extra` obje · iç içe dict ·
+`QueueHandler`+`QueueListener` · `logging.makeLogRecord` (factory'den geçmemiş kayıt) · **record'u
+değiştiren filtre** · `LoggerAdapter` · traceback+`extra` birlikte · **fork edilmiş çocuk süreç** ·
+bytes/tuple/set `extra` · `handle()`'ı ezen handler. Biri sızdırdı — **elde kurulmuş kayıt +
+doğrudan `Handler.handle`** — ve `Handler.handle` kancası eklenerek kapatıldı; testi var.
+
+**Kalan tek açık (dokümante edildi):** kayıt *hem* elde kurulmuş *hem de* `handle()`'ı `super()`
+çağırmadan ezen bir `Handler` alt sınıfına verilmişse üç kanca da devre dışı kalır. Bu, bir
+kütüphanenin sızdırması değil, uygulama kodunun logging çerçevesini bilerek atlaması; bizim
+kurduğumuz handler'ları `RedactingFormatter` zaten kapsıyor. `docs/architecture/observability.md`
+ve `core/CLAUDE.md`'de yazılı.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Diyakritiksiz Türkçe katlaması (ASCII fold) uygulanmadı.** WO "yalnızca normalizasyon,
+  kural setini genişletme" diyor; `türk`'ü `turk`'e eşitlemek her kalıp literalinin **anlamını**
+  değiştirmek. Ayrıca `fold` bugün `_scene_tags`'in **sakladığı** değeri de üretiyor: ASCII
+  katlaması sahne etiketlerini `ürün` → `urun` yapar ve 2C/2E'de video-understanding
+  etiketleriyle eşleşmeyi sessizce bozar. Yani bu bir hata düzeltmesi değil, ürün sonucu olan bir
+  tasarım kararı. Aşağıda PM'e bırakıldı.
+- **`T L` / `T.L.` ve `⑴⑸`** — kalıp grameri; aynı gerekçe.
+- **Timeline `forbidden_matcher` birleştirmesi** yapılmadı (WO 2D'ye bıraktı).
+- **`docs/index.md` ve `docs/adr/README.md`'ye dokunulmadı** (W03 tekeli): yeni ADR dosyası yok,
+  indekse ekleme yok.
+- **ADR yazılmadı.** Redaksiyon mekanizması değişikliği mevcut mimari dokümana ek olarak
+  yeterli göründü; karar `docs/architecture/observability.md`'nin "Redaction" bölümüne işlendi.
+  PM aksini düşünüyorsa ADR numarası verilmeli.
+
+### Doğrulama
+
+Araç zinciri: **Python 3.13.14 · pytest 9.1.1 · mypy 2.3.0 · ruff 0.16.0 · PostgreSQL 16.14 ·
+MinIO · FFmpeg · Docker Engine 25.0.3 / Compose v2.24.6-desktop.1**. İzole stack
+`COMPOSE_PROJECT_NAME=sp-w16` (worktree kökünden, `--env-file .env.w16`; API 8020, PG 55452,
+Redis 56399, MinIO 59020/59021). Tüm koşular **konteyner içinde**.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | **yeşil** |
+| `ruff format --check` | **yeşil** — 183 dosya |
+| `mypy .` (strict) | **yeşil** — 171 dosya |
+| `pytest` (`RUN_INTEGRATION_TESTS=1`, gerçek PG + MinIO + FFmpeg) | **yeşil** — **697 passed** (taban 628, +69; azalma yok) |
+| `check-openapi` (kontrat drift) | **yeşil** — yeniden üretildi, **fark yok** |
+| Alembic head | `0013_script_generation` — **değişmedi**; `migrations/` altında değişiklik yok |
+
+| # | Kabul kriteri | Sonuç |
+|---|---|---|
+| 1 | Codex reproları birebir; sentetik handler; sonradan oluşturulmuş logger; worker | ✅ `test_a_signed_url_passed_as_a_plain_string_in_extra_is_masked`, `..._a_url_object_in_extra_...`, `..._nested_inside_an_extra_dict_...` — her biri **kurulumdan sonra** oluşturulmuş logger + `%(message)s extra=%(url)s` biçimli kendi handler'ıyla, pozitif kontrol dahil (`X-Amz-Signature=[REDACTED]` çıktıda **var**). Worker yarısı `test_the_worker_process_masks_the_extra_surface_too`: **taze bir yorumlayıcıda** `start_worker_process()` koşuyor, üç yüzeyde de maskeleniyor |
+| 2 | Parametre envanteri sayılı testte, mesaj + extra | ✅ `test_every_signing_parameter_is_masked_on_both_the_message_and_the_extra_surface` — 6 parametre (S3 3, GCS `Signature`+`GoogleAccessId`, Azure `sig`) × 2 yüzey; her biri kendi sentinel'iyle, `count(...) == 2` |
+| 3 | Üç girdi reddediliyor, HTTP'de kalıcılık yok, atlatma tablosu | ✅ Birim: `test_a_re_encoded_figure_is_the_same_figure` 31 girdi. HTTP: `test_a_re_encoded_figure_never_reaches_a_stored_script` — `422` + `content_scripts` satırı `("failed", <kod>, NULL)`, yani onaylanabilir bir doküman **oluşmuyor**. Tablo yukarıda |
+| 4 | Yanlış pozitif pinleri + bilinçli-politika yorumu | ✅ `test_a_known_false_positive_is_pinned_rather_than_narrowed` |
+| 5 | Normalizasyon bağımsız unit testli, tek çağıran | ✅ `test_the_normalizer_folds_each_channel_on_its_own`, `test_the_confusable_table_is_aligned_and_only_rewrites_non_ascii`, `test_normalization_leaves_ordinary_turkish_copy_alone`; `test_only_the_script_module_uses_the_shared_normalizer_so_far` `app/` altını tarayıp tek import edeni `modules/content/script.py` olarak sabitliyor |
+| 6 | `make verify` yeşil, test sayısı düşmüyor | ✅ 628 → **697** |
+| 7 | Migration eklenmedi/değişmedi, head sabit | ✅ `git status` `migrations/` altında değişiklik göstermiyor; head `0013_script_generation` |
+| 8 | Rapor + araç zinciri sürümleri | ✅ yukarıda |
+
+### Açıkça belirtmem gerekenler
+
+1. **İlan listesi dışında 4 dosyaya dokundum, gerekçeleriyle:**
+   - `docs/architecture/observability.md` — WO'nun kendisi istiyor ("mimari dokümanlardan hangisi
+     redaksiyon mekanizmasını anlatıyorsa"). "Redaction" bölümüne log-record yüzeyi alt başlığı
+     eklendi; o bölüm bugüne kadar yalnızca span/metric yüzeyini anlatıyordu.
+   - `services/api/app/core/CLAUDE.md` ve `services/api/app/modules/content/CLAUDE.md` — DoD
+     "modül dosyası değişince `CLAUDE.md` güncellenir". **W15 ile çakışma riski var:** W15
+     `content` modülüne TTS dosyaları ekliyor ve aynı `CLAUDE.md`'nin dosya tablosuna satır
+     yazacak. Benim eklediğim satır (`text_normalization.py`) ve iki değişmez satırı bitişik
+     değil, yani merge çakışması olursa küçük ve elle çözülebilir.
+   - `docs/STATUS.md` — yalnızca W16 satırı + backend doğrulama fact'i (628 → 697).
+
+2. **PM'e — dedektörün kalan üç açığı, hepsi W16 öncesi de vardı ve hiçbiri normalizasyon
+   değil:**
+   - **Diyakritiksiz Türkçe (en önemlisi).** `165 turk lirasi`, `yuzde yirmi indirim`,
+     `1 agustos` geçiyor. Gerçek hayatta *insanların yazdığı* biçim, yani düşman olmayan bir
+     model bile buraya düşebilir. Önerilen şekil: `ascii_fold` adımı **yalnızca**
+     `find_fabrication`/`contains_url` için, kalıp literalleri katlanmış biçimde yeniden
+     yazılarak; `_scene_tags`'e **uygulanmadan** (saklanan etiket bozulmasın). Kararı gerektiren
+     yan etki: yasak terim listesi de katlanırsa marka `şeker`'i yasakladığında `seker` de
+     yasaklanır — muhtemelen istenen ama markanın listesi, bizim değil.
+   - **`165 T.L.` / `165 T L`.** `T.L.` standart bir Türkçe kısaltma.
+   - **`⑴⑸ TL`.** NFKC parantezli rakamları noktalamayla açıyor, kalıp bitişiklik istiyor.
+   Üçü tek bir "kalıp grameri turu" WO'sunda birlikte kapatılabilir.
+
+3. **`fold` fonksiyonu kaldırıldı, `normalize_for_matching` geldi.** Yan etki: `_scene_tags` ve
+   `_slot_kind` de artık normalize ediliyor. Sahne etiketi için bu **iyileşme** — içinde gizli
+   karakter taşıyan bir etiket eskiden `SCRIPT_SCENE_TAG_INVALID` ile reddediliyordu, şimdi
+   temizlenip saklanıyor ve hiçbir zaman eşleşmeyecek bir etiket üretilmiyor. Türkçe harfli
+   etiketler değişmiyor (NFKC sonrası zaten birleşik).
+
+4. **Üç stdlib monkeypatch'i artık global bir kaynak.** W14 raporunun 7. maddesi record factory
+   için bunu zaten söylüyordu; W16 ile `Logger.callHandlers` ve `Handler.handle` de aynı
+   sınıfa girdi. Hepsi mevcut implementasyonu **zincirliyor** ve tekrar kurulum no-op, ama
+   ileride bir logging instrumentor'ı (ör. OTel logging) eklenirse kurulum sırası kontrol
+   edilmeli.
+
+5. **`main`'e merge etmedim.** W15 (`slice/2c-tts-voiceover`) uçuşta ve WO'nun dosya-ayrıklığı
+   ancak ikisi de merge edilirken sınanır; ayrıca protokol "doğrulaması geçmemiş iş merge
+   edilmez" diyor. Dal tek commit, base `main` ile aynı, yani merge fast-forward:
+
+   ```
+   git -C A:/socialpilot-ai merge --ff-only fix/verification-followups-3
+   ```
+
+   `origin`'e push edilmedi. Dal ve worktree, protokol gereği (merge **ve** bağımsız doğrulama
+   bitene kadar silinmez) duruyor.
 
 ## Doğrulama
 

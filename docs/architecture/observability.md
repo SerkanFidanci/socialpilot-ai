@@ -154,6 +154,40 @@ Two layers enforce URL/secret redaction:
 Tests `test_redacting_exporter_scrubs_presigned_url_and_token` and `test_httpx_hook_redacts_recording_span`
 pin this with a sentinel signature and token (the W01 sentinel pattern).
 
+### The same rule on the log-record surface
+
+Spans are not the only automatic surface. A `logging` record is produced by whichever library
+happens to be in the call path — httpx wrote a full presigned URL at `INFO` during a real MinIO
+multipart upload — so log redaction is enforced by the same shape of guarantee, in
+`app/core/logging.py` and installed by `install_signature_redaction()`.
+
+The signing parameters masked by value are S3's `X-Amz-Signature` / `X-Amz-Credential` /
+`X-Amz-Security-Token`, GCS's `Signature` / `GoogleAccessId` / `X-Goog-*`, Azure's `sig`, and a
+bare `access_token`. The parameter name, host and object key survive: which request was signed is
+the useful half of a log line.
+
+Three hooks cover the three ways a record can reach a handler, because no single one covers all
+of them:
+
+1. the **record factory** scrubs `msg` and the rendered traceback at creation;
+2. **`Logger.callHandlers`** scrubs the whole record — including every `extra={...}` attribute,
+   which the factory *cannot* see, because `Logger.makeRecord` copies `extra` on after the
+   factory returns (W14 shipped the factory alone and W16 closed this: a handler formatting
+   `%(url)s` printed the raw signature). `callHandlers` rather than `Logger.handle`, so a filter
+   that returns a *different* record (Python 3.12+) is covered too;
+3. **`Handler.handle`** is the backstop for a record built by hand and handed to a handler
+   without a logger in between.
+
+A record is walked once and marked, so five handlers do not cost five walks, and a cheap
+substring pre-filter means an ordinary line never runs the full pattern. Non-string values are
+covered: an `httpx.URL` object, a nested dict, a list. The value on the record is replaced;
+the caller's object is never mutated.
+
+**Known residual:** a record that is both hand-built *and* passed to a `Handler` subclass which
+overrides `handle()` without calling `super()` escapes all three. That is application code
+bypassing the logging framework, not a library leaking; `RedactingFormatter` covers the handlers
+this application installs.
+
 ## Instrumentation boundary
 
 Instrumentation is wired **only in `core` and the composition roots** (`app/core/telemetry.py`,
