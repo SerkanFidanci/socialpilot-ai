@@ -69,7 +69,7 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir.
 
 ## Rapor — 2026-08-02 · yürüten oturum (Opus 5)
 
-**Dal:** `fix/w17-latin-fold` (base `main` @ `3d4e4de`) · **Commit'ler:** `78f5a34` ·
+**Dal:** `fix/w17-latin-fold` (base `main` @ `3d4e4de`) · **Commit'ler:** `3bef588` ·
 **Durum:** tamamlandı, dalda bırakıldı
 
 ### 1 — Katlama iki yönde, tek adımda
