@@ -266,4 +266,13 @@ POSIX yolları yok.
 
 ## Doğrulama
 
-_(test eden oturum doldurur — özellikle: imza redaksiyonunu başka bir logger üzerinden atlatma, fingerprint kanonikliğini alan sırası/whitespace ile atlatma, downgrade korumasını boş tabloda yanlış tetikleme)_
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fa279ea`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · API/worker Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · PostgreSQL 16.14. Hosttaki mevcut stack ile port çakışmasını önlemek için yalnızca `sp-codex` stack'inin yayınlanan host portları değiştirildi (`55433`/`56380`/`59002`/`8001`); testler worktree kökünden ve aynı compose projesinde koştu.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Süreç-geneli record factory, `logging` kaydının `extra` alanlarını redakte etmiyor; imzalı URL özel bir handler tarafından biçimlendirildiğinde ham secret handler çıktısına ulaşıyor. Bu hem API hem de taze W14 worker imajında tekrarlandı. | kritik | `install_signature_redaction()` / worker `start_worker_process()` sonrasında `logger.info("…", extra={"url": httpx.URL(...)})` yazıldı; handler `%(message)s extra=%(url)s` biçimini kullandı. Mesajdaki S3 `X-Amz-Credential`/`X-Amz-Signature`/token, GCS `Signature` ve Azure `sig` maskelendi; aynı URL `extra.url` ve iç içe `extra.payload` içinde ham kaldı. `LogRecordFactory`, Python `Logger.makeRecord` içindeki `extra` kopyalanmadan önce çalıştığı için bu yüzeyi göremiyor. | açık |
+| 2 | GCS'nin `GoogleAccessId` parametresi normal mesaj yüzeyinde de redakte edilmiyor; W14 raporu bu parametrenin maskelendiğini söylüyor. `Signature` maskeleniyor. | düşük | Sentetik GCS URL'si `?GoogleAccessId=GCSIDSENTINEL&Signature=GCSSIGSENTINEL` normal logger mesajı olarak gönderildi. Çıktıda yalnızca `Signature` `[REDACTED]` oldu. Erişim kimliği tek başına bearer imza değildir, ancak rapor/kod tutarsızlığı ve sağlayıcı kimliği sızıntısıdır. | açık |
+| 3 | Normal mesaj ve traceback korumaları çalışıyor; bu, #1'in handler-`extra` yüzeyine özgü olduğunu doğruluyor. | — | API ve yeni worker imajında GCS `Signature` + Azure `sig` normal mesajları maskelendi; API'de imzalı URL içeren `RuntimeError` traceback'i de ham sentinel taşımadı. | kabul edildi |
+| 4 | Mevcut W14 testleri bu atlatmayı kapsamıyor. | orta | `RUN_INTEGRATION_TESTS=1 python -m pytest -q tests/unit/test_logging_redaction.py tests/integration/test_media_uploads_minio.py` → `17 passed`; özel `extra` formatter testi yok. | açık |
+
+**Karar:** düzeltme gerekiyor. `extra` değerleri record factory sonrasında eklendiğinden, çözümün bu alanları handler'a ulaşmadan merkezi olarak redakte eden bir mekanizma (ve API + worker'da buna yönelik test) sağlaması gerekir.

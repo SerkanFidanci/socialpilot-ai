@@ -284,3 +284,17 @@ bağımsız olarak yeniden üretilemedi.
 - Doğrulama: temiz `sp-w13` PostgreSQL/MinIO ortamında `pytest -q` (integration açık) →
   **628 passed**; W13 unit → **81 passed**; W13 integration → **30 passed**; Ruff lint/format
   ve strict mypy temiz. Mevcut geliştirme verisi için temizlik yapılmadı.
+
+## Doğrulama — 2026-08-01 · Codex testçi (fabrikasyon dedektörü saldırı turu)
+
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fa279ea`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · API konteyneri Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · PostgreSQL 16.14. İzole stack host port çakışması nedeniyle `55433`/`56380`/`59002`/`8001` yayın portlarıyla çalıştırıldı; worktree ve compose proje adı değişmedi. Kötü niyetli `FakeScriptGenerationAdapter` çıktıları gerçek PostgreSQL üzerinde HTTP'den gönderildi; deneme verisi ardından `TRUNCATE … CASCADE` ile temizlendi.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Unicode görünmez/normalizasyon varyantları fiyat ve yüzde korumasını atlatıyor; doğrulanmış slot olmadan kalıcı `generated` script'e giriyor. | kritik | Saf dedektörde `1\u200b6\u200b5\u200bTL`, `165 Tu\u0308rk liras\u0131` ve `Y\u00dcZDE YI\u0307RMI\u0307 \u0130ND\u0130R\u0130M` sırasıyla `PASS` verdi. Her üçü ayrı kötü niyetli sağlayıcı çıktısı olarak HTTP'den gönderildi: üçü de `201`, `status=generated`; DB'de üç `document IS NOT NULL` satırı görüldü. | açık |
+| 2 | İstenen karışık yazım/satır sonu/büyük harf varyantlarının çoğu engelleniyor. | — | `165TL'ye`, `yüz 65 lira`, tam-genişlik `１６５ TL`, NBSP, `165\nTL`, `yüz\naltmış\nbeş lira`, `1\nAğustos`, `31.\n08.\n2026`, `165 TÜRK LİRASI` ve `YÜZDE YİRMİ İNDİRİM` ilgili fiyat/tarih koduyla reddedildi. | kabul edildi |
+| 3 | Tarih dedektörü bağlamı dikkate almıyor: `1 Ağustos böceğiyle tanışın` pazarlama cümlesi `SCRIPT_FABRICATED_DATE` ile reddediliyor. | düşük | `find_fabrication("1 Ağustos böceğiyle tanışın")` → `SCRIPT_FABRICATED_DATE`. Tarih vaat etmeyen bir tür/adlandırma ifadesidir. | açık |
+| 4 | Oran kuralı materyal bileşimini de fiyat/iddia sayıyor: `Yüzde yüz pamuk dokusuyla` `SCRIPT_FABRICATED_PRICE` ile reddediliyor. | düşük | `find_fabrication("Yüzde yüz pamuk dokusuyla")` → `SCRIPT_FABRICATED_PRICE`; buna karşılık `3 dakikada hazır` ve `Ağustos esintisiyle serinleyin` geçti. Bu, W13'ün tüm serbest yüzde iddialarını güvenli tarafta reddetme politikasının bir yanlış pozitifi; onaylı nitelik alanı gelene dek bilinçli olarak kabul edilebilir. | kabul edildi (politik sınır) |
+| 5 | Mevcut W13 odaklı testler yeni Unicode kaçışlarını kapsamıyor. | orta | `RUN_INTEGRATION_TESTS=1 python -m pytest -q tests/unit/test_content_script_unit.py tests/integration/test_content_script.py` → `111 passed` (1 Starlette/httpx deprecation uyarısı); #1'in üç girdisi bu süitte yok. | açık |
+
+**Karar:** düzeltme gerekiyor. Literalleri eşleştirmeden önce Unicode normalizasyonu ve görünmez biçim karakterlerinin ele alınması gerekir; düzeltme API katmanında kalıcılığı engelleyen regresyon testleriyle doğrulanmalıdır.
