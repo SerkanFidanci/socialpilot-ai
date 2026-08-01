@@ -264,6 +264,9 @@ POSIX yolları yok.
    Codex W13'ü bıraktığında çalıştırılmalı. `origin`'e push edilmedi. Dal ve worktree,
    protokol gereği (merge **ve** bağımsız doğrulama bitene kadar silinmez) duruyor.
 
+**Erratum (W16, 2026-08-01):** `GoogleAccessId` maskelenmesi W16'ya kadar eksikti; yukarıdaki
+rapor iddiası hatalıydı. Parametre W16'da `_SIGNED_QUERY_PARAMS`'a eklendi ve sayılı testi var.
+
 ## Doğrulama
 
 Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `fa279ea`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · API/worker Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · PostgreSQL 16.14. Hosttaki mevcut stack ile port çakışmasını önlemek için yalnızca `sp-codex` stack'inin yayınlanan host portları değiştirildi (`55433`/`56380`/`59002`/`8001`); testler worktree kökünden ve aynı compose projesinde koştu.

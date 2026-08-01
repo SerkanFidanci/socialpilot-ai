@@ -52,6 +52,7 @@ from app.modules.content.script import (
     sanitize_untrusted,
     serialize_draft,
 )
+from app.modules.content.text_normalization import _CONFUSABLE_PAIRS, normalize_for_matching
 from app.modules.content.validation import VerifiedValue
 
 MODULES = Path(__file__).resolve().parents[2] / "app" / "modules"
@@ -339,6 +340,153 @@ def test_written_price_date_and_percentage_boundaries_are_deliberate(text: str) 
 
     expected = "SCRIPT_FABRICATED_PRICE" if text == "yüzde yüz memnuniyet" else None
     assert find_fabrication(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        # Deliberate policy boundary, not an oversight (Codex W13 findings 3 and 4, pinned by
+        # PM decision in W16): the detector is a pattern matcher and cannot read context. A
+        # context allowlist ("böceği", "pamuk") would itself become the evasion channel —
+        # "1 Ağustos böceği indirimi" is a date promise wearing the allowlisted word. The
+        # user's path out is a regeneration or a verified slot, not a looser rule.
+        ("1 Ağustos böceğiyle tanışın", "SCRIPT_FABRICATED_DATE"),
+        ("Yüzde yüz pamuk dokusuyla", "SCRIPT_FABRICATED_PRICE"),
+    ],
+)
+def test_a_known_false_positive_is_pinned_rather_than_narrowed(text: str, code: str) -> None:
+    assert find_fabrication(text) == code
+
+
+# --- unicode evasion (W16 criterion 3) --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "text", "code"),
+    [
+        # The three inputs that reached a stored `generated` script over HTTP (Codex, W13).
+        ("zero-width spaces", "1​6​5​TL", "SCRIPT_FABRICATED_PRICE"),
+        ("decomposed ü and ı", "165 Türk lirası", "SCRIPT_FABRICATED_PRICE"),
+        (
+            "combining dot above",
+            "YÜZDE YİRMİ İNDİRİM",
+            "SCRIPT_FABRICATED_PRICE",
+        ),
+        # The rest of the `Cf` family, one code point per case.
+        ("zero-width non-joiner", "1‌6‌5 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("zero-width joiner", "165‍TL", "SCRIPT_FABRICATED_PRICE"),
+        ("word joiner", "165⁠TL", "SCRIPT_FABRICATED_PRICE"),
+        ("byte order mark", "165﻿TL", "SCRIPT_FABRICATED_PRICE"),
+        ("soft hyphen", "1­65 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("left-to-right mark", "165‎TL", "SCRIPT_FABRICATED_PRICE"),
+        ("right-to-left mark", "‏165 TL", "SCRIPT_FABRICATED_PRICE"),
+        # Compatibility forms NFKC folds.
+        ("fullwidth digits", "１６５ TL", "SCRIPT_FABRICATED_PRICE"),
+        ("fullwidth currency", "165 ＴＬ", "SCRIPT_FABRICATED_PRICE"),
+        (
+            "mathematical bold digits",
+            "\U0001d7cf\U0001d7d4\U0001d7d3 TL",
+            "SCRIPT_FABRICATED_PRICE",
+        ),
+        ("circled digit", "⑤ TL", "SCRIPT_FABRICATED_PRICE"),
+        ("superscript digits", "¹⁶⁵ TL", "SCRIPT_FABRICATED_PRICE"),
+        ("arabic-indic digits", "١٦٥ TL", "SCRIPT_FABRICATED_PRICE"),
+        # Combining marks that compose (NFKC) and that do not (stripped afterwards).
+        ("decomposed yüzde", "yüzde yirmi", "SCRIPT_FABRICATED_PRICE"),
+        ("uncomposable mark on TL", "165 T́L", "SCRIPT_FABRICATED_PRICE"),
+        ("decomposed Ağustos", "1 Ağustos", "SCRIPT_FABRICATED_DATE"),
+        # Invisible code points that are not `Cf` — the Hangul filler is a *word* character, so
+        # it defeats the `(?<!\w)` boundary rather than merely padding the string.
+        ("hangul filler", "1ᅟ65 TL", "SCRIPT_FABRICATED_PRICE"),
+        ("braille blank", "165⠀TL", "SCRIPT_FABRICATED_PRICE"),
+        # Confusable alphabets: a Cyrillic capital Te is drawn exactly like a Latin T.
+        ("cyrillic Т in TL", "165 ТL", "SCRIPT_FABRICATED_PRICE"),
+        ("cyrillic а in lira", "165 lirа", "SCRIPT_FABRICATED_PRICE"),
+        ("greek ο in dolar", "165 dοlar", "SCRIPT_FABRICATED_PRICE"),
+        # Dates and percentages, same treatment.
+        ("zero-width in a date", "1​ Ağustos", "SCRIPT_FABRICATED_DATE"),
+        ("fullwidth date", "３１.０８.２０２６", "SCRIPT_FABRICATED_DATE"),
+        ("soft hyphen in a date", "31.0­8.2026", "SCRIPT_FABRICATED_DATE"),
+        ("zero-width percentage", "%​20 indirim", "SCRIPT_FABRICATED_PRICE"),
+        ("fullwidth percentage", "％２０ indirim", "SCRIPT_FABRICATED_PRICE"),
+        # Combinations, because a real attempt would not pick one channel.
+        ("zero-width plus NFD", "1​6​5 Türk lirası", "SCRIPT_FABRICATED_PRICE"),
+        (
+            "BOM plus fullwidth plus zero-width",
+            "﻿１６５​ TL",
+            "SCRIPT_FABRICATED_PRICE",
+        ),
+    ],
+)
+def test_a_re_encoded_figure_is_the_same_figure(label: str, text: str, code: str) -> None:
+    """A rule that matches glyphs is defeated by respelling the sentence, so it matches words.
+
+    `label` is carried only so a failure names the channel that got through.
+    """
+
+    assert find_fabrication(text) == code
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["www​.acme.com", "ｗｗｗ.acme.com", "https://acme­.com/kampanya"],
+)
+def test_a_re_encoded_link_is_still_a_link(text: str) -> None:
+    assert contains_url(text) is True
+
+
+def test_a_hidden_character_does_not_unban_a_forbidden_claim() -> None:
+    document = script_document()
+    document["segments"][1]["voice_text"] = "Sağlı​ğa iyi gelir diyorlar."
+    outcome = resolve_script(parse_script(document), context=context())
+
+    assert "SCRIPT_FORBIDDEN_TERM" in outcome.codes
+
+
+def test_normalization_leaves_ordinary_turkish_copy_alone() -> None:
+    """The false-positive control for the normalizer itself, at both ends of the fold."""
+
+    assert normalize_for_matching("Günün en TAZE molası hazır.") == "günün en taze molası hazır."
+    assert normalize_for_matching("İki dakikada servis") == "iki dakikada servis"
+    assert normalize_for_matching("IŞIK ve ışık") == "ışık ve ışık"
+    assert find_fabrication("Günün en taze molası hazır.") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1​6​5", "165"),
+        ("Türk", "türk"),
+        ("İNDİRİM", "indirim"),
+        ("１６５", "165"),
+        ("ТL", "tl"),
+        ("Ağustos", "ağustos"),
+        ("", ""),
+    ],
+)
+def test_the_normalizer_folds_each_channel_on_its_own(text: str, expected: str) -> None:
+    assert normalize_for_matching(text) == expected
+
+
+def test_the_confusable_table_is_aligned_and_only_rewrites_non_ascii() -> None:
+    """The table is unreviewable by eye — the characters look identical — so it is checked here."""
+
+    for source, target in _CONFUSABLE_PAIRS:
+        assert len(source) == len(target)
+        assert not source.isascii()
+        assert target.isascii()
+
+
+def test_only_the_script_module_uses_the_shared_normalizer_so_far() -> None:
+    """Slice 2D merges the timeline matcher onto this function; W16 adds no second caller."""
+
+    importers = sorted(
+        path.relative_to(MODULES.parent).as_posix()
+        for path in MODULES.parent.rglob("*.py")
+        if "content.text_normalization import" in path.read_text(encoding="utf-8")
+    )
+
+    assert importers == ["modules/content/script.py"]
 
 
 def test_an_invented_price_in_a_generation_is_rejected_with_a_pointer() -> None:

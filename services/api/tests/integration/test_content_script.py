@@ -446,6 +446,69 @@ def test_a_harmless_number_does_not_block_a_generation() -> None:
 
 
 @requires_postgres
+@pytest.mark.parametrize(
+    ("label", "phrase", "issue"),
+    [
+        # Codex's three W13 bypasses, verbatim, but asserted where it matters: over HTTP, on a
+        # real database, against the row the API would otherwise have committed. Each phrase is
+        # built from explicit escapes because the characters that carry the attack are invisible.
+        (
+            "zero-width spaces",
+            "Sadece 1​6​5​TL.",
+            "SCRIPT_FABRICATED_PRICE",
+        ),
+        (
+            "decomposed diaeresis",
+            "Sadece 165 Türk lirası.",
+            "SCRIPT_FABRICATED_PRICE",
+        ),
+        (
+            "combining dot above",
+            "YÜZDE YİRMİ İNDİRİM.",
+            "SCRIPT_FABRICATED_PRICE",
+        ),
+        # And the same class applied to a date and to a link.
+        (
+            "fullwidth date",
+            "３１.０８.２０２６ tarihine kadar.",
+            "SCRIPT_FABRICATED_DATE",
+        ),
+        (
+            "zero-width in a link",
+            "Detaylar www​.acme.com adresinde.",
+            "SCRIPT_LITERAL_URL_REJECTED",
+        ),
+    ],
+)
+def test_a_re_encoded_figure_never_reaches_a_stored_script(
+    label: str, phrase: str, issue: str
+) -> None:
+    """The rejection has to hold at the boundary that persists, not only in the pure function.
+
+    W13's detector passed all three of these and the API answered `201` with
+    `status=generated`: an invented price sitting in a row a human can approve and publish.
+    """
+
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-unicode", "s-unicode@example.com"), "Unicode")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "SCRIPT_VALIDATION_FAILED"
+    assert [entry["code"] for entry in response.json()["meta"]["issues"]] == [issue]
+    # The row exists as a recorded failure and carries no document: nothing was persisted that a
+    # reviewer could approve.
+    assert query("SELECT status, failure_code, document FROM content_scripts") == [
+        ("failed", issue, None)
+    ]
+
+
+@requires_postgres
 def test_a_forbidden_claim_is_refused_in_either_case() -> None:
     adapter = FakeScriptGenerationAdapter(config())
     with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:

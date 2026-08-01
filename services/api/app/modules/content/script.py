@@ -15,7 +15,10 @@ a different documented rejection.
 **A figure that appears in literal text is treated as fabricated, whatever produced it.**
 `find_fabrication` is deterministic pattern matching over the *literal* parts only, so it holds
 even if the provider is compromised, swapped, or (as today) fake. It never runs over resolved
-values — those came from a record and are supposed to contain digits.
+values — those came from a record and are supposed to contain digits. Matching runs on text that
+`text_normalization.normalize_for_matching` has already folded, because a rule written against
+characters is otherwise defeated by re-encoding the same sentence: zero-width spaces between the
+digits, a decomposed `ü`, a Cyrillic `Т` in `TL`.
 
 Two further §17.5 properties are structural rather than advisory. Untrusted text lifted out of
 uploaded media travels as **JSON data** in `input_data`, never concatenated into the instruction
@@ -39,6 +42,7 @@ from typing import Any, Final, Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.modules.content.text_normalization import normalize_for_matching
 from app.modules.content.validation import VerifiedValue
 
 # The capability name is PRD §17.1's, verbatim. It is what `provider_usage.capability` records,
@@ -170,21 +174,6 @@ ISSUE_CTA_NOT_APPROVED: Final = "SCRIPT_CTA_NOT_APPROVED"
 ISSUE_RESOLVED_TEXT_TOO_LONG: Final = "SCRIPT_RESOLVED_TEXT_TOO_LONG"
 
 
-# --- Turkish-aware folding ------------------------------------------------------------------
-
-# `re.IGNORECASE` does not relate `İ`/`I` to `i`/`ı`: Python lowercases `İ` to two code points,
-# so a pattern written with `i` misses a term spelled with `İ`. Folding first is a one-to-one
-# character map, which keeps match offsets meaningful and makes every pattern below plain
-# lowercase with no case flag to forget.
-_TURKISH_FOLD: Final = str.maketrans({"İ": "i", "I": "ı"})
-
-
-def fold(text: str) -> str:
-    """Lowercase with the Turkish dotted/dotless `i` handled explicitly."""
-
-    return text.translate(_TURKISH_FOLD).lower()
-
-
 # --- fabrication detection ------------------------------------------------------------------
 #
 # These patterns run over literal text only. They are deliberately eager: a false rejection
@@ -260,12 +249,17 @@ def find_fabrication(text: str) -> str | None:
 
     Never call this on a resolved value. A verified price is *supposed* to read `149,90 TRY`;
     the rule is about where a figure came from, not whether one is present.
+
+    The text is normalized before any pattern runs. Without that step the rules match glyphs
+    rather than words, and `1​6​5​TL` with zero-width spaces or an NFD
+    `Türk lirası` reads as a price to a customer while reading as harmless prose to a
+    regular expression (W13 verification, 2026-08-01).
     """
 
-    folded = fold(text)
-    if any(pattern.search(folded) for pattern in _PRICE_PATTERNS):
+    normalized = normalize_for_matching(text)
+    if any(pattern.search(normalized) for pattern in _PRICE_PATTERNS):
         return ISSUE_FABRICATED_PRICE
-    if any(pattern.search(folded) for pattern in _DATE_PATTERNS):
+    if any(pattern.search(normalized) for pattern in _DATE_PATTERNS):
         return ISSUE_FABRICATED_DATE
     return None
 
@@ -274,18 +268,19 @@ def contains_url(text: str) -> bool:
     """True when literal text carries a link. §17.5 forbids acting on a model-produced URL;
     refusing to store one is the same promise made earlier and with nothing left to trust."""
 
-    return _URL_PATTERN.search(fold(text)) is not None
+    return _URL_PATTERN.search(normalize_for_matching(text)) is not None
 
 
 def forbidden_matcher(terms: Sequence[str]) -> re.Pattern[str] | None:
-    """One word-boundary matcher for the brand's forbidden terms, over folded text.
+    """One word-boundary matcher for the brand's forbidden terms, over normalized text.
 
     Word boundaries rather than substring, so a brand forbidding "az" does not reject
-    "lezzetli". Both the terms and the candidate are folded, which is what makes
-    `"Sağlığa iyi gelir"` and `"sağlığa iyi gelir"` the same term.
+    "lezzetli". Both the terms and the candidate go through `normalize_for_matching`, which is
+    what makes `"Sağlığa iyi gelir"` and `"sağlığa iyi gelir"` the same term — and what stops a
+    zero-width space in the middle of a banned claim from unbanning it.
     """
 
-    cleaned = [fold(term.strip()) for term in terms if term and term.strip()]
+    cleaned = [normalize_for_matching(term.strip()) for term in terms if term and term.strip()]
     if not cleaned:
         return None
     return re.compile(rf"\b(?:{'|'.join(re.escape(term) for term in cleaned)})\b")
@@ -593,7 +588,7 @@ def _scene_tags(value: Any, pointer: str) -> tuple[str, ...]:
     for index, item in enumerate(value):
         if not isinstance(item, str):
             raise ScriptSchemaError(SCHEMA_FIELD_TYPE_INVALID, f"{pointer}[{index}]")
-        tag = fold(item.strip()).replace(" ", "_").replace("-", "_")
+        tag = normalize_for_matching(item.strip()).replace(" ", "_").replace("-", "_")
         if not MIN_SCENE_TAG_CHARS <= len(tag) <= MAX_SCENE_TAG_CHARS:
             raise ScriptSchemaError(SCHEMA_SCENE_TAG_INVALID, f"{pointer}[{index}]")
         if not _SCENE_TAG_PATTERN.fullmatch(tag):
@@ -606,7 +601,7 @@ def _scene_tags(value: Any, pointer: str) -> tuple[str, ...]:
 
 def _slot_kind(value: str, pointer: str) -> SlotKind:
     try:
-        return SlotKind(fold(value))
+        return SlotKind(normalize_for_matching(value))
     except ValueError as error:
         raise ScriptSchemaError(SCHEMA_SLOT_KIND_UNKNOWN, pointer) from error
 
@@ -693,7 +688,7 @@ def resolve_script(draft: ScriptDraft, *, context: ScriptContext) -> ScriptOutco
         for literal in text.literals:
             # Forbidden terms are matched on the unwrapped literal so a multi-word term cannot
             # slip through by sitting either side of a slot.
-            if matcher is not None and matcher.search(fold(literal)):
+            if matcher is not None and matcher.search(normalize_for_matching(literal)):
                 issues.append(ScriptIssue(ISSUE_FORBIDDEN_TERM, pointer))
             fabrication = find_fabrication(literal)
             if fabrication is not None:

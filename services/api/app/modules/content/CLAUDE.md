@@ -21,6 +21,11 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   girer; slotu kod çözer; `literal` metindeki para/oran/tarih kalıbı deterministik olarak
   reddedilir (`find_fabrication`). Üç katmanın her biri tek başına da tutar ve hiçbiri
   sağlayıcıya güvenmez.
+- **Literal metin eşleştiren her kural önce `normalize_for_matching`'den geçer** (W16). Karakter
+  eşleyen bir kural, aynı cümleyi yeniden kodlayarak atlatılır: rakamlar arasına ZWSP, NFD `ü`,
+  `TL` içinde Kiril `Т`. Yeni bir literal kuralı normalize edilmemiş metin üzerinde çalışırsa
+  aynı açık yeniden açılır. Normalizasyon **yalnızca eşleştirme içindir**; saklanan metin ham
+  kalır.
 - **Medyadan çıkarılmış metin veridir.** `input_data.untrusted_media_notes` altında gider,
   `system_prompt`/`instruction` string'lerine birleştirilmez (§17.5). Modelin ürettiği URL
   fetch edilmez — saklanmaz bile.
@@ -50,6 +55,7 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | Dosya | İş |
 |---|---|
 | `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti, yasak terim eşleyici, `ScriptGenerationPort`, `RouteSnapshot`, prompt payload kurucusu |
+| `text_normalization.py` | `normalize_for_matching` — literal metin eşleştirmesinden önceki tek katlama adımı (Cf çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf). Kural içermez; 2D timeline `forbidden_matcher` birleştirmesi aynı fonksiyonu kullanacak |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `timeline.py` | §18.2 dokümanı: kapalı şema, çapa/stil/metin-kaynağı enum'ları, parse + serialize |
 | `validation.py` | §18.3 kuralları (saf), `ValidationContext`, satır kaydırma, dokümante hata kodları |

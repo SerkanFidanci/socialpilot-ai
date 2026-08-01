@@ -6,7 +6,7 @@
 |---|---|
 | `main` | `3109464`+ — W01→W14 + W13 düzeltmesi merge'de; **Codex 3. tur döndü: 2 kritik bulgu → W16** (log `extra` sızıntısı, dedektör Unicode atlatması); W15 uçuşta |
 | Alembic head | `0013_script_generation` (tek head; zincir 0001→0013, merge sonrası up/down/up doğrulandı) |
-| Backend doğrulama | **628 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **697 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -131,7 +131,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W13](handoffs/W13-script-generation.md) | **Phase 2B** — senaryo üretimi | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — Unicode görünmez/normalizasyon varyantları dedektörü atlatıyor → **W16**; 2 yanlış pozitif bilinçli politika olarak pinlenecek | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
 | [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **uçuşta** (worktree'de çalışıyor, commit yok) | `slice/2c-tts-voiceover` | Opus 5 / high | **SENDE** (`0014`) |
-| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektöre NFKC+Cf normalizasyonu, yanlış pozitif pinleri | **şimdi** — W15 ile dosya-ayrık, paralel tetiklenebilir | `fix/verification-followups-3` | Opus 5 / high | — (0014 W15'te) |
+| [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektöre NFKC+Cf normalizasyonu, yanlış pozitif pinleri | **tamamlandı** (dalda, merge edilmedi) · 697 pytest yeşil · Codex doğrulaması bekliyor · **3 kalıp-grameri açığı PM kuyruğuna** (diyakritiksiz Türkçe, `T.L.`, `⑴⑸`) | `fix/verification-followups-3` | Opus 5 / high | — (0014 W15'te) |
 
 ### Dosya sahipliği (çakışma önleme)
 
