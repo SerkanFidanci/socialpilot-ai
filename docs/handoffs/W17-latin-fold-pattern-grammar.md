@@ -1,7 +1,29 @@
 # W17 — Latin harf katlaması (iki yön) + kalıp grameri
 
 **Dal:** `fix/w17-latin-fold` · **Base:** `main` · **Migration slotu: YOK** (migration dosyalarına dokunma)
-**Durum:** iki tur merge edildi · **TAKİP DÜZELTMESİ 2 AÇIK** (aşağıda) — takip 1 kapandı
+**Durum:** üç tur merge edildi · **TAKİP DÜZELTMESİ 3 AÇIK** (aşağıda)
+
+## Takip düzeltmesi 3 — ondalık kesir sözcükleri (PM, 2026-08-02)
+
+Codex son turda gramerin geri kalanını kıramadı (kesir/dağıtım eki/kısaltma kuyrukları 18/20, yanlış pozitif 20/20 temiz) ama bir sınıf açık kaldı:
+
+**`bir tam onda bes lira`, `birtamondabeslira`** ve katlanmış eşdeğerleri geçiyor ve kalıcı dokümana ulaşıyor (kritik). Ölçüm: `bir tam onda bes lira` için 81 birleşimin 45'i, `iki tam yuzde yirmi bes lira` için 243'ün 75'i kaçmış.
+
+### PM kararı
+
+**`tam`, `onda`, `binde` ve kesir bağlamındaki `yuzde` sayı sözcüğü kümesine girer** — bunlar Türkçenin ondalık yazımının parçası (`bir tam onda beş` = 1,5) ve küme yine **kapalı**: dil yeni ondalık bağlacı üretmiyor. Birleşim grameri zaten var (boşluk/tire/bitişik), yeni gramer yazılmıyor — küme genişliyor.
+
+**Dikkat — `yuzde` iki işli:** oran kuralında (`yuzde yirmi indirim`) ve kesir paydasında (`bir tam yuzde yirmi bes lira`). İkisi de yakalanmalı ve `yuzde(?!n)` ("bu yüzden") koruması bozulmamalı.
+
+**Yanlış pozitif riski `tam`'da:** çok yaygın bir kelime. Ölç: `tam 5 dakika`, `tam zamanında`, `Tam bir lezzet`, `tam 3 kişilik` — para birimi taşımayan hiçbiri yakalanmamalı (kalıp zaten para birimi istiyor, ama kanıtla).
+
+### Kabul kriterleri
+
+1. Reddedilir: `bir tam onda bes lira` · `birtamondabeslira` · `bir-tam-onda-bes-lira` · `iki tam yuzde yirmi bes lira` · `bir tam binde bes dolar` + Latin-katlanmış eşdeğerleri — birim **ve** HTTP (`document IS NULL`).
+2. Korunur: `tam 5 dakika` · `tam zamanında` · `Tam bir lezzet` · `tam 3 kişilik menü` · `Bu yüzden 3 kişi` · mevcut 20 girdilik yanlış pozitif kümesi.
+3. **Codex'in ölçümü tekrarlanıyor:** `bir tam onda bes lira` (81 birleşim) ve `iki tam yuzde yirmi bes lira` (243 birleşim) — **0 kaçış**; jeneratif taramaya kesir boyutu eklenip sınırlı hâli teste alınıyor.
+4. `make verify` yeşil; taban **1204**'ün altına düşmez; migration yok.
+5. Rapor "Rapor — takip düzeltmesi 3" başlığıyla; araç zinciri. **Merge etme, dalda bırak.**
 **Model/effort:** Opus 5 / high
 
 ## Takip düzeltmesi 2 — yazılı sayı grameri (PM, 2026-08-02)

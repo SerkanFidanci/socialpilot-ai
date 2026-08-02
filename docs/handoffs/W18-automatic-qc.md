@@ -1,7 +1,28 @@
 # W18 — Phase 2D: Otomatik QC (§19.4)
 
 **Dal:** `slice/2d-automatic-qc` · **Base:** `main` · **Migration slotu: SENDE** (`0015`)
-**Durum:** tamamlandı (dalda) · **takip 1 uygulandı** (aşağıdaki bölüm + takip raporu)
+**Durum:** merge edildi · **TAKİP 2 AÇIK** — Codex yinelenen-sonuç açığı buldu (aşağıda)
+
+## Takip 2 — yinelenen kontrol sonucu (PM, 2026-08-02)
+
+Codex turu QC'nin gerçek ölçümlerini kıramadı (bozuk medya 5/5, fail-closed 3/3, tenant/sızıntı 5/5, timeline yasak terim 6/6) ama **birleştirmeyi** kırdı:
+
+1. **Deterministik tarafta son yazan kazanıyor** (yüksek): aynı kontrol için `black_frames=failed` sonra `passed` verildiğinde karar `passed`. Ters sırada `failed`. Yani bir başarısız kontrol rapordan düşürülebiliyor.
+2. **`VisualQcPort` cevabında aynı kontrol iki kez gelirse** önceki `failed` kayboluyor (yüksek).
+
+### PM kararları
+
+1. **Birleştirme sıra-bağımsız (kommutatif) olmalıdır.** Bir kontrol için birden fazla sonuç varsa **en kötüsü kazanır**: `failed` > `unknown` > `passed`. Aynı girdi kümesi hangi sırada gelirse gelsin aynı kararı vermeli — bu, testle sabitlenecek asıl şart (girdileri karıştır, sonuç değişmesin).
+2. **İç taraftaki yineleme ayrıca bir kod hatasıdır.** `build_results`'a aynı kontrol iki kez verilmesi çağıranın hatasıdır; birleştirme fail-closed davranmalı **ve** bu durum ayrıca yakalanmalı (mevcut `QC_REPORT_INCOMPLETE` deseniyle tutarlı bir şekilde). Dış port cevabındaki yineleme ise **veri**: sağlayıcı böyle davranabilir, orada reddetmek değil en kötüsünü almak doğrudur.
+3. Kontrol kümesi, eşikler, karar tablosu ve ölçümler **değişmiyor** — yalnızca birleştirme.
+
+### Kabul kriterleri
+
+1. Codex'in iki reprosu birebir kapanıyor (her iki sırada da `failed`).
+2. **Kommutatiflik testi:** rastgele üretilmiş sonuç listeleri karıştırıldığında karar değişmiyor (tohumlanmış, tekrarlanabilir).
+3. İç yineleme kod hatası olarak yakalanıyor; dış port yinelemesi fail-closed birleşiyor — ikisi ayrı testte.
+4. Mevcut QC testleri aynen geçiyor; `make verify` yeşil; taban **1204**'ün altına düşmez; migration yok.
+5. Rapor "Rapor — takip 2" başlığıyla; araç zinciri. **Merge etme, dalda bırak.**
 **Model/effort:** Opus 5 / high
 
 ## Takip 1 — Celery bağlantısı (PM, 2026-08-02)

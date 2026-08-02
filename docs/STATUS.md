@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | W01→W18 merge edildi (2A–2D bitti), yalnız W06 bekliyor. **Phase 2'nin ilk dört dilimi kapandı**; 2E'nin birinci yarısı (W19) dalda tamam. W18 ve W19 için Codex turu bekliyor |
-| Alembic head | `0016_content_projects` (W19 dalında; tek head; zincir 0001→0016, up/down/up doğrulandı). `main`'de hâlâ `0015_render_qc_reports` |
-| Backend doğrulama | **1151 pytest** `main`'de (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · W19 dalında **1204** · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | W01→W19 merge edildi (2A–2E birinci yarı). **Codex turu W18 ve W17'de birer açık buldu → düzeltme turu 4 açık** (QC yinelenen sonuç birleştirmesi, `bir tam onda bes lira` kesir grameri). W19 için Codex turu bekliyor |
+| Alembic head | `0016_content_projects` (tek head; zincir 0001→0016, up/down/up doğrulandı) |
+| Backend doğrulama | **1204 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
