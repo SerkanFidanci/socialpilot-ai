@@ -1,8 +1,20 @@
 # W18 — Phase 2D: Otomatik QC (§19.4)
 
 **Dal:** `slice/2d-automatic-qc` · **Base:** `main` · **Migration slotu: SENDE** (`0015`)
-**Durum:** hazır, tetiklenmedi
+**Durum:** tamamlandı (dalda) · **takip 1 uygulandı** (aşağıdaki bölüm + takip raporu)
 **Model/effort:** Opus 5 / high
+
+## Takip 1 — Celery bağlantısı (PM, 2026-08-02)
+
+**Bu benim WO hatam, oturumun değil:** kapsam "ölçüm worker'da" diyordu ama dosya listesine worker dosyalarını koymamıştım. Oturum çelişkiyi sessizce çözmek yerine bildirdi — doğru davranış. İzin veriliyor, sıcak oturum aynı dalda (`slice/2d-automatic-qc`) tamamlıyor:
+
+1. **Dosya listesine eklendi:** `services/api/app/worker/composition.py`, `services/api/app/worker/tasks.py`, `services/api/app/infrastructure/celery_app.py` ve bunların testleri.
+2. Raporundaki yamayı uygula: `WorkerContext`'e `qc_probe` + `visual_qc`, `content_qc_service` fabrikası, `content.qc.drain` task'ı, beat girdisi.
+3. **`process_next()`'in kendi kendine tarama davranışı kalsın mı — senin kararın**, ama raporda gerekçelendir: beat tetiklemesi geldikten sonra tarama gereksiz bir tam-tablo taraması mı oluyor, yoksa kaçan render'lar için ikinci ağ mı? Ne seçersen davranış testli olsun.
+4. **Testler:** beat zamanlaması ve task kaydı diğer drain task'larıyla aynı disiplinde doğrulanır (mevcut worker testlerinin desenini izle); QC job'ı gerçekten beat üzerinden akıyor.
+5. `make verify` yeşil; taban **1071**'in altına düşmez; migration yok (`0015` zaten dalda). **Merge etme, dalda bırak.**
+
+Diğer her şey kabul edildi — aşağıdaki rapora ve doğrulama tablosuna dokunma.
 **Plan:** [Phase 2 planı](../plans/active/phase-2-content-generation.md) — slice 2D
 **Neden bu iş:** 2A–2C üretimi kurdu; **güvenilirliği kurmadı.** Bugün render biten her çıktı, gerçekten açılıyor mu, sesi var mı, yazısı kadrajda mı, fiyatı kaynağa uyuyor mu bilinmeden `completed` sayılıyor. QC olmadan preview kullanıcıya gösterilemez — ve gösterilirse hatayı kullanıcı bulur.
 
@@ -213,6 +225,102 @@ Tamamı `COMPOSE_PROJECT_NAME=sp-w18` ile izole compose projesinde (host portlar
 7. **Test dosyası adı çakışması** (`tests/unit/test_content_qc.py` ↔
    `tests/integration/test_content_qc.py`) pytest'in toplama hatasına yol açtı; unit dosyası
    depo geleneğine uyularak `test_content_qc_unit.py` oldu.
+
+## Takip 1 raporu — 2026-08-02 · Opus 5 / high
+
+**Dal:** `slice/2d-automatic-qc` (aynı dal) · **Durum:** tamamlandı, **merge edilmedi**
+
+### Yapılanlar
+
+- `worker/composition.py`: `WorkerContext`'e `qc_probe` + `visual_qc`; `build_worker_context`
+  ikisini `create_qc_probe` / `create_visual_qc` ile kuruyor; `content_qc_service(session)`
+  fabrikası. Fabrika **render portu almıyor** — yeniden render 2E'nin, ve composition root
+  sızıntının olabileceği tek yerdi.
+- `worker/tasks.py`: `content.qc.drain`, `needs_workdir=True` ile (materialize edilen çıktı,
+  metadata dökümleri ve örnek frame'ler `WorkerScratchGuard` bütçesinin içinde kalıyor).
+- `infrastructure/celery_app.py`: `drain-content-qc` beat girdisi, medya drain aralığında.
+- Dokümantasyon: `background-jobs.md` beat tablosu + olay tablosu, `content-render.md`'nin açık
+  notu kapatıldı, `worker/CLAUDE.md`.
+
+### Kararım — tarama kalıyor (PM sorusu 3), ve gerekçesi ölçülmüş
+
+**Kalıyor.** Üç sebep, ikisi ölçüm:
+
+1. **Olay yok, çünkü olayı yazacak dosya hâlâ listede değil.** `content.qc.requested`'i
+   `render_service._succeed()` yazardı; o dosya takip 1'in listesinde de yok. Yani tarama bugün
+   tek tetikleyici.
+2. **Tarama gerçek bir özellik satın alıyor, ve o özellik olay geldikten sonra da değerli:**
+   worker düşükken biten render bir sonraki tick'te bulunuyor — kuyruk kaydı yok, kaybolmuş
+   mesaj yok. Testi var (`test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up`).
+3. **Bedeli tahmin etmedim, ölçtüm.** 200 bin render + 199.995 rapor ile (PostgreSQL 17,
+   compose):
+
+   | Sorgu şekli | Süre |
+   |---|---|
+   | bugünkü claim (hash anti-join, iki seq scan) | **134 ms** |
+   | aynı claim, nested-loop anti-join + kısmi index | **0,14 ms** |
+
+   30 saniyelik tick'te 134 ms, günde ~6,4 dakika CPU demek — tek sunucuda (ADR-013) fark
+   edilir ama kriz değil, ve 200 bin render bu ürün için **çok** yüksek bir hacim.
+
+**Index eklemedim, ve bu bilinçli.** Denedim: `render_qc_reports(render_id)` +
+`render_outputs(completed_at, id) WHERE status='succeeded'` eklendiğinde planlayıcı **yine**
+hash anti-join'i seçiyor (134 ms → 101 ms, plan aynı). Sebep: raporsuz render'ların hep en
+yeniler olduğunu istatistik bilemiyor, dolayısıyla `LIMIT 1`'in nested loop'u erken kesebileceğini
+göremiyor. Planı zorladığımda 0,14 ms çıkıyor — yani **970×** fark planlayıcının erişemediği bir
+plandadır. Sonuç: index tek başına çözmüyor, **sorgunun korelasyonu ifade etmesi** gerekiyor
+(zaman penceresi ya da sınırlı alt sorgu). Kullanılmayacak iki index eklemek, sorunu çözülmüş
+gibi göstermek olurdu — bu yüzden eklemedim ve ölçümü doküman + rapora yazdım.
+
+**Doğru anı 2E:** `render_service.py`'ye sahip olan slice tamamlanınca kuyruğa yazabilir; o zaman
+tarama yavaş bir süpürmeye düşer, korelasyon sorunu kalkar ve index'ler anlamlı hale gelir. Veri
+artık elde — bir sonraki oturumun yeniden keşfetmesi gerekmiyor.
+
+**Sıralamayı `completed_at` ASC bıraktım** (en eski önce): plan her iki yönde de aynı, yani bugün
+hiçbir şey kazandırmıyor, ve ASC diğer drain'lerin `requested_at` sırasıyla tutarlı. Performans
+eşitken tutarlılık kazanır.
+
+### Doğrulama
+
+Araç zinciri değişmedi: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest 9.1.1 · FFmpeg 7.1.5.
+`COMPOSE_PROJECT_NAME=sp-w18`, izole portlar (8022/55463/56389/59040/59041).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` · `ruff format --check` | ✅ temiz · 200 dosya biçimli |
+| `mypy .` (strict) | ✅ 188 dosya, hata yok |
+| `pytest` (gerçek PostgreSQL + MinIO + FFmpeg) | ✅ **1078 passed** (takip öncesi taban 1071, +7) |
+| migration | yok — `0015` zaten dalda, dokunulmadı |
+
+| Takip kriteri | Sonuç |
+|---|---|
+| 2 · yama uygulandı | ✅ `WorkerContext` alanları, `content_qc_service`, `content.qc.drain`, beat girdisi |
+| 3 · tarama kararı gerekçeli ve **testli** | ✅ karar yukarıda, ölçümle; davranış iki testte sabit (olayı olmayan tek drain; worker düşükken biten render bulunuyor) |
+| 4 · beat + task kaydı mevcut disiplinde | ✅ `test_beat_schedule_covers_dispatch_every_drain_and_recovery` QC satırıyla genişletildi; **yeni**: `test_every_scheduled_task_is_registered_and_every_registered_drain_is_scheduled` iki yönlü küme eşitliği kuruyor — task ve beat girdisi artık biri olmadan öbürü eklenemiyor |
+| 4 · QC job'ı gerçekten beat üzerinden akıyor | ✅ `test_the_beat_entry_drives_a_real_qc_run_through_the_registered_task`: zincir beat girdisi → `celery_app.tasks[adı]` → gerçek rapor; task fonksiyonu **import edilmiyor**, schedule'ın tuttuğu adla çözülüyor (aradaki elle yazılmış bağ yok) |
+| 5 · `make verify` yeşil, ≥1071 | ✅ 1078 |
+
+### Açıkça belirtmem gerekenler
+
+1. **Listede olmayan bir dosyaya dokundum: `docs/architecture/background-jobs.md`.** Beat
+   tablosunu ve outbox olay tablosunu tutan doküman bu; QC satırını eklemeden bırakmak, az önce
+   yaptığım değişiklik hakkında yanlış bilgi veren bir doküman bırakmak olurdu. Aynı tabloda
+   **W11'den kalan bir eksik** de vardı (`drain-content-render` hiç yazılmamış) — onu da
+   ekledim, çünkü yarısı yanlış bir tabloyu bilerek bırakmak istemedim. Uçuşta olan tek diğer iş
+   W17 takip 2 ve `script.py` gramerine dokunuyor; çakışma riski yok. Kabul etmezsen tek dosya,
+   geri alınması kolay.
+2. **`test_celery_publisher.py` ve `test_worker_composition.py` genişletildi** — takip "bunların
+   testleri" dediği için listede sayıyorum, ama beat tablosu testi tüm drain'leri kapsayan ortak
+   bir test olduğu için haber veriyorum.
+3. **Yeni totality testi mevcut bir boşluğu da kapattı:** `test_celery_drain_tasks_are_registered`
+   `content.render.drain`'i hiç kontrol etmiyordu (W11'den beri). İki yönlü küme eşitliği artık
+   bunu ve gelecekteki her drain'i otomatik kapsıyor — bu hattın "elle sayılmış küme delinir"
+   dersinin buradaki karşılığı.
+4. **Ölçüm verisi 2E'ye devrediliyor** (yukarıdaki tablo + `background-jobs.md`). 2E olayı
+   eklerken index kararını da almalı; sorgunun yeniden şekillenmesi gerektiği artık ölçülmüş
+   bir gerçek, tahmin değil.
+5. Üretimde hiçbir render otomatik `passed` olmuyor — değişmedi, gerçek VLM sağlayıcısı W08
+   sonrası. Beat bağlandı diye bu değişmez.
 
 ## Doğrulama
 

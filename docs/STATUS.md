@@ -6,7 +6,7 @@
 |---|---|
 | `main` | W01→W17 (takip düzeltmesi dahil) merge edildi, yalnız W06 bekliyor. **Senaryo dedektörü hattı kapandı** — 46.918 varyantlık taramada 0 kaçış, jeneratif regresyon testi var. Sırada: **W18 = Phase 2D otomatik QC** (+ paralel Codex teyit turu) |
 | Alembic head | `main`'de `0014_voiceover_assets`; **W18 dalında `0015_render_qc_reports`** (tek head; zincir 0001→0015, up/down/up doğrulandı) |
-| Backend doğrulama | `main`: **947 pytest**; **W18 dalında 1071 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 / pytest 9.1 |
+| Backend doğrulama | `main`: **947 pytest**; **W18 dalında 1078 pytest** (gerçek PostgreSQL + MinIO + FFmpeg) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 / pytest 9.1 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -37,10 +37,16 @@
 
 **Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.** 2A/2B/2C kapandı; **2D dalda tamamlandı** (W18, merge bekliyor); sırada **2E (yaşam döngüsü + entitlement)**.
 
-> **2D'nin PM'e bıraktığı iş:** QC servisi, ölçümü, karar tablosu ve raporu tamam ve testli, ama
-> **Celery bağlantısı yapılmadı** — `content.qc.drain` task'ı, worker composition satırı ve beat
-> girdisi W18'in dosya listesinin dışındaydı. Servis kendi kendine kuyruğa giriyor (QC raporu
-> olmayan `succeeded` render'ı tarıyor), yani bağlantı üç ek satır; tam yama W18 raporunda.
+> **2D tamam (dalda):** takip 1 ile Celery bağlantısı da yapıldı — `content.qc.drain`, beat
+> girdisi `drain-content-qc`, worker composition. QC artık uçtan uca akıyor.
+>
+> **2E'ye devredilen ölçüm:** QC claim'i "raporu olmayan `succeeded` render" taramasıdır ve
+> tetikleyicisi yalnızca beat tick'idir (olayı yazacak `render_service.py` W18'in listesinde
+> değildi). Ölçüldü: 200 bin render'da tick başına **134 ms** (hash anti-join, iki seq scan);
+> aynı sorgu nested-loop + kısmi index ile **0,14 ms**, ama planlayıcı o planı seçmiyor çünkü
+> "raporsuz render'lar hep en yeniler" korelasyonunu bilemiyor. Yani **index tek başına
+> çözmüyor**; sorgunun yeniden şekillenmesi gerek. 2E olayı eklerken bu kararı da alsın —
+> ayrıntı W18 takip raporunda ve [background-jobs.md](architecture/background-jobs.md)'de.
 >
 > **2D'nin ürün tarafına söylediği:** gerçek VLM sağlayıcısı bağlanana kadar (W08 sonrası) hiçbir
 > render otomatik `passed` olmuyor. Model kontrolleri `unknown`, karar `needs_review`. Bu
@@ -144,7 +150,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **KAPANDI** · merge · `0014` · **Codex doğrulaması geçti (6/6)** — serbest metin yolu yok, tenant sızıntısı yok, tavan çağrı öncesi duruyor, beyan ölçümü ezemiyor, idempotency kanonik, imza sızmıyor · **açık:** render adapter'ları `voiceover` kaynağını bildirmiyor → 2E | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | **iki tur da merge edildi** (2. tur: Latin dışı alfabe kısıtı `SCRIPT_UNSUPPORTED_CHARACTER`, görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde-kodlu adları görüyor) · **kapanış birleşik Codex turuna bağlı** (W17 sonrası) | `fix/verification-followups-3` (worktree duruyor, birleşik tur bitene kadar) | Opus 5 / high | — |
 | [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin harf katlaması (iki yön) + kalıp grameri** — `turk lirasi`+`ṬL`/`ŦL` tek katlamayla, ayrıştırılamayan Latin genişletmeleri fail-closed (ad-tabanlı), `T.L.`/`T L`, süslü rakamlar | **kapandı** · iki tur da merge edildi · **947 pytest** (PM koşusu) · çekim listesi yerine ek-alfabesi çapası (ekte `o`/`v`/`p` yok → "Eurovision"/"Kebap" güvende); 46.918 varyant / **0 kaçış**, jeneratif regresyon testi · yan kazanç: `yuzlerce lira`/`binlerce dolar` da yakalanıyor · kısa Codex teyidi bekliyor | `fix/w17-latin-fold` (worktree duruyor, teyide kadar) | Opus 5 / high | — |
-| [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4): deterministik ölçümler (açılış/süre/ses/loudness/siyah frame/donuk kare/kadraj/senkron/fiyat-tarih uyumu) + model kontrolleri port&fake · **fail-closed** (`unknown` → `needs_review`) · karar verir, eylem yapmaz (2E) · `forbidden_matcher` birleştirmesi | **tamamlandı, dalda** · `0015` · **1071 pytest** · merge edilmedi · **PM'e kalan: Celery bağlantısı (3 dosya, dosya listesi dışındaydı)** | `slice/2d-automatic-qc` (worktree duruyor) | Opus 5 / high | kullanıldı |
+| [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4): deterministik ölçümler (açılış/süre/ses/loudness/siyah frame/donuk kare/kadraj/senkron/fiyat-tarih uyumu) + model kontrolleri port&fake · **fail-closed** (`unknown` → `needs_review`) · karar verir, eylem yapmaz (2E) · `forbidden_matcher` birleştirmesi | **tamamlandı, dalda** · `0015` · **takip 1 (Celery bağlantısı) uygulandı** — `content.qc.drain` + beat girdisi + composition · **1078 pytest** · merge edilmedi | `slice/2d-automatic-qc` (worktree duruyor) | Opus 5 / high | kullanıldı |
 
 ### Dosya sahipliği (çakışma önleme)
 

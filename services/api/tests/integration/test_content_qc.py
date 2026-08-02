@@ -22,6 +22,7 @@ import os
 import subprocess
 import uuid
 from collections.abc import Generator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -34,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import Settings
 from app.infrastructure.ai.fake_visual_qc import DisabledVisualQcAdapter, FakeVisualQcAdapter
+from app.infrastructure.celery_app import celery_app
 from app.infrastructure.identity.local import LocalIdentityVerifier
 from app.infrastructure.media.s3_materializer import S3MediaMaterializer
 from app.infrastructure.render.qc_probe import FFmpegQcProbe
@@ -66,7 +68,8 @@ from app.modules.content.qc import (
 )
 from app.modules.content.qc_service import ContentQcService
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
-from app.modules.operations.models import ProviderUsage
+from app.modules.operations.models import BackgroundJob, ProviderUsage
+from app.worker import composition
 
 pytestmark = pytest.mark.integration
 KEY = "test-local-identity-signing-key-123"
@@ -730,6 +733,105 @@ def test_a_campaign_that_ended_after_the_render_is_caught(tmp_path: Path) -> Non
     report = asyncio.run(load_report(render_id))
     assert code_of(report, QcCheck.VERIFIED_VALUES_CURRENT) == "QC_VERIFIED_VALUE_OUT_OF_WINDOW"
     assert report.verdict is QcVerdict.FAILED
+
+
+# --- the beat-driven path (follow-up 1) ----------------------------------------------------------
+
+
+@requires_storage
+@requires_ffmpeg
+def test_the_beat_entry_drives_a_real_qc_run_through_the_registered_task(tmp_path: Path) -> None:
+    """Follow the chain the deployment actually follows: beat entry → task registry → report.
+
+    The task function is resolved by the name the beat schedule holds rather than imported, so
+    there is no hand-written link in the middle. If the entry, the registration and the drain
+    ever stop agreeing, this fails instead of a worker logging an unregistered-task error every
+    thirty seconds where nobody reads it.
+
+    Adapters are substituted on the process context the way `test_celery_orchestration.py` does:
+    the composition root reads environment settings, and this suite runs against real storage.
+    """
+
+    video = tmp_path / "good.mp4"
+    healthy(video)
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        business_id, user_id = make_business(client, auth("qc-beat", "qc-beat@example.com"))
+        render_id = asyncio.run(seed_render(business_id, user_id, video, settings=settings))
+
+    # Importing the module is what registers the tasks — the worker entry point does exactly
+    # this, and a beat entry naming a task nobody imported is a tick that logs an error forever.
+    import app.worker.tasks  # noqa: F401
+
+    task_name = celery_app.conf.beat_schedule["drain-content-qc"]["task"]
+    assert task_name in celery_app.tasks
+
+    composition.start_worker_process()
+    context = composition.get_worker_context()
+    composition._context = replace(
+        context,
+        settings=settings,
+        materializer=S3MediaMaterializer(settings),
+        qc_probe=FFmpegQcProbe(settings),
+        visual_qc=FakeVisualQcAdapter(settings),
+    )
+    try:
+        drained = celery_app.tasks[task_name]()
+        assert drained == {"status": "drained", "processed": 1}
+        # An idle tick claims nothing and stops after one query rather than spinning the batch.
+        assert celery_app.tasks[task_name]() == {"status": "drained", "processed": 0}
+    finally:
+        composition.shutdown_worker_process()
+
+    report = asyncio.run(load_report(render_id))
+    assert report.status is QcRunStatus.COMPLETED
+    assert len(report.checks) == len(QcCheck)
+
+
+@requires_storage
+@requires_ffmpeg
+def test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up(
+    tmp_path: Path,
+) -> None:
+    """Why the claim scans instead of waiting for a message.
+
+    The render here completes with no QC worker running and no queue entry anywhere — exactly
+    what a restart, a lost broker message or a deploy window produces. The next tick finds it,
+    because the claim asks the database "which succeeded render has no report" rather than
+    "what is in the queue". That is the property the scan buys, and it is the reason it stays
+    even when an event-driven enqueue is added in front of it.
+    """
+
+    video = tmp_path / "good.mp4"
+    healthy(video)
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        business_id, user_id = make_business(client, auth("qc-down", "qc-down@example.com"))
+        render_id = asyncio.run(seed_render(business_id, user_id, video, settings=settings))
+
+    async def queue_is_empty() -> bool:
+        async with factory()() as session:
+            jobs = await session.scalars(
+                select(BackgroundJob).where(BackgroundJob.job_type == "content.qc")
+            )
+            return not list(jobs)
+
+    assert asyncio.run(queue_is_empty()), "nothing announced this render to anyone"
+    assert asyncio.run(run_qc(tmp_path)) is not None
+
+    report = asyncio.run(load_report(render_id))
+    assert report.status is QcRunStatus.COMPLETED
+
+    async def job_exists() -> bool:
+        async with factory()() as session:
+            job = await session.scalar(
+                select(BackgroundJob).where(BackgroundJob.job_type == "content.qc")
+            )
+            return job is not None and job.status.value == "succeeded"
+
+    # The job row is created by the claim, not before it: the durable record exists from the
+    # moment work starts and is settled when it ends.
+    assert asyncio.run(job_exists())
 
 
 # --- the durable job, the read endpoint, and tenant isolation -----------------------------------

@@ -112,6 +112,20 @@ def drain_content_render() -> dict[str, object]:
     return context.run(_drain(context, context.content_render_service, needs_workdir=True))
 
 
+@celery_app.task(name="content.qc.drain")
+def drain_content_qc() -> dict[str, object]:
+    """Drain automatic QC (PRD §19.4).
+
+    Unlike every other drain here, this one is woken **only** by the beat tick: there is no
+    `content.qc.requested` outbox event, because the QC claim looks for a succeeded render that
+    has no report rather than for a queue entry. `needs_workdir` keeps the materialized output,
+    the metadata dumps and the sampled frames inside the guarded scratch root.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.content_qc_service, needs_workdir=True))
+
+
 @celery_app.task(name="operations.recovery.drain")
 def recover_stale_jobs() -> dict[str, object]:
     context = get_worker_context()

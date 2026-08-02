@@ -52,6 +52,13 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "content.render.drain",
                 "schedule": settings.celery_beat_media_drain_interval_seconds,
             },
+            # The one drain with no outbox event behind it. Automatic QC (§19.4) claims a
+            # succeeded render that carries no report, so the beat tick is the whole trigger
+            # rather than a wake-up for work an event already announced.
+            "drain-content-qc": {
+                "task": "content.qc.drain",
+                "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
             "recover-stale-jobs": {
                 "task": "operations.recovery.drain",
                 "schedule": settings.celery_beat_recovery_interval_seconds,

@@ -18,6 +18,7 @@ from app.core.telemetry import (
     instrument_database,
     setup_worker_telemetry,
 )
+from app.infrastructure.ai import create_visual_qc
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.celery_publisher import CeleryOutboxPublisher
 from app.infrastructure.database.metadata import verify_mapping_is_complete
@@ -36,8 +37,10 @@ from app.infrastructure.media.fake_video_understanding import (
     FakeFrameExtractionAdapter,
     FakeVideoUnderstandingAdapter,
 )
-from app.infrastructure.render import create_render
+from app.infrastructure.render import create_qc_probe, create_render
 from app.infrastructure.storage import create_storage
+from app.modules.content.qc import MediaQcProbePort, VisualQcPort
+from app.modules.content.qc_service import ContentQcService
 from app.modules.content.render import RenderPort
 from app.modules.content.render_service import ContentRenderService
 from app.modules.media.ingest import MediaIngestService
@@ -65,6 +68,12 @@ class WorkerContext:
     storage: MultipartStoragePort
     materializer: MediaMaterializerPort
     render: RenderPort
+    # QC measurement has no fixture in any environment (see `create_qc_probe`), so this is the
+    # real adapter here exactly as it is in production. The vision adapter beside it is the
+    # opposite case: `disabled` in production, which is what keeps a fixture from approving a
+    # customer's video.
+    qc_probe: MediaQcProbePort
+    visual_qc: VisualQcPort
     content_inspector: FakeContentInspector
     malware_scanner: FakeMalwareScanner
     scene_detector: FakeSceneDetector
@@ -128,6 +137,18 @@ class WorkerContext:
             session, self.settings, self.materializer, self.render, self.storage
         )
 
+    def content_qc_service(self, session: AsyncSession) -> ContentQcService:
+        """Build the QC drain's service. No storage port: QC reads output, it never writes it.
+
+        The render port is absent for a stronger reason than tidiness — a QC run that could
+        reach it could re-render, and the attempt limit that would bound such a loop belongs to
+        slice 2E. The constructor is the enforcement.
+        """
+
+        return ContentQcService(
+            session, self.settings, self.materializer, self.qc_probe, self.visual_qc
+        )
+
     def recovery_service(self, session: AsyncSession) -> JobRecoveryService:
         return JobRecoveryService(session, self.settings)
 
@@ -165,6 +186,8 @@ def build_worker_context(settings: Settings) -> WorkerContext:
         storage=create_storage(settings),
         materializer=create_materializer(settings),
         render=create_render(settings),
+        qc_probe=create_qc_probe(settings),
+        visual_qc=create_visual_qc(settings),
         content_inspector=FakeContentInspector(),
         malware_scanner=FakeMalwareScanner(),
         scene_detector=FakeSceneDetector(),

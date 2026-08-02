@@ -152,6 +152,7 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
         "drain-scene-speech": "media.scene_speech_analysis.drain",
         "drain-video-understanding": "media.video_understanding.drain",
         "drain-content-render": "content.render.drain",
+        "drain-content-qc": "content.qc.drain",
         "recover-stale-jobs": "operations.recovery.drain",
     }
     assert schedule["dispatch-outbox"]["schedule"] == 11
@@ -167,3 +168,21 @@ def test_beat_schedule_wakes_every_drain_task_the_publisher_can_route() -> None:
     schedule = create_celery_app(settings()).conf.beat_schedule
     scheduled = {entry["task"] for entry in schedule.values()}
     assert set(DRAIN_TASK_BY_EVENT.values()) <= scheduled
+
+
+def test_automatic_qc_is_the_one_drain_with_no_event_behind_it() -> None:
+    """A beat entry with no outbox route is a claim, so it is asserted rather than assumed.
+
+    Every other drain is woken twice: by the event its producer wrote and by the beat tick that
+    sweeps up anything the broker lost. QC has no producer — nothing in the render path writes a
+    `content.qc.requested` event — so the tick is the whole trigger, and its claim is a scan for
+    a succeeded render carrying no report. If a later slice adds the event, this test is the
+    thing that fails and asks whether the scan should stay.
+    """
+
+    scheduled = {
+        entry["task"] for entry in create_celery_app(settings()).conf.beat_schedule.values()
+    }
+    assert "content.qc.drain" in scheduled
+    assert "content.qc.drain" not in set(DRAIN_TASK_BY_EVENT.values())
+    assert not any(name.startswith("content.qc") for name in DRAIN_TASK_BY_EVENT)

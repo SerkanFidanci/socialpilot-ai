@@ -307,7 +307,7 @@ gerçekten açılıyor mu, sesi var mı, yazısı kadrajda mı, fiyatı hâlâ k
 `succeeded` sayılıyordu.
 
 ```
-Celery beat ──content.qc.drain──► ContentQcService
+Celery beat ──content.qc.drain──► ContentQcService     (beat girdisi: drain-content-qc)
                                    │ claim: QC raporu OLMAYAN `succeeded` render (SKIP LOCKED)
                                    ├─ T1 COMMIT: render_qc_reports(pending,
                                    │             verdict=needs_review, path=human_review)
@@ -408,10 +408,22 @@ reddediyor — aynı iki fonksiyon, ikinci bir uygulama değil. **Çekim eşleş
 `şeker` yasakken `şekerli` serbest, `az` yasakken `lezzetli` serbest. Liste markanın, kalıp
 bizim; kök eşleşmesi markanın kastetmediğini yasaklardı.
 
-> **PM'e, açık:** QC servisinin uçtan uca koşması için üç ek satır gerekiyor ve üçü de bu iş
-> emrinin dosya listesinin **dışında**: `worker/tasks.py`'de bir `content.qc.drain` task'ı,
-> `worker/composition.py`'de fabrika satırı, `infrastructure/celery_app.py`'de beat girdisi.
-> Servis, testleri ve raporu tamamlandı; yalnızca beat tetiklemesi bağlanmadı.
+**Tetikleyici beat tick'idir, olay değil** (takip 1). `content.qc.drain` bu sistemdeki tek
+**olayı olmayan** drain: diğerleri hem üreticisinin yazdığı outbox olayıyla hem de broker'ın
+kaybettiğini süpüren tick ile uyandırılır; QC'nin üreticisi yok, çünkü render yolunda
+`content.qc.requested` yazan bir yer yok. Claim doğrudan veritabanına soruyor: *hangi
+`succeeded` render'ın raporu yok?* Bunun bedeli tahmin değil **ölçüm**: hash anti-join iki
+sequential scan üzerinden, 200 bin render'da tick başına **~134 ms**. Aynı sorgu kısmi index
+üzerinde nested-loop anti-join olarak **0,14 ms** sürüyor — ama planlayıcı bunu seçmiyor, çünkü
+"raporsuz render'lar hep en yenilerdir" korelasyonunu bilemez. Yani index tek başına çözmüyor;
+sorgunun bu korelasyonu ifade etmesi gerek. İkisinin de doğru yeri, `render_service.py`'ye sahip
+olan ve tamamlanınca kuyruğa yazabilecek olan **2E**: olay geldiğinde tarama yavaş bir süpürmeye
+düşer ve maliyet sorusu ortadan kalkar. O zamana kadar rakam hem karşılanabilir hem **biliniyor**.
+
+Taramanın satın aldığı şey, kaybedilemeyecek bir özellik: **worker düşükken biten render bir
+sonraki tick'te bulunuyor** — kuyruk kaydı olmadan, kaybolmuş mesaj olmadan. Bir olay eklendikten
+sonra bile tarama ikinci ağ olarak kalmalı; testi (`test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up`)
+tam olarak bunu sabitliyor.
 
 ## Bu üç slice'ın taşımadıkları
 
