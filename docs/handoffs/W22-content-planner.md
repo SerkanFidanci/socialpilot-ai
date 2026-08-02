@@ -91,7 +91,7 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. ("Planlayıcı 
 
 ## Rapor — 2026-08-02 · Opus 5 / high
 
-**Dal:** `slice/2g-content-planner` · **Commit'ler:** _(aşağıda)_ · **Durum:** tamamlandı, dalda
+**Dal:** `slice/2g-content-planner` · **Commit:** `3e62cc3` · **Durum:** tamamlandı, dalda
 
 ### Yapılanlar
 
