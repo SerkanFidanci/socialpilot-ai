@@ -557,6 +557,14 @@ W17_BYPASSES = [
     ("dotted abbreviation", "Sadece 165 T.L.", "SCRIPT_FABRICATED_PRICE"),
     ("spaced abbreviation", "Sadece 165 T L.", "SCRIPT_FABRICATED_PRICE"),
     ("parenthesized digits", "Sadece ⑴⑸ TL.", "SCRIPT_FABRICATED_PRICE"),
+    # A decimal written as a fraction in words — Turkish spells 1,5 as `bir tam onda beş`. The
+    # number-word grammar knew the digits at both ends and not the connectives between them, so
+    # the sequence broke in the middle and each piece was too small to read as an amount.
+    ("written decimal, spaced", "Sadece bir tam onda beş lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("written decimal, run together", "Sadece birtamondabeslira.", "SCRIPT_FABRICATED_PRICE"),
+    ("written decimal, hyphenated", "Sadece bir-tam-onda-bes-lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("written decimal, hundredths", "İki tam yüzde yirmi beş lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("written decimal, thousandths", "Bir tam binde beş dolar.", "SCRIPT_FABRICATED_PRICE"),
 ]
 
 

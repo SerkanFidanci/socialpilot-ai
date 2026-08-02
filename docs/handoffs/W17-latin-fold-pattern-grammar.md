@@ -26,6 +26,62 @@ Codex son turda gramerin geri kalanını kıramadı (kesir/dağıtım eki/kısal
 5. Rapor "Rapor — takip düzeltmesi 3" başlığıyla; araç zinciri. **Merge etme, dalda bırak.**
 **Model/effort:** Opus 5 / high
 
+## Rapor — takip düzeltmesi 3 · 2026-08-02 · Opus 5 / high
+
+**Dal:** `fix/verification-followups-4` (base `main` `255a7c0`) · **Durum:** tamamlandı, **merge edilmedi**
+W18 takip 2 ile **aynı dalda**, PM'in isteği üzerine birlikte.
+
+### Yapılanlar
+
+- **`_FRACTION_CONNECTIVE` (yeni):** `tam|onda|binde|yuzde(?!n)`. Türkçe ondalığı kesirle yazar
+  (`bir tam onda bes` = 1,5) ve bu dört sözcük sayının **yazımının parçası**. Küme yine kapalı:
+  dil yeni ondalık bağlacı üretmiyor.
+- **Bağlaçlar yalnızca bir sayı sözcüğünden *sonra* gelebilir.** PM "küme genişliyor, yeni gramer
+  yazılmıyor" dedi; ben tek bir konum kısıtı ekledim ve gerekçesi PM'in kendi uyarısı: `tam` çok
+  yaygın bir sözcük. Serbest bıraksaydım `tamamen liraya endeksli` uydurma fiyat olurdu —
+  ölçtüm, oluyordu. Ondalık asla `tam` ile başlamaz (önünde her zaman tam kısım var), yani kısıt
+  hiçbir gerçek yazımı kaybettirmiyor. Birleşme grameri (boşluk/tire/bitişik) **değişmedi**.
+- **Tutar–birim boşluğu `\s*` yerine `_JOINED`.** `bir-tam-onda-bes-lira` son boşluğu da
+  tireliyor; kabul kriteri 1 bunu açıkça istiyor. Aynı üç yazım biçimi hem tutarın içinde hem
+  tutar ile birimin arasında geçerli olduğu için dar bir sınıf tutmak tutarsızdı.
+- Dokümantasyon: modül `CLAUDE.md`'sine iki değişmez (bağlaçlar + `yuzden` belirsizliği).
+
+### Doğrulama
+
+Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest 9.1.1 · FFmpeg 7.1.5.
+`COMPOSE_PROJECT_NAME=sp-fix4`, izole portlar (8023/55473/56399/59050/59051).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` · `ruff format --check` | ✅ temiz · 205 dosya biçimli |
+| `mypy .` (strict) | ✅ 193 dosya, hata yok |
+| `pytest` (gerçek PostgreSQL + MinIO + FFmpeg) | ✅ **1237 passed** (taban 1204, +33 — W18 takip 2 ile birlikte) |
+| migration | yok |
+
+| Kabul kriteri | Sonuç |
+|---|---|
+| 1 · beş biçim + katlanmış eşdeğerleri reddediliyor, birim **ve** HTTP | ✅ birim testte 9 varyant; HTTP tarafında `W17_BYPASSES` tablosuna beş satır eklendi (`document IS NULL` zorlayan mevcut test) |
+| 2 · yanlış pozitifler korunuyor | ✅ `tam 5 dakika` · `tam zamanında` · `Tam bir lezzet` · `tam 3 kişilik menü` · `Bu yüzden 3 kişi` + **yeni**: `tamamen ücretsiz`, `Fiyatlarımız tamamen liraya endeksli`; mevcut 20 girdilik küme ve `Birey`/`Şef T. Lezzetli`/`Eurovision` pinleri dokunulmadan geçti |
+| 3 · Codex'in ölçümü tekrarlanıyor, 0 kaçış | ✅ `bir tam onda bes lira` **0/81**, `iki tam yuzde yirmi bes lira` **0/243** (Codex: 45/81 ve 75/243 kaçmıştı); tarama teste alındı |
+| 4 · `make verify` yeşil, ≥1204, migration yok | ✅ |
+| 5 · rapor + araç zinciri, merge yok | ✅ |
+
+### Açıkça belirtmem gerekenler
+
+1. **PM'in talimatından bir sapma var ve bilinçli:** "yeni gramer yazılmıyor — küme genişliyor"
+   denmişti; ben bağlaçları kümeye ekledim **ama yalnızca sayı sözcüğünden sonra** gelebilecek
+   şekilde. Serbest üyelik `tam`'ı bir tutarı başlatabilir yapıyor ve `tamamen liraya endeksli`
+   reddediliyordu — PM'in "yanlış pozitif riski `tam`'da" uyarısının tam olarak gerçekleşmesi.
+   Kısıt, o uyarıya verilen cevap. Kabul etmezsen tek satır.
+2. **`yuzden` + para birimi hâlâ reddediliyor ve bu doğru taraf.** Gerçek belirsizlik: bağlaç
+   ("bu yüzden liraya geçtik") ile `yuz`+`den` ("yüzden fazla lira") aynı yazılıyor, ayırt
+   edilemez. Bu davranış **bu turdan önce de vardı** (`main`'de doğruladım), yani regresyon
+   değil; artık gerekçesiyle birlikte testte pinli, kimse yanlışlıkla "düzeltmesin" diye.
+3. **Jeneratif taramaya kesir boyutu eklendi** ayrı bir test olarak
+   (`test_no_written_decimal_escapes_through_spacing_or_composition`), mevcut
+   `test_no_written_amount_escapes_through_spacing_or_composition`'ı büyütmek yerine — ikisi
+   farklı şeyi ölçüyor ve düşen testin hangisi olduğu okunabilir kalsın istedim.
+
 ## Takip düzeltmesi 2 — yazılı sayı grameri (PM, 2026-08-02)
 
 Codex takip-1 turu üç açık buldu (tablo en altta). Çekim çapası tuttu (161/161 ek zinciri, 12/12 yanlış pozitif temiz); delinen yer **yazılı sayı grameri**:

@@ -348,6 +348,22 @@ render başarısı ──content.qc.requested──► ContentQcService   (beat:
 ifade edilemiyor.** Gerekçe: ölçmediğini onaylayan bir QC, QC'siz olmaktan kötüdür; sahte güven
 üretir.
 
+**Birleştirme sıra-bağımsızdır ve en kötüsü kazanır** (takip 2). Bir kontrol için birden fazla
+cevap geldiğinde `merge_check_results` `failed` > `unknown` > `passed` sırasına göre birleştirir;
+eşitlikte `RemediationPath` sırası, sonra kod ve pointer — yani girdileri karıştırmak yalnızca
+kararı değil **saklanan raporu da** değiştiremez. Bu bir tercih değil, düzeltme: kod
+son-yazan-kazanır bir sözlük kuruyordu, dolayısıyla `black_frames=failed` ardından `passed`
+verildiğinde red rapordan **düşüyordu** (Codex, 2026-08-02). Bir reddi ikinci bir cevapla geri
+almanın mümkün olduğu her kural, kötü bir çıktının müşteriye ulaşabildiği bir kuraldır.
+
+**Sınırın iki yanı farklı muamele görür.** Sağlayıcının aynı kontrolü iki kez cevaplaması
+**veridir** — adapter bizim denetimimizde değil, "hassas içerik: failed, hassas içerik: passed"in
+doğru okuması `failed`'dır ve cevabı reddetmek sağlayıcının özensizliğini kesintiye çevirirdi.
+Bizim kodumuzun aynı kontrolü iki kez vermesi **hatadır** ve `QC_REPORT_DUPLICATE_RESULT` ile
+reddedilir — `decide`'ın eksik kümeyi reddetmesiyle aynı desen. Reddetme **birleştirmeden sonra**
+gelir: hatayı yutan bir çağıran bile en kötü cevabı alır, yani fail-closed özelliği istisnanın
+fırlatılmasına bağlı değildir.
+
 **QC karar verir, eylem yapmaz.** `decide` bir karar ve bir *öneri* döner (`retry_render` ·
 `alternative_scene` · `alternative_provider` · `human_review` · `request_new_media`). Yeniden
 render tetiklemez, sağlayıcı değiştirmez, deneme saymaz — sınırsız render döngüsünün sınırı

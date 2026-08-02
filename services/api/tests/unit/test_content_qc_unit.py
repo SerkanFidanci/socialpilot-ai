@@ -59,6 +59,7 @@ from app.modules.content.qc import (
     build_results,
     decide,
     evaluate_deterministic,
+    merge_check_results,
     model_check_results,
     serialize_results,
 )
@@ -147,6 +148,133 @@ def test_a_partial_result_set_is_completed_rather_than_trusted() -> None:
 def test_decide_refuses_an_incomplete_set_instead_of_guessing() -> None:
     with pytest.raises(ValueError, match="QC_REPORT_INCOMPLETE"):
         decide((CheckResult(check=QcCheck.LOUDNESS, status=CheckStatus.PASSED),))
+
+
+# --- 1b. merging two answers for one check keeps the worst, in either order -----------------------
+
+
+def answer(check: QcCheck, status: CheckStatus, **extra: object) -> CheckResult:
+    return CheckResult(check=check, status=status, **extra)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (CheckStatus.FAILED, CheckStatus.PASSED),
+        (CheckStatus.PASSED, CheckStatus.FAILED),
+        (CheckStatus.UNKNOWN, CheckStatus.PASSED),
+        (CheckStatus.PASSED, CheckStatus.UNKNOWN),
+        (CheckStatus.FAILED, CheckStatus.UNKNOWN),
+        (CheckStatus.UNKNOWN, CheckStatus.FAILED),
+    ],
+)
+def test_the_worst_answer_wins_whichever_arrives_last(
+    first: CheckStatus, second: CheckStatus
+) -> None:
+    """Codex's repro: a failing check could be dropped by supplying a passing one after it.
+
+    Last-write-wins made the merge order-dependent, which meant `black_frames=failed` followed by
+    `black_frames=passed` produced `passed` — a refusal talked back out of the report by a second
+    answer. Severity is `failed` > `unknown` > `passed`, so no ordering can lose a refusal.
+    """
+
+    merged = merge_check_results(
+        [answer(QcCheck.BLACK_FRAMES, first), answer(QcCheck.BLACK_FRAMES, second)]
+    )
+    assert len(merged) == 1
+    assert merged[0].status is max((first, second), key=lambda s: _SEVERITY_ORDER.index(s))
+
+
+_SEVERITY_ORDER = [CheckStatus.PASSED, CheckStatus.UNKNOWN, CheckStatus.FAILED]
+
+
+def test_a_repeated_answer_from_the_provider_is_merged_rather_than_refused() -> None:
+    """The port's duplication is data: an adapter is outside our control, so we read it safely."""
+
+    for pair in (
+        (CheckStatus.FAILED, CheckStatus.PASSED),
+        (CheckStatus.PASSED, CheckStatus.FAILED),
+    ):
+        report = VisualQcReport(
+            provider="p",
+            model="m",
+            actual_cost_minor=0,
+            currency="TRY",
+            findings=tuple(
+                VisualQcFinding(check=QcCheck.SENSITIVE_CONTENT, status=status, confidence=0.9)
+                for status in pair
+            ),
+        )
+        answered = {
+            result.check: result
+            for result in model_check_results(report, requested=MODEL_CHECKS, code=None)
+        }
+        assert answered[QcCheck.SENSITIVE_CONTENT].status is CheckStatus.FAILED, pair
+        # The rest of the requested set is still filled in; merging changed nothing about that.
+        assert len(answered) == len(MODEL_CHECKS)
+
+
+def test_a_finding_about_a_check_nobody_asked_for_is_dropped() -> None:
+    """An adapter answers the questions it was given; it does not get to add its own."""
+
+    report = VisualQcReport(
+        provider="p",
+        model="m",
+        actual_cost_minor=0,
+        currency="TRY",
+        findings=(
+            VisualQcFinding(check=QcCheck.LOGO_VISIBLE, status=CheckStatus.FAILED, confidence=0.9),
+        ),
+    )
+    requested = tuple(check for check in MODEL_CHECKS if check is not QcCheck.LOGO_VISIBLE)
+    answered = {
+        result.check: result
+        for result in model_check_results(report, requested=requested, code=None)
+    }
+    assert QcCheck.LOGO_VISIBLE not in answered
+    assert set(answered) == set(requested)
+
+
+def test_our_own_duplicate_is_a_caller_bug_and_is_refused() -> None:
+    """The inside and the outside of the boundary are treated differently, on purpose.
+
+    A provider repeating itself is data. Our own code supplying a check twice is a defect, and it
+    is refused the same way an incomplete set is. The merge still ran first, so a caller that
+    swallows this error does not thereby get a report where the failure was dropped.
+    """
+
+    with pytest.raises(ValueError, match="QC_REPORT_DUPLICATE_RESULT: black_frames"):
+        build_results(
+            [
+                answer(QcCheck.BLACK_FRAMES, CheckStatus.FAILED),
+                answer(QcCheck.BLACK_FRAMES, CheckStatus.PASSED),
+            ]
+        )
+
+
+def test_shuffling_the_results_cannot_change_the_decision() -> None:
+    """The property the two repros are instances of, stated once and swept.
+
+    Seeded so a failure is reproducible. Every case is built with deliberate repeats, because
+    without them the merge is trivially order-independent and the sweep would prove nothing.
+    """
+
+    generator = random.Random(20260802)
+    for _ in range(2_000):
+        results = [
+            answer(check, generator.choice(list(CheckStatus)), code="c")
+            for check in QcCheck
+            for _ in range(generator.choice([1, 1, 2, 3]))
+        ]
+        baseline = decide(build_results(merge_check_results(results)))
+        documents = serialize_results(build_results(merge_check_results(results)))
+        for _ in range(4):
+            generator.shuffle(results)
+            merged = build_results(merge_check_results(results))
+            assert decide(merged) == baseline
+            # Stronger than the decision: the stored report is byte-identical too, so a
+            # shuffled input cannot even produce a differently-worded row.
+            assert serialize_results(merged) == documents
 
 
 def test_the_serialized_report_names_every_check_and_its_kind() -> None:

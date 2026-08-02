@@ -49,6 +49,19 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   tutardır (`yuzbin`, `onbir`, `yuz ellibes`, `beserlira`) ve bileşikleri tek tek yazmak yine
   enumerasyondur. Bölümleme kelimenin tamamını kaplamak zorundadır — çapalar bunu zorlar:
   `onbir` = `on`+`bir` sayıdır, `birey` = `bir`+`ey` değildir.
+- **Ondalık bağlaçları sayının yazımının parçasıdır, ama yalnızca sayıdan sonra gelebilir**
+  (W17 takip düzeltmesi 3). Türkçe ondalığı kesirle yazar: `bir tam onda bes` = 1,5,
+  `iki tam yuzde yirmi bes` = 2,25. `tam`, `onda`, `binde` ve kesir bağlamındaki `yuzde`
+  `_FRACTION_CONNECTIVE`'dedir ve küme yine kapalı — dil yeni ondalık bağlacı üretmiyor.
+  **Ama bunlar bir tutarı başlatamaz:** `tam` çok yaygın bir sözcük (`tam 5 dakika`,
+  `tamamen ucretsiz`) ve ondalık asla onunla başlamaz, önünde her zaman tam kısım vardır.
+  Başlatabilseydi `tamamen liraya endeksli` uydurma fiyat olurdu. `yuzde(?!n)` koruması burada
+  da geçerli. Birleşme grameri değişmedi; tutar ile birimin arasındaki boşluk da `_JOINED`
+  oldu, çünkü `bir-tam-onda-bes-lira` o boşluğu da tireliyor.
+- **`yuzden` + para birimi bilerek reddedilir.** Gerçek bir belirsizlik: bağlaç ("bu yüzden
+  liraya geçtik") ile `yuz`+`den` ("yüzden fazla lira") aynı yazılıyor. Ayırt edilemediği için
+  kural reddetme tarafında duruyor — bedeli bir üretim tekrarı, tersi ise müşterinin önünde
+  uydurma fiyat. Bu davranış W17 takip 3'ten **önce** de vardı; testte pinli.
 - **Tek harflik kök gramerle savunulur, alfabeyle değil.** `T L` kısaltmasının eki `_SUFFIX`
   alfabesiyle ayırt edilemez (`ezzetli` de o alfabededir); bu yüzden ayırıcısız biçim **kapalı
   Türkçe ek kümesinin dizisiyle** (`_SUFFIX_SEQUENCE`) eşleşir: `T Lye` yakalanır, "Şef T.
@@ -102,6 +115,15 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   "seslendirme süresi" kontrolü, sapma kaydı ve toplamlar yalnızca ölçümü kullanır.
 - **Sapma 2C'de ölçüldü, 2D'de yargılanır.** `drift_ms` = ölçülen − senaryonun hedefi; `tts.py`
   ve `tts_service.py` hâlâ eşik taşımaz. Eşik `qc.py`'nin `QcThresholds`'ünde ve config'dedir.
+- **Kontrol sonucu birleştirmesi sıra-bağımsızdır ve en kötüsü kazanır** (W18 takip 2).
+  `merge_check_results` bir kontrol için birden fazla cevabı `failed` > `unknown` > `passed`
+  sırasına göre birleştirir; eşitlikte `RemediationPath` sırası, sonra kod ve pointer — yani
+  girdileri karıştırmak kararı **ve** saklanan raporu değiştiremez. Son-yazan-kazanır hatasıydı:
+  `black_frames=failed` ardından `passed` verildiğinde reddi rapordan düşürüyordu. **Sınırın iki
+  yanı farklı muamele görür:** sağlayıcının aynı kontrolü iki kez cevaplaması **veridir**,
+  birleştirilir; bizim kodumuzun aynı kontrolü iki kez vermesi **hatadır**,
+  `QC_REPORT_DUPLICATE_RESULT` ile reddedilir — ama reddetmeden **önce** birleştirilir, böylece
+  fail-closed özelliği hatanın fırlatılmasına bağlı kalmaz.
 - **QC fail-closed'dır ve bir kontrolü atlamak ifade edilemez.** `build_results` `QcCheck`'in
   tamamıyla `unknown` başlar, çağıranın cevaplarıyla üzerine yazılır; `decide` eksik kümeyi
   `QC_REPORT_INCOMPLETE` ile reddeder. Tek bir `unknown` kararı `needs_review`'a düşürür.

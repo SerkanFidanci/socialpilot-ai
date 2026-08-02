@@ -12,6 +12,7 @@ fetched" and "untrusted media text is data, not instruction" are claims about wh
 from __future__ import annotations
 
 import ast
+import itertools
 import json
 import re
 import tokenize
@@ -37,6 +38,7 @@ from app.modules.content.script import (
     _SUFFIX,
     _SUFFIX_SEQUENCE,
     _WRITTEN_NUMBER,
+    ISSUE_FABRICATED_PRICE,
     SCRIPT_OUTPUT_SCHEMA,
     BrandBrief,
     ScenarioCode,
@@ -1116,6 +1118,92 @@ def test_no_written_amount_escapes_through_spacing_or_composition() -> None:
                         text = f"{first}{joiner}{second}{suffix}{gap}{root}"
                         if find_fabrication(text) is None:
                             escapes.append(text)
+
+    assert escapes == []
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        ("tenths, spaced", "bir tam onda beş lira"),
+        ("tenths, folded spelling", "bir tam onda bes lira"),
+        ("tenths, run together", "birtamondabeslira"),
+        ("tenths, hyphenated throughout", "bir-tam-onda-bes-lira"),
+        ("hundredths", "iki tam yüzde yirmi beş lira"),
+        ("hundredths, folded", "iki tam yuzde yirmi bes lira"),
+        ("thousandths, another currency", "bir tam binde beş dolar"),
+        ("decimal with an inflected unit", "bir tam onda beş lirayla"),
+        ("currency first", "lira bir tam onda beş"),
+    ],
+)
+def test_a_decimal_written_as_a_fraction_is_still_an_invented_price(label: str, text: str) -> None:
+    """`bir tam onda beş` is 1,5 — Turkish writes decimals as fractions in words.
+
+    Codex reached a stored document with all of these: the number-word grammar knew `bir` and
+    `beş` but not the connectives between them, so a sequence broke in the middle and the pieces
+    were too small to look like an amount.
+    """
+
+    assert find_fabrication(text) == ISSUE_FABRICATED_PRICE
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        # `tam` is an ordinary word long before it is part of a number, which is why the
+        # connectives are only admitted *after* a number word.
+        ("exactly five minutes", "Tam 5 dakika"),
+        ("right on time", "Tam zamanında"),
+        ("a full flavour", "Tam bir lezzet"),
+        ("a portion count", "Tam 3 kişilik menü"),
+        ("completely, followed by a currency", "Fiyatlarımız tamamen liraya endeksli"),
+        ("completely free", "Tamamen ücretsiz"),
+        # The conjunction keeps its carve-out even though `yüzde` is now a connective too.
+        ("the conjunction, then a count", "Bu yüzden 3 kişi geldi"),
+    ],
+)
+def test_the_fraction_connectives_do_not_swallow_ordinary_words(label: str, text: str) -> None:
+    assert find_fabrication(text) is None
+
+
+def test_yuzden_before_a_currency_is_refused_and_that_is_the_intended_side() -> None:
+    """A genuine ambiguity, resolved toward rejection — pinned so nobody "fixes" it by accident.
+
+    `yüzden` is two words. As a conjunction ("bu yüzden liraya geçtik") it carries no amount; as
+    `yüz` inflected it means "from a hundred", and `yüzden fazla lira` is a real money claim. No
+    guard can separate them, because they are spelled identically.
+
+    So the rule keeps catching it, which costs one regeneration of a sentence that had no figure
+    in it. The other direction costs a fabricated price in front of a customer. This is the
+    module's stated default — over-accepting is safe, under-accepting is not — and it predates
+    the fraction connectives rather than arriving with them.
+    """
+
+    assert find_fabrication("Bu yüzden liraya geçtik") == ISSUE_FABRICATED_PRICE
+    # The conjunction alone is untouched; it takes a currency beside it to trip the rule.
+    assert find_fabrication("Bu yüzden 3 kişi geldi") is None
+    assert find_fabrication("Bu yüzden erken kapatıyoruz") is None
+
+
+def test_no_written_decimal_escapes_through_spacing_or_composition() -> None:
+    """Codex's own measurement, repeated as a test: 81 and 243 spellings, zero escapes.
+
+    It found 45 of 81 and 75 of 243 getting through. The joiners are the same three the amount
+    grammar already allows anywhere else — space, hyphen, run together — and the gap before the
+    unit is one of them too, which is what `bir-tam-onda-bes-lira` turns on.
+    """
+
+    escapes: list[str] = []
+    for tokens in (
+        ["bir", "tam", "onda", "bes", "lira"],
+        ["iki", "tam", "yuzde", "yirmi", "bes", "lira"],
+    ):
+        for joiners in itertools.product((" ", "-", ""), repeat=len(tokens) - 1):
+            text = tokens[0] + "".join(
+                joiner + token for joiner, token in zip(joiners, tokens[1:], strict=True)
+            )
+            if find_fabrication(text) is None:
+                escapes.append(text)
 
     assert escapes == []
 

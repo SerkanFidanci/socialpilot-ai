@@ -35,6 +35,7 @@ the same judgement run in the worker and in a test with no infrastructure at all
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -85,6 +86,7 @@ __all__ = [
     "build_results",
     "decide",
     "evaluate_deterministic",
+    "merge_check_results",
     "model_check_results",
     "serialize_results",
 ]
@@ -339,6 +341,59 @@ class CheckResult:
         }
 
 
+# How bad each status is. Merging two answers for one check keeps the worst, which is what makes
+# the merge **commutative**: `failed` then `passed` and `passed` then `failed` are the same input
+# set, so they must reach the same verdict. Last-write-wins was the bug — a failing check could be
+# dropped from a report by supplying a passing one after it (Codex, 2026-08-02).
+_STATUS_SEVERITY: Final[Mapping[CheckStatus, int]] = {
+    CheckStatus.PASSED: 0,
+    CheckStatus.UNKNOWN: 1,
+    CheckStatus.FAILED: 2,
+}
+
+# The tie-break when two answers share a status, in PRD §19.4's own escalation order: re-encode,
+# re-cut, re-route, ask a person, ask for new footage. It carries no claim that asking for media
+# is "worse" than asking a person — it exists so that merging is *total*, which is what lets a
+# shuffled input produce a byte-identical report rather than merely the same verdict.
+_PATH_SEVERITY: Final[Mapping[RemediationPath, int]] = {
+    path: index for index, path in enumerate(RemediationPath)
+}
+
+
+def _severity(result: CheckResult) -> tuple[int, int, str, str]:
+    return (
+        _STATUS_SEVERITY[result.status],
+        _PATH_SEVERITY[result.path],
+        result.code or "",
+        result.pointer or "",
+    )
+
+
+def merge_check_results(results: Sequence[CheckResult]) -> tuple[CheckResult, ...]:
+    """Collapse repeated answers for a check into one, keeping the worst. Order cannot matter.
+
+    Two callers legitimately produce more than one answer for the same check, and they are not
+    the same kind of event:
+
+    - a **provider** may repeat itself in one response. That is data, not a defect: an adapter is
+      outside our control, and the right reading of "sensitive content: failed, sensitive
+      content: passed" is `failed`. Rejecting the response would turn a provider's sloppiness
+      into an outage;
+    - our **own** code supplying a check twice is a defect, and `build_results` says so —
+      but it says so *after* merging, so the report is fail-closed either way.
+
+    Worst-wins is the only merge that keeps the guarantee this module exists for. Any rule that
+    could let `failed` lose is a rule by which a bad output reaches a customer.
+    """
+
+    grouped: dict[QcCheck, CheckResult] = {}
+    for result in results:
+        previous = grouped.get(result.check)
+        if previous is None or _severity(result) > _severity(previous):
+            grouped[result.check] = result
+    return tuple(grouped[check] for check in QcCheck if check in grouped)
+
+
 def build_results(results: Sequence[CheckResult]) -> tuple[CheckResult, ...]:
     """Complete `results` into the full check set, in `QcCheck` order.
 
@@ -346,9 +401,20 @@ def build_results(results: Sequence[CheckResult]) -> tuple[CheckResult, ...]:
     supplied an answer for it. This is the structural half of fail-closed: a service that
     forgets a check produces a report that says so, rather than a report that is silently one
     check short and reads as clean.
+
+    Repeated answers are merged worst-first and *then* refused. Both halves are deliberate. The
+    merge runs first so the fail-closed property never depends on the error being raised — a
+    caller that catches it, or a future one that does not raise at all, still gets the worst
+    answer. The refusal follows because a duplicate from our own code is a defect in the caller
+    rather than something to absorb, exactly like the incomplete set `decide` refuses.
     """
 
-    supplied = {result.check: result for result in results}
+    merged = merge_check_results(results)
+    if len(merged) != len(results):
+        counts = Counter(result.check for result in results)
+        repeated = sorted(check.value for check, seen in counts.items() if seen > 1)
+        raise ValueError(f"QC_REPORT_DUPLICATE_RESULT: {', '.join(repeated)}")
+    supplied = {result.check: result for result in merged}
     return tuple(
         supplied.get(check, CheckResult(check=check, status=CheckStatus.UNKNOWN, code=CODE_NOT_RUN))
         for check in QcCheck
@@ -1027,27 +1093,32 @@ def model_check_results(
     A provider that answers three of four questions has not answered the fourth, and the report
     must say so. Trusting the adapter to return a complete set would put the fail-closed
     guarantee on the far side of the boundary, which is exactly where it cannot be enforced.
+
+    A provider that answers the *same* question twice is the mirror image of that, and it is
+    handled rather than refused: an adapter is outside our control, so "sensitive content:
+    failed, sensitive content: passed" is merged to `failed` instead of turning a sloppy
+    response into an outage. Reading only the last finding was how a refusal could be talked
+    back out of a report (Codex, 2026-08-02). A finding for a check nobody asked about is
+    dropped — an adapter does not get to widen the question set either.
     """
 
-    findings = {} if report is None else {finding.check: finding for finding in report.findings}
-    results: list[CheckResult] = []
-    for check in requested:
-        finding = findings.get(check)
-        if finding is None:
-            results.append(
-                CheckResult(
-                    check=check,
-                    status=CheckStatus.UNKNOWN,
-                    code=code or CODE_PROVIDER_SILENT,
-                )
-            )
-            continue
-        results.append(
+    answered = merge_check_results(
+        [
             CheckResult(
-                check=check,
+                check=finding.check,
                 status=finding.status,
                 code=finding.code,
                 measured={"confidence": finding.confidence},
             )
+            for finding in (() if report is None else report.findings)
+            if finding.check in set(requested)
+        ]
+    )
+    by_check = {result.check: result for result in answered}
+    return tuple(
+        by_check.get(
+            check,
+            CheckResult(check=check, status=CheckStatus.UNKNOWN, code=code or CODE_PROVIDER_SILENT),
         )
-    return tuple(results)
+        for check in requested
+    )
