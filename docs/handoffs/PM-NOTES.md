@@ -12,7 +12,29 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**2026-08-02 · W19 + düzeltme turu 4 merge edildi; Codex W19 turu TEMİZ. `main` head `0016`, dal koşusu 1237 pytest (PM tam koşusu arka planda).**
+**2026-08-02 · W20 merge edildi — Phase 2'nin 2A–2E'si tamam. head `0017`, dal koşusu 1325 pytest (PM tam koşusu sürüyor).**
+
+**W20 (kredi defteri):** bakiye `SUM(delta_credits)` — hiçbir yerde saklanmıyor ve entegrasyon testi bunu `information_schema` taramasıyla **zorluyor**. Append-only ve negatif-olamaz **veritabanı trigger'ı** (mekanizma değil yedek; asıl kesinlik tenant advisory lock'unda). Eşzamanlılık gerçek: 3 kredilik bakiyeye 10 paralel `create_project` → tam 3 başarı. Rezervasyon **projeye** bağlı olduğu için **K4 yapısal olarak sağlanıyor** — QC başarısızlığından doğan yeniden render yeni rezervasyon *açamıyor*. Puan tablosu import anında totallik istiyor: fiyatlanmamış bir render profili uygulamayı açtırmıyor ("fiyatlanmamış içerik bedava içeriktir").
+
+**W20'nin bıraktığı açıklar (W21'e girdi):** proje iptali yok → `WAITING_MEDIA`'da park eden proje krediyi süresiz tutuyor; tekil uçlar (proje bağlamsız senaryo/TTS/render) bilinçli ücretsiz (Phase 3); §12.6/12.7/12.9'un hak penceresi, devir ve destek iadesi yolları yok (Phase 3).
+
+**Sıradaki iki tetikleme (paralel, dosya-ayrık):**
+
+1. **W21 — Phase 2F onay + revizyon** ([W21-approval-revision.md](W21-approval-revision.md), slot `0018`, taban 1325):
+```
+docs/handoffs/W21-approval-revision.md dosyasındaki iş emrini oku ve uygula. Protokol: docs/handoffs/README.md. Başlamadan önce docs/STATUS.md oku. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w21 ile çalıştır. Migration slotu sende (0018). Sahibi olmadığın dosyaya dokunma. Merge etme, dalda bırak.
+```
+2. **Codex — W20 turu:**
+```
+docs/handoffs/W20-entitlement-ledger.md dosyasını oku. Sen test edensin, özellik yazma. main'de merge edildi. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-codex ile çalış. ÖNEMLİ: mevcut testleri koşmak doğrulama değildir — kendi girdilerini üret. Hedefler: aynı krediyi iki kez harcatmaya çalış (gerçek paralel transaction, advisory lock'u atlatmayı dene), iade edilmiş rezervasyonu tekrar iade ettir, negatif bakiye üret (trigger'ı atlatmayı dene), başka tenant'ın defterine yaz veya oku, saf yeniden render'ı ücretlendirt, puan tablosu sürümünü değiştirip eski satırların kredisini yeniden yorumlat, grant yetkisini owner olmayan rolle kullan, rezervasyonu sonuçlandırdıktan sonra iade ettir. Bulgularını dosyanın "Doğrulama" bölümüne tabloyla yaz; araç zinciri sürümlerini yaz.
+```
+
+**W21'in taşıyıcı kararı:** revizyonun küçük/büyük sınıfı kullanıcının beyanından değil **değişen alan kümesinden** türetilir (belirsizlik → büyük tarafa, fail-closed). Ve `low_confidence_only` politikası bugün *her zaman* onay ister — çünkü VLM fake ve QC her çıktıyı `needs_review` işaretliyor; bu doğru davranış, gerekçesi koda yazılacak ki gerçek sağlayıcı gelince kimse "bozuk" sanmasın.
+
+**Kuyruk:** W21 → 2G planlayıcı → W06 → Phase 3 (mağaza/ödeme, K1 kararıyla) → Phase 4 yayınlama.
+
+<!-- arşiv -->
+**~~2026-08-02 · W19 + düzeltme turu 4 merge edildi; Codex W19 turu TEMİZ (1237 pytest, head 0016).~~**
 
 - **W19 (2E birinci yarı):** artık bir "içerik projesi" var — `PLANNED`→`PREVIEW_READY` uçtan uca. Proje satırının kendisi dayanıklı job (ayrı `jobs` satırı yok: "sıralayıcının durumu zaten sonucudur"). Üç borç kapandı: voiceover miksajı (üç render'ın PCM hash'i farklı — iddia değil kanıt), QC olayı + claim sorgusunun yeniden şekillenmesi (199 ms → 3,6 ms, durağanda 0,05 ms), `pending` süpürücü.
 - **Düzeltme turu 4:** QC birleştirmesi artık sıra-bağımsız (`failed`>`unknown`>`passed`, tam sıralama sayesinde **byte-özdeş rapor**); ondalık kesir sözcükleri kapandı (`bir tam onda bes lira` 0/81, `iki tam yuzde yirmi bes lira` 0/243 — Codex'te 45/81 ve 75/243 kaçıyordu). Oturum `tam`'ın tutar **başlatamayacağı** kısıtını kendisi ekledi ve gerekçesini ölçtü (`tamamen liraya endeksli` fiyat sanılıyordu).
