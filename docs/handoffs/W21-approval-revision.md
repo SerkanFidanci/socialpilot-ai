@@ -103,7 +103,7 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir.
 
 ## Rapor — 2026-08-02 · Opus 5 / high
 
-**Dal:** `slice/2f-approval-revision` · **Commit'ler:** TBD · **Durum:** tamamlandı
+**Dal:** `slice/2f-approval-revision` · **Commit'ler:** `3ddbee9` · **Durum:** tamamlandı
 
 ### Yapılanlar
 
