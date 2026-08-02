@@ -6,7 +6,7 @@
 |---|---|
 | `main` | W01→W22 merge edildi — **PHASE 2 TAMAM (2A–2G)**. Sırada W06 (PG18+Valkey, D1) → Phase 3. ⚠️ **W20, W21, W22 bağımsız doğrulanmadı** — Codex turu iki kez tetiklendi, iki kez de çıktı bırakmadı |
 | Alembic head | `0019_content_planner` (tek head; zincir 0001→0019, up/down/up doğrulandı) |
-| Backend doğrulama | **NNN pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **1459 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
