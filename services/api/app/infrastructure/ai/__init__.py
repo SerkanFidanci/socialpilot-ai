@@ -11,18 +11,26 @@ from app.infrastructure.ai.fake_script import (
     FakeScriptGenerationAdapter,
 )
 from app.infrastructure.ai.fake_tts import DisabledTTSAdapter, FakeTTSAdapter
+from app.infrastructure.ai.fake_visual_qc import (
+    DisabledVisualQcAdapter,
+    FakeVisualQcAdapter,
+)
+from app.modules.content.qc import VisualQcPort
 from app.modules.content.script import ScriptGenerationPort
 from app.modules.content.tts import AudioProbePort, TTSPort
 
 __all__ = [
     "DisabledScriptGenerationAdapter",
     "DisabledTTSAdapter",
+    "DisabledVisualQcAdapter",
     "FFprobeAudioProbe",
     "FakeScriptGenerationAdapter",
     "FakeTTSAdapter",
+    "FakeVisualQcAdapter",
     "create_audio_probe",
     "create_script_generator",
     "create_tts",
+    "create_visual_qc",
 ]
 
 PRODUCTION_DISABLED_REASON: Final = (
@@ -33,6 +41,12 @@ TTS_PRODUCTION_DISABLED_REASON: Final = (
     "no production text-to-speech provider is configured; the fixture adapter is refused"
 )
 TTS_CONFIGURED_DISABLED_REASON: Final = "text-to-speech is switched off by configuration"
+VISUAL_QC_PRODUCTION_DISABLED_REASON: Final = (
+    "no production vision provider is configured; the fixture adapter is refused"
+)
+VISUAL_QC_CONFIGURED_DISABLED_REASON: Final = (
+    "visual quality control is switched off by configuration"
+)
 
 
 def create_script_generator(settings: Settings) -> ScriptGenerationPort:
@@ -79,6 +93,29 @@ def create_tts(settings: Settings) -> TTSPort:
     if settings.app_env == "production":
         return DisabledTTSAdapter(reason=TTS_PRODUCTION_DISABLED_REASON)
     return FakeTTSAdapter(settings)
+
+
+def create_visual_qc(settings: Settings) -> VisualQcPort:
+    """Build the configured vision adapter; the fixture never answers a quality question for real.
+
+    Same rule as the two factories above, and this is its sharpest case. A fixture script writes
+    prose a reviewer could publish; a fixture *inspection* writes an approval a reviewer could
+    act on — "no sensitive content in this frame" is a claim about a customer's video that
+    nothing looked at. So production gets an adapter that declines with a documented code and the
+    four model checks land as `unknown`.
+
+    The consequence is deliberate and worth stating plainly: until a real provider is connected,
+    automatic QC never returns `passed`. Every report reaches `needs_review` and asks for a
+    person. That is the correct answer to "we cannot see the frames yet", and a configuration
+    that returned `passed` instead would be the one bug this whole slice exists to make
+    impossible.
+    """
+
+    if settings.visual_qc_adapter == "disabled":
+        return DisabledVisualQcAdapter(reason=VISUAL_QC_CONFIGURED_DISABLED_REASON)
+    if settings.app_env == "production":
+        return DisabledVisualQcAdapter(reason=VISUAL_QC_PRODUCTION_DISABLED_REASON)
+    return FakeVisualQcAdapter(settings)
 
 
 def create_audio_probe(settings: Settings) -> AudioProbePort:

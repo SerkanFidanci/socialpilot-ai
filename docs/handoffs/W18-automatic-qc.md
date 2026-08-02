@@ -1,7 +1,7 @@
 # W18 — Phase 2D: Otomatik QC (§19.4)
 
 **Dal:** `slice/2d-automatic-qc` · **Base:** `main` · **Migration slotu: SENDE** (`0015`)
-**Durum:** tamamlandı (dalda) · **TAKİP 1 AÇIK — Celery bağlantısı** (aşağıdaki bölüm)
+**Durum:** tamamlandı (dalda) · **takip 1 uygulandı** (aşağıdaki bölüm + takip raporu)
 **Model/effort:** Opus 5 / high
 
 ## Takip 1 — Celery bağlantısı (PM, 2026-08-02)
@@ -106,9 +106,221 @@ Kalıp, liste veya küme yazan her yerde sor: **bu bir enumerasyon mu?** Elle sa
 
 Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. (QC'nin fail-closed duruşu ADR'lık olabilir — gerekçeni yaz, numarayı isteme.)
 
-## Rapor
+## Rapor — 2026-08-02 · Opus 5 / high
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/2d-automatic-qc` (base `855bd7a`) · **Durum:** tamamlandı, **merge edilmedi**
+
+### Yapılanlar
+
+- **`modules/content/qc.py` — QC contract'ı.** `QcCheck` = §19.4'ün 13 satırı, aynı sırayla;
+  `CHECK_POLICIES` her üyeyi kapsar; `build_results` kontrol kümesinin tamamıyla `unknown`
+  başlar ve çağıranın cevaplarıyla üzerine yazılır — **bir kontrolü atlamak ifade edilemiyor**;
+  `decide` saf, total ve eksik kümeyi `QC_REPORT_INCOMPLETE` ile reddediyor. Deterministik
+  değerlendiriciler, `QcThresholds` anlık görüntüsü, `MediaQcProbePort`, `VisualQcPort`,
+  `audit_verified_sources` burada.
+- **`migrations/0015_render_qc_reports.py`** — kontroller ve eşik anlık görüntüsü JSONB;
+  `verdict`/`recommended_path` `pending` satırında bile NOT NULL ve karamsar
+  (`needs_review`/`human_review`), ayrıca `status <> 'pending' OR verdict <> 'passed'` check
+  constraint'i aynı kuralı şemada tekrar ediyor. `render_id` üstünde unique **yok**, yalnızca
+  `pending` koşular üzerinde kısmi unique index.
+- **`infrastructure/render/qc_probe.py`** — gerçek ölçüm: ffprobe konteyner okuması,
+  `blackdetect` + `freezedetect`, `ebur128` integrated loudness, sınırlı frame örneklemesi.
+  Ölçümler stderr'den **okunmuyor**: `metadata=mode=print:file=` ile kendi yazdığımız özel
+  dosyaya gidiyor, böylece "stderr'in yalnızca boyutu denetlenir" kuralı bozulmadan kalıyor.
+  **Fake'i yok** (`create_qc_probe`), gerekçe `create_audio_probe` ile aynı.
+- **`infrastructure/ai/fake_visual_qc.py`** — `VisualQcPort` fake + disabled adapter'ı,
+  `_reject_production` kapısıyla. Üretimde `disabled`, dolayısıyla dört model kontrolü `unknown`
+  ve **hiçbir render otomatik `passed` olmuyor**.
+- **`modules/content/qc_service.py`** — dayanıklı QC job'ı (claim, timeout, deneme, correlation,
+  dead-letter, iki transaction) + yalnızca-okuma `ContentQcReportService`. Yapıcıda render/AI
+  üretim portu **yok**: yeniden render 2E'nin.
+- **`validation.py` `forbidden_matcher` birleştirmesi** — `script.forbidden_matcher` +
+  `normalize_for_matching` import ediliyor, `contains_unsupported_letter` ile
+  `TIMELINE_UNSUPPORTED_CHARACTER` eklendi. `re.IGNORECASE` eşleyicisi kaldırıldı. Çekim
+  eşleşmesi yok (PM kararı korunuyor). Ayrıca `layout_text_in_frame` ve `resolve_overlay_text`
+  public oldu — QC ölçülen kareyle aynı fonksiyonu çağırıyor, ikinci bir uygulama yok.
+- **Rapor okuma ucu:** `GET /v1/businesses/{id}/content/renders/{render_id}/qc`
+  (`business.read`, mevcut `RENDER_READ` aksiyonu üzerinden — `policy.py`'ye dokunulmadı).
+- Dokümantasyon: `content-render.md` QC bölümü + kontrol tablosu, `error-handling.md` QC kod
+  kataloğu, `.env.example` (`VISUAL_QC_*` + `QC_*`), modül `CLAUDE.md`'leri, yeniden üretilmiş
+  OpenAPI kontratı (35 → 36 endpoint).
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Celery bağlantısı yapılmadı — tek gerçek eksik.** `content.qc.drain` task'ı
+  (`worker/tasks.py`), fabrika satırı (`worker/composition.py`) ve beat girdisi
+  (`infrastructure/celery_app.py`) **iş emrinin dosya listesinde yok**. Protokol "listede olmayan
+  dosyaya dokunma, dur ve raporla" diyor; iş emrinin kapsam maddesi ise "ölçüm worker'da"
+  diyor — **iki kaynak çelişiyor** ve AGENTS.md gereği sessizce birini seçmek yerine bildiriyorum.
+  Servis bu yüzden **kendi kendine kuyruğa giriyor**: `process_next()` QC raporu olmayan
+  `succeeded` render'ı tarayıp job'ı kendisi açıyor, yani bağlantı gerçekten üç ek satır.
+  Gereken yama aşağıda, "Açıkça belirtmem gerekenler"de.
+- Gerçek VLM sağlayıcısı (W08 sonrası), otomatik yeniden render / alternatif sahne / deneme
+  sınırı (2E), render adapter'ına voiceover miksajı (2E), `script.py` — hepsi iş emrinde kapsam
+  dışı.
+- `docs/index.md` ve `docs/adr/README.md`'ye ekleme yapılmadı (iş emri gereği). **ADR yazılmadı:**
+  fail-closed duruşu gerçek bir karar ama iş emrinin verdiği kararın uygulanması; gerekçe
+  `qc.py`'nin modül docstring'inde ve `content-render.md`'de. PM ADR'lık görürse numarayı verir.
+- `docs/plans/active/` altına ayrı bir plan dosyası açılmadı: bu slice'ın planı iş emrinin
+  kendisi ve faz planının 2D satırı; dosya listesinde `docs/plans/` yok.
+
+### Doğrulama
+
+Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest 9.1.1 · FFmpeg 7.1.5.
+Tamamı `COMPOSE_PROJECT_NAME=sp-w18` ile izole compose projesinde (host portları 8022/55463/
+56389/59040/59041 ile ayrıldı — 55432 ve 59000 başka worktree'lerde doluydu).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` | ✅ temiz |
+| `ruff format --check` | ✅ 200 dosya biçimli |
+| `mypy .` (strict) | ✅ 188 dosya, hata yok |
+| `pytest` (gerçek PostgreSQL + MinIO + FFmpeg, `RUN_INTEGRATION_TESTS=1`) | ✅ **1071 passed** (taban 947, +124) |
+| migration `0015` up → down → base → up | ✅ tek head (`0015_render_qc_reports`) |
+| OpenAPI yeniden üretildi | ✅ 35 → 36 endpoint, commit'li |
+
+| Kabul kriteri | Sonuç |
+|---|---|
+| 1 · migration up/down/up, tek head | ✅ |
+| 2 · her deterministik kontrol **gerçek bozuk medyayla** | ✅ `test_qc_probe.py` (13) + `test_content_qc.py` (19): tamamen siyah, sessiz, donuk kare, sesi olmayan, hedeften sapan süre, bozuk konteyner — hepsi FFmpeg ile üretiliyor, hiçbiri stub değil |
+| 3 · fail-closed üç yoldan | ✅ (a) probe yok → 13 kontrolün ölçüme bağlı olanları `unknown`, koşu `failed`, karar `needs_review`; (b) VLM `disabled` → 4 model kontrolü `unknown`, kusursuz çıktı yine `needs_review`; (c) rapor daima 13 kontrolü taşıyor (unit + integration) |
+| 4 · fiyat/tarih uyumu gerçek DB ile | ✅ fiyat satırı render'dan sonra açıldı → `QC_VERIFIED_VALUE_SUPERSEDED`; kampanya bitti → `QC_VERIFIED_VALUE_OUT_OF_WINDOW`; değişmemiş fiyat temiz |
+| 5 · karar tablosu saf ve testli | ✅ tüm tek ve **çift** kontrol permütasyonları tüketiliyor + tohumlanmış 3.000 rastgele atama; her atama tanımlı, tekrarlanabilir ve `passed` yalnızca her şey `passed` iken |
+| 6 · `forbidden_matcher` birleştirmesi | ✅ görünmez karakter, atanmamış kod noktası, NFD, büyük/küçük, aksan düşmesi, fazla aksan → hepsi yakalanıyor; Coptic `Ⲧ` → `TIMELINE_UNSUPPORTED_CHARACTER`; ikinci uygulama yok (tokenize + AST + `script.forbidden_matcher`'ı monkeypatch edip davranışın değiştiğini gösteren test) |
+| 7 · dayanıklı job disiplini + imzalı URL sızmıyor | ✅ job tipi/kaynağı/timeout/deneme/correlation/dead-letter testli; rapor gövdesinde `X-Amz-Signature`, `X-Amz-Credential`, `https://` ve object key sentinel'leri yok |
+| 8 · roller + izolasyon | ✅ `business.read`; başka tenant'ın raporu **404** (iki yönde) |
+| 9 · `make verify` yeşil, ≥947 test, kontrat commit'li, `CLAUDE.md` güncel | ✅ 1071 test |
+| 10 · rapor + araç zinciri sürümleri, merge yok | ✅ dalda bırakıldı |
+
+### Açıkça belirtmem gerekenler
+
+1. **PM'e bırakılan tek iş — Celery bağlantısı (3 dosya, iş emrinin listesi dışında).**
+   Gereken tam yama:
+   - `worker/composition.py`: `WorkerContext`'e `qc_probe` + `visual_qc` alanları,
+     `build_worker_context`'te `create_qc_probe(settings)` / `create_visual_qc(settings)`, ve
+     `content_qc_service(session) -> ContentQcService(session, settings, materializer, qc_probe, visual_qc)`.
+   - `worker/tasks.py`: `@celery_app.task(name="content.qc.drain")` → `_drain(context, context.content_qc_service, needs_workdir=True)`.
+   - `infrastructure/celery_app.py`: `beat_schedule`'a `"drain-content-qc"` girdisi.
+   Bunlar olmadan servis, testleri ve raporu tam ama beat tetiklemesi bağlı değil.
+2. **Üretimde hiçbir render otomatik `passed` olmayacak** ve bu bilinçli. VLM adapter'ı üretimde
+   `disabled` → dört model kontrolü `unknown` → kural 1 gereği `needs_review`. Gerçek sağlayıcı
+   W08 sonrası bağlanana kadar QC "insan baksın" diyor. Ürün tarafında bunun anlatılması gerek.
+3. **Bilinen ölçüm sınırı: `approved_ctas` değişiklik damgası taşımıyor.** Yerinde düzenlenmiş bir
+   CTA metni QC tarafından görülemiyor; yalnızca kaydın kaybolması yakalanıyor. Kayıtta
+   `changed_at=None` olarak açıkça duruyor. Kapatmak `brands` şemasına `updated_at` eklemek
+   demek — o modül bu iş emrinin dışında.
+4. **`TIMELINE_UNSUPPORTED_CHARACTER` yeni bir reddetme sınıfı.** Latin dışı alfabeden harf
+   taşıyan overlay metni artık reddediliyor — senaryo tarafındaki kuralın timeline karşılığı.
+   Fail-closed: en kötü ihtimalle meşru bir ad reddedilir ve ortak katlama tablosu bir satır büyür.
+   PRD §30 hata kataloğu (`90b-api-error-contracts.md`, W03 tekelinde) hâlâ bu kodları taşımıyor;
+   W11'den beri süren PM kuyruğu.
+5. **Loudness penceresi platform gerçeği değil, ürün varsayılanımız.**
+   `99-external-platform-facts.md`'de yayınlanmış bir Instagram loudness sözleşmesi yok, bu yüzden
+   `-14 ±3 LUFS` config'de ve gerekçesi hem `config.py`'de hem `.env.example`'da yazılı. Bir
+   sağlayıcıdan doğrulanırsa fact dosyasına girmeli.
+6. **`prompt_templates` TRUNCATE tuzağı.** QC entegrasyon testi ilk yazımında bu tabloyu da
+   temizliyordu ve `0013`'ün seed'ettiği aktif prompt sürümünü silerek 79 senaryo/seslendirme
+   testini düşürdü. Tablo artık listede değil ve nedeni yorumda. Yeni entegrasyon testi yazan
+   oturumlar için: `prompt_templates` platform konfigürasyonudur, tenant verisi değil.
+7. **Test dosyası adı çakışması** (`tests/unit/test_content_qc.py` ↔
+   `tests/integration/test_content_qc.py`) pytest'in toplama hatasına yol açtı; unit dosyası
+   depo geleneğine uyularak `test_content_qc_unit.py` oldu.
+
+## Takip 1 raporu — 2026-08-02 · Opus 5 / high
+
+**Dal:** `slice/2d-automatic-qc` (aynı dal) · **Durum:** tamamlandı, **merge edilmedi**
+
+### Yapılanlar
+
+- `worker/composition.py`: `WorkerContext`'e `qc_probe` + `visual_qc`; `build_worker_context`
+  ikisini `create_qc_probe` / `create_visual_qc` ile kuruyor; `content_qc_service(session)`
+  fabrikası. Fabrika **render portu almıyor** — yeniden render 2E'nin, ve composition root
+  sızıntının olabileceği tek yerdi.
+- `worker/tasks.py`: `content.qc.drain`, `needs_workdir=True` ile (materialize edilen çıktı,
+  metadata dökümleri ve örnek frame'ler `WorkerScratchGuard` bütçesinin içinde kalıyor).
+- `infrastructure/celery_app.py`: `drain-content-qc` beat girdisi, medya drain aralığında.
+- Dokümantasyon: `background-jobs.md` beat tablosu + olay tablosu, `content-render.md`'nin açık
+  notu kapatıldı, `worker/CLAUDE.md`.
+
+### Kararım — tarama kalıyor (PM sorusu 3), ve gerekçesi ölçülmüş
+
+**Kalıyor.** Üç sebep, ikisi ölçüm:
+
+1. **Olay yok, çünkü olayı yazacak dosya hâlâ listede değil.** `content.qc.requested`'i
+   `render_service._succeed()` yazardı; o dosya takip 1'in listesinde de yok. Yani tarama bugün
+   tek tetikleyici.
+2. **Tarama gerçek bir özellik satın alıyor, ve o özellik olay geldikten sonra da değerli:**
+   worker düşükken biten render bir sonraki tick'te bulunuyor — kuyruk kaydı yok, kaybolmuş
+   mesaj yok. Testi var (`test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up`).
+3. **Bedeli tahmin etmedim, ölçtüm.** 200 bin render + 199.995 rapor ile (PostgreSQL 17,
+   compose):
+
+   | Sorgu şekli | Süre |
+   |---|---|
+   | bugünkü claim (hash anti-join, iki seq scan) | **134 ms** |
+   | aynı claim, nested-loop anti-join + kısmi index | **0,14 ms** |
+
+   30 saniyelik tick'te 134 ms, günde ~6,4 dakika CPU demek — tek sunucuda (ADR-013) fark
+   edilir ama kriz değil, ve 200 bin render bu ürün için **çok** yüksek bir hacim.
+
+**Index eklemedim, ve bu bilinçli.** Denedim: `render_qc_reports(render_id)` +
+`render_outputs(completed_at, id) WHERE status='succeeded'` eklendiğinde planlayıcı **yine**
+hash anti-join'i seçiyor (134 ms → 101 ms, plan aynı). Sebep: raporsuz render'ların hep en
+yeniler olduğunu istatistik bilemiyor, dolayısıyla `LIMIT 1`'in nested loop'u erken kesebileceğini
+göremiyor. Planı zorladığımda 0,14 ms çıkıyor — yani **970×** fark planlayıcının erişemediği bir
+plandadır. Sonuç: index tek başına çözmüyor, **sorgunun korelasyonu ifade etmesi** gerekiyor
+(zaman penceresi ya da sınırlı alt sorgu). Kullanılmayacak iki index eklemek, sorunu çözülmüş
+gibi göstermek olurdu — bu yüzden eklemedim ve ölçümü doküman + rapora yazdım.
+
+**Doğru anı 2E:** `render_service.py`'ye sahip olan slice tamamlanınca kuyruğa yazabilir; o zaman
+tarama yavaş bir süpürmeye düşer, korelasyon sorunu kalkar ve index'ler anlamlı hale gelir. Veri
+artık elde — bir sonraki oturumun yeniden keşfetmesi gerekmiyor.
+
+**Sıralamayı `completed_at` ASC bıraktım** (en eski önce): plan her iki yönde de aynı, yani bugün
+hiçbir şey kazandırmıyor, ve ASC diğer drain'lerin `requested_at` sırasıyla tutarlı. Performans
+eşitken tutarlılık kazanır.
+
+### Doğrulama
+
+Araç zinciri değişmedi: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest 9.1.1 · FFmpeg 7.1.5.
+`COMPOSE_PROJECT_NAME=sp-w18`, izole portlar (8022/55463/56389/59040/59041).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` · `ruff format --check` | ✅ temiz · 200 dosya biçimli |
+| `mypy .` (strict) | ✅ 188 dosya, hata yok |
+| `pytest` (gerçek PostgreSQL + MinIO + FFmpeg) | ✅ **1078 passed** (takip öncesi taban 1071, +7) |
+| migration | yok — `0015` zaten dalda, dokunulmadı |
+
+| Takip kriteri | Sonuç |
+|---|---|
+| 2 · yama uygulandı | ✅ `WorkerContext` alanları, `content_qc_service`, `content.qc.drain`, beat girdisi |
+| 3 · tarama kararı gerekçeli ve **testli** | ✅ karar yukarıda, ölçümle; davranış iki testte sabit (olayı olmayan tek drain; worker düşükken biten render bulunuyor) |
+| 4 · beat + task kaydı mevcut disiplinde | ✅ `test_beat_schedule_covers_dispatch_every_drain_and_recovery` QC satırıyla genişletildi; **yeni**: `test_every_scheduled_task_is_registered_and_every_registered_drain_is_scheduled` iki yönlü küme eşitliği kuruyor — task ve beat girdisi artık biri olmadan öbürü eklenemiyor |
+| 4 · QC job'ı gerçekten beat üzerinden akıyor | ✅ `test_the_beat_entry_drives_a_real_qc_run_through_the_registered_task`: zincir beat girdisi → `celery_app.tasks[adı]` → gerçek rapor; task fonksiyonu **import edilmiyor**, schedule'ın tuttuğu adla çözülüyor (aradaki elle yazılmış bağ yok) |
+| 5 · `make verify` yeşil, ≥1071 | ✅ 1078 |
+
+### Açıkça belirtmem gerekenler
+
+1. **Listede olmayan bir dosyaya dokundum: `docs/architecture/background-jobs.md`.** Beat
+   tablosunu ve outbox olay tablosunu tutan doküman bu; QC satırını eklemeden bırakmak, az önce
+   yaptığım değişiklik hakkında yanlış bilgi veren bir doküman bırakmak olurdu. Aynı tabloda
+   **W11'den kalan bir eksik** de vardı (`drain-content-render` hiç yazılmamış) — onu da
+   ekledim, çünkü yarısı yanlış bir tabloyu bilerek bırakmak istemedim. Uçuşta olan tek diğer iş
+   W17 takip 2 ve `script.py` gramerine dokunuyor; çakışma riski yok. Kabul etmezsen tek dosya,
+   geri alınması kolay.
+2. **`test_celery_publisher.py` ve `test_worker_composition.py` genişletildi** — takip "bunların
+   testleri" dediği için listede sayıyorum, ama beat tablosu testi tüm drain'leri kapsayan ortak
+   bir test olduğu için haber veriyorum.
+3. **Yeni totality testi mevcut bir boşluğu da kapattı:** `test_celery_drain_tasks_are_registered`
+   `content.render.drain`'i hiç kontrol etmiyordu (W11'den beri). İki yönlü küme eşitliği artık
+   bunu ve gelecekteki her drain'i otomatik kapsıyor — bu hattın "elle sayılmış küme delinir"
+   dersinin buradaki karşılığı.
+4. **Ölçüm verisi 2E'ye devrediliyor** (yukarıdaki tablo + `background-jobs.md`). 2E olayı
+   eklerken index kararını da almalı; sorgunun yeniden şekillenmesi gerektiği artık ölçülmüş
+   bir gerçek, tahmin değil.
+5. Üretimde hiçbir render otomatik `passed` olmuyor — değişmedi, gerçek VLM sağlayıcısı W08
+   sonrası. Beat bağlandı diye bu değişmez.
 
 ## Doğrulama
 

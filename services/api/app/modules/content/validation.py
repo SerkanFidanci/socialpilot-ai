@@ -16,6 +16,23 @@ before rendering — with no chance of the three disagreeing.
 is the exact set of strings that will be drawn. If the plan builder re-resolved text on its
 own, a verified price could pass the forbidden-word check and a different value could reach the
 frame; here that is structurally impossible.
+
+**The forbidden-term gate is the script detector's, imported (slice 2D).** Four rounds of
+adversarial review closed a class of bypasses on the script side — invisible characters,
+confusables, NFD spellings, Latin letters wearing a diacritic, decorated digits — by folding
+every candidate and every pattern to one ASCII form and refusing letters the fold cannot spell.
+This file used to run its own `re.IGNORECASE` matcher over raw text, which meant every one of
+those bypasses was still open on the timeline: the same banned claim that `parse_text` refuses
+in a script could be typed into an overlay with a zero-width space in it and drawn on the frame.
+It now calls `script.forbidden_matcher` over `normalize_for_matching`, and refuses text carrying
+an unfoldable letter through `contains_unsupported_letter` — the same two functions, not a
+second copy of them. A second implementation is how the two gates would drift apart again, and
+`ṬL` is what that drift looked like from the outside.
+
+Inflection is deliberately **not** matched (PM, W18): a brand forbidding `şeker` does not
+thereby forbid `şekerli`. The list belongs to the brand and the pattern belongs to us; stemming
+would let our rule ban words the brand never named, and the existing pin — `az` forbidden,
+`lezzetli` free — is the shape of that promise.
 """
 
 from __future__ import annotations
@@ -29,7 +46,12 @@ from uuid import UUID
 from app.modules.content.render import (
     RenderCapabilities,
     RenderProfile,
+    SafeArea,
     profile_spec,
+)
+from app.modules.content.text_normalization import (
+    contains_unsupported_letter,
+    normalize_for_matching,
 )
 from app.modules.content.timeline import (
     TEXT_STYLES,
@@ -38,6 +60,7 @@ from app.modules.content.timeline import (
     Overlay,
     OverlayKind,
     TextSource,
+    TextStyle,
     Timeline,
 )
 
@@ -368,14 +391,21 @@ def _check_overlays(
         if overlay.kind is OverlayKind.LOGO:
             issues.extend(_check_logo(overlay, context=context, pointer=pointer))
             continue
-        text, text_issues = _resolve_text(overlay, context=context, pointer=pointer)
+        text, text_issues = resolve_overlay_text(overlay, context=context, pointer=pointer)
         issues.extend(text_issues)
         if text is None:
             continue
-        # Forbidden terms are matched against the unwrapped string: wrapping only inserts line
-        # breaks at existing spaces, and a multi-word term must not slip through by landing
+        # The alphabet restriction runs before every content rule, exactly as `parse_text` runs
+        # it before the script rules. A letter the fold cannot put on ASCII is one no rule here
+        # can read, so drawing it would mean drawing text nothing checked. Fail-closed: at worst
+        # a legitimate name is refused and the shared fold table gains a line.
+        if contains_unsupported_letter(text):
+            issues.append(ValidationIssue("TIMELINE_UNSUPPORTED_CHARACTER", pointer))
+            continue
+        # Forbidden terms are matched against the unwrapped, folded string: wrapping only inserts
+        # line breaks at existing spaces, and a multi-word term must not slip through by landing
         # across a break.
-        if matcher is not None and matcher.search(text):
+        if matcher is not None and matcher.search(normalize_for_matching(text)):
             issues.append(ValidationIssue("TIMELINE_FORBIDDEN_TERM", pointer))
         laid_out, fits = _layout_text(overlay, text=text, timeline=timeline, profile=profile)
         if not fits:
@@ -396,9 +426,17 @@ def _check_logo(
     return []
 
 
-def _resolve_text(
+def resolve_overlay_text(
     overlay: Overlay, *, context: ValidationContext, pointer: str
 ) -> tuple[str | None, list[ValidationIssue]]:
+    """Resolve one overlay to the string it will draw, or say why it cannot be drawn.
+
+    Public because slice 2D asks the same question of a render that has already happened: to
+    check the frame's text against the frame's geometry, QC has to know what text was drawn, and
+    the render deliberately kept no copy of it. One resolver answering both is the guarantee that
+    what QC measures is what validation admitted.
+    """
+
     source = overlay.text_source or TextSource.LITERAL
     if source is TextSource.LITERAL:
         return (overlay.text or "", [])
@@ -415,28 +453,37 @@ def _resolve_text(
     return (verified.text, [])
 
 
-def _layout_text(
-    overlay: Overlay, *, text: str, timeline: Timeline, profile: RenderProfile
+def layout_text_in_frame(
+    *,
+    text: str,
+    style: TextStyle,
+    safe_area: SafeArea | None,
+    frame_width: int,
+    frame_height: int,
 ) -> tuple[str, bool]:
-    """Wrap the text to the safe area and report whether the result fits.
+    """Wrap `text` for a frame of the given size and report whether the result fits.
 
-    The renderer anchors text inside the safe rectangle, so a block that fits the rectangle can
-    always be placed legally and one that does not never can — the check needs no knowledge of
-    the anchor. Extent is estimated from font metrics rather than measured, and the estimate is
-    deliberately wide so the answer errs toward rejection.
+    The renderer anchors text inside the permitted rectangle, so a block that fits the rectangle
+    can always be placed legally and one that does not never can — the answer needs no knowledge
+    of the anchor. Extent is estimated from font metrics rather than measured, and the estimate
+    is deliberately wide so it errs toward rejection.
 
     The wrapped string is returned because it is what will be drawn: the renderer writes these
     exact lines, so the block that was measured and the block that appears cannot diverge.
+
+    The frame is a *parameter* rather than the timeline's canvas because slice 2D asks the same
+    question of the frame that actually came out of the renderer. One definition answering both
+    is the point: a second copy measuring the output would eventually disagree with the one that
+    admitted the timeline, and the disagreement would be invisible.
     """
 
-    style = TEXT_STYLES[overlay.style_id]
-    spec = profile_spec(profile)
-    canvas = timeline.canvas
-    if overlay.safe_area:
-        x0, y0, x1, y1 = spec.safe_area.box(width=canvas.width, height=canvas.height)
+    if safe_area is None:
+        x0, y0, x1, y1 = 0, 0, frame_width, frame_height
     else:
-        x0, y0, x1, y1 = 0, 0, canvas.width, canvas.height
-    font_px = canvas.height * style.font_height_ratio
+        x0, y0, x1, y1 = safe_area.box(width=frame_width, height=frame_height)
+    font_px = frame_height * style.font_height_ratio
+    if font_px <= 0:
+        return (text, False)
     max_chars = int((x1 - x0) / (font_px * style.advance_ratio))
     if max_chars < 1:
         return (text, False)
@@ -453,17 +500,36 @@ def _layout_text(
     return ("\n".join(lines), fits)
 
 
-def _forbidden_matcher(terms: tuple[str, ...]) -> re.Pattern[str] | None:
-    """Build one case-insensitive, word-boundary matcher for the brand's forbidden terms.
+def _layout_text(
+    overlay: Overlay, *, text: str, timeline: Timeline, profile: RenderProfile
+) -> tuple[str, bool]:
+    """Pre-render layout: the timeline's own canvas, with the target profile's safe area."""
 
-    Word boundaries rather than plain substring: a brand forbidding "az" must not reject
-    "lezzetli". Turkish letters are word characters to `re`, so `\\b` behaves as expected for
-    them. Matching is case-insensitive via `re.IGNORECASE`, which is why callers do not need
-    to worry about the dotted/dotless `i` pair on the term side.
+    spec = profile_spec(profile)
+    return layout_text_in_frame(
+        text=text,
+        style=TEXT_STYLES[overlay.style_id],
+        safe_area=spec.safe_area if overlay.safe_area else None,
+        frame_width=timeline.canvas.width,
+        frame_height=timeline.canvas.height,
+    )
+
+
+def _forbidden_matcher(terms: tuple[str, ...]) -> re.Pattern[str] | None:
+    """The script detector's matcher, applied to timeline text. Imported, never reimplemented.
+
+    The import is deliberately inside the function. `script.py` imports `VerifiedValue` from this
+    module, so a module-level import in the other direction is a cycle — and resolving it by
+    copying four lines of `re.compile` here is exactly the mistake this call exists to undo: two
+    matchers, one folded and one not, is how the same banned claim ends up refused in a script
+    and drawn on a frame. The late binding has a second, useful consequence: a test can replace
+    `script.forbidden_matcher` and watch timeline validation change with it, which is a stronger
+    proof of "one implementation" than reading the import statement.
+
+    Word boundaries rather than substring, and no stemming: a brand forbidding `az` must not
+    reject `lezzetli`, and one forbidding `şeker` has not asked us to reject `şekerli` (PM, W18).
     """
 
-    cleaned = [term.strip() for term in terms if term and term.strip()]
-    if not cleaned:
-        return None
-    alternatives = "|".join(re.escape(term) for term in cleaned)
-    return re.compile(rf"\b(?:{alternatives})\b", re.IGNORECASE)
+    from app.modules.content.script import forbidden_matcher
+
+    return forbidden_matcher(terms)

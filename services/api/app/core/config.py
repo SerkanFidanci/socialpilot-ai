@@ -185,6 +185,64 @@ class Settings(BaseSettings):
     # `VOICE_PROFILES`; validated at startup rather than on the first synthesis.
     tts_default_voice_profile: str = Field(default="tr-warm-v1", min_length=1, max_length=64)
     tts_max_audio_bytes: int = Field(default=20_971_520, ge=1_024, le=268_435_456)
+    # --- automatic quality control (W18, PRD §19.4) ---------------------------------------
+    # The `visual_qc` adapter answering §19.4's model checks (logo visibility, sensitive
+    # content, face integrity, product shape). `fake` returns a fixture verdict; `disabled`
+    # declines every call. Production is swapped onto `disabled` by the factory rather than
+    # refused at boot, under the same rule as script generation and speech — and with a
+    # deliberate consequence: with no vision provider, those four checks are `unknown` and QC
+    # never returns `passed`. A fixture that says "no sensitive content" is an approval nobody
+    # computed, which is precisely what must not be publishable.
+    visual_qc_adapter: Literal["fake", "disabled"] = "fake"
+    visual_qc_timeout_seconds: int = Field(default=60, ge=1, le=600)
+    # Per-call ceiling checked *before* the provider is called, in the adapter's own minor
+    # units. Zero by default: a route that costs money is refused until someone sets a budget.
+    visual_qc_max_cost_minor: int = Field(default=0, ge=0, le=10_000_000)
+    visual_qc_route_revision: int = Field(default=1, ge=1, le=1_000_000)
+    visual_qc_quality_tier: Literal["draft", "standard", "professional"] = "standard"
+    visual_qc_data_region: str = Field(default="unspecified", min_length=1, max_length=32)
+    # Bumped whenever any QC_* threshold below changes meaning. Stored on every report beside a
+    # full snapshot of the values, because "which thresholds produced this verdict" has to be
+    # answerable from the row rather than from whatever the deployment holds today.
+    qc_ruleset_version: int = Field(default=1, ge=1, le=1_000_000)
+    qc_job_timeout_seconds: int = Field(default=420, ge=1, le=7_200)
+    qc_max_attempts: int = Field(default=3, ge=1, le=10)
+    qc_probe_timeout_seconds: int = Field(default=180, ge=1, le=3_600)
+    qc_persistence_timeout_seconds: int = Field(default=15, ge=1, le=3_600)
+    # How far the measured output may sit from the sum of the timeline's cut windows. Container
+    # timestamps, keyframe placement and the audio frame size all round; three quarters of a
+    # second absorbs that and still catches an encode that lost or duplicated a segment.
+    qc_duration_tolerance_ms: int = Field(default=750, ge=0, le=60_000)
+    # EBU R128 integrated loudness. This is **our product default**, not a platform contract:
+    # no published Instagram loudness specification is recorded in
+    # 99-external-platform-facts.md, and this repository does not write platform facts from
+    # memory. The value sits in the region streaming platforms normalize toward, and it is
+    # configuration exactly because it is a judgement rather than a fact.
+    qc_loudness_target_lufs: float = Field(default=-14.0, ge=-40.0, le=0.0)
+    qc_loudness_tolerance_lu: float = Field(default=3.0, gt=0.0, le=20.0)
+    # Below this the track carries no usable programme audio: it satisfies "an audio stream
+    # exists" while failing what "ses var mı" is asking.
+    qc_silence_floor_lufs: float = Field(default=-50.0, ge=-70.0, le=-20.0)
+    # Fraction of the output that may be black or frozen before the check fails.
+    qc_black_ratio_limit: float = Field(default=0.05, ge=0.0, le=1.0)
+    qc_static_ratio_limit: float = Field(default=0.30, ge=0.0, le=1.0)
+    # How long a black or frozen stretch has to last before it is an event rather than a cut
+    # artefact. A hard cut between two shots produces a frame or two of near-black, and a static
+    # product shot held for a beat is a legitimate edit; neither should register.
+    qc_black_min_ms: int = Field(default=250, ge=10, le=60_000)
+    qc_freeze_min_ms: int = Field(default=1_000, ge=100, le=60_000)
+    # At or above this fraction the *source* is unusable rather than the cut badly chosen, and
+    # the suggested path becomes "ask for new media" instead of "pick another scene".
+    qc_unusable_source_ratio: float = Field(default=0.90, gt=0.0, le=1.0)
+    # Slice 2C measured `drift_ms` and refused to judge it; this is the number it was waiting
+    # for. A second and a half of accumulated drift over a whole voiceover is audible against
+    # the cut it was written for.
+    qc_speech_drift_ms: int = Field(default=1_500, ge=0, le=60_000)
+    # Frames handed to the vision adapter. Bounded in count and size for the same reason the
+    # video-understanding budget is: frames are the unit of spend and of scratch.
+    qc_frame_sample_count: int = Field(default=5, ge=1, le=40)
+    qc_frame_max_width: int = Field(default=640, ge=64, le=4_096)
+    qc_frame_max_bytes: int = Field(default=1_048_576, ge=1_024, le=16_777_216)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.
@@ -408,11 +466,35 @@ class Settings(BaseSettings):
             raise ValueError(
                 "TTS_TOTAL_TIMEOUT_SECONDS cannot be below one synthesis call plus its probe"
             )
+        qc_required_timeout = (
+            self.qc_probe_timeout_seconds
+            + self.visual_qc_timeout_seconds
+            + self.qc_persistence_timeout_seconds
+        )
+        if self.qc_job_timeout_seconds < qc_required_timeout:
+            raise ValueError(
+                "QC_JOB_TIMEOUT_SECONDS cannot be below the probe, the vision call, and persistence"
+            )
+        # A silence floor above the acceptable loudness window would swallow the window: every
+        # correctly mixed output would be reported silent, and the loudness check would never
+        # fire. Refused at startup rather than discovered in a report nobody can explain.
+        if self.qc_silence_floor_lufs >= (
+            self.qc_loudness_target_lufs - self.qc_loudness_tolerance_lu
+        ):
+            raise ValueError("QC_SILENCE_FLOOR_LUFS must sit below the acceptable loudness window")
+        if (
+            self.qc_black_ratio_limit > self.qc_unusable_source_ratio
+            or self.qc_static_ratio_limit > self.qc_unusable_source_ratio
+        ):
+            raise ValueError(
+                "QC_UNUSABLE_SOURCE_RATIO cannot be below the black or static frame limits"
+            )
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,
             self.scene_speech_job_timeout_seconds,
             self.video_understanding_job_max_timeout_seconds,
             self.render_job_timeout_seconds,
+            self.qc_job_timeout_seconds,
         )
         if self.celery_task_soft_time_limit_seconds < maximum_job_timeout:
             raise ValueError(

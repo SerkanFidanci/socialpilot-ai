@@ -51,8 +51,11 @@ from app.modules.content.models import (
     ContentTimeline,
     PromptTemplate,
     RenderOutput,
+    RenderQcReport,
+    RenderStatus,
     VoiceoverAsset,
 )
+from app.modules.content.qc import VerifiedRecordState
 from app.modules.content.script import (
     BrandBrief,
     CampaignBrief,
@@ -81,6 +84,8 @@ from app.modules.operations.models import BackgroundJob, JobStatus
 
 RENDER_JOB_TYPE = "content.render"
 RENDER_RESOURCE_TYPE = "render_output"
+QC_JOB_TYPE = "content.qc"
+QC_RESOURCE_TYPE = "render_qc_report"
 
 
 class ContentRepository:
@@ -89,7 +94,10 @@ class ContentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def add(self, value: ContentScript | ContentTimeline | RenderOutput | VoiceoverAsset) -> None:
+    def add(
+        self,
+        value: ContentScript | ContentTimeline | RenderOutput | RenderQcReport | VoiceoverAsset,
+    ) -> None:
         self._session.add(value)
 
     # --- timelines -----------------------------------------------------------------------
@@ -156,6 +164,96 @@ class ContentRepository:
                     BackgroundJob.next_attempt_at.is_not(None)
                     & (BackgroundJob.next_attempt_at <= now)
                 ),
+            )
+            .order_by(BackgroundJob.requested_at, BackgroundJob.id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        return cast(BackgroundJob | None, await self._session.scalar(statement))
+
+    # --- quality control -----------------------------------------------------------------
+
+    async def get_qc_report(
+        self, business_id: UUID, report_id: UUID, *, lock: bool = False
+    ) -> RenderQcReport | None:
+        statement = select(RenderQcReport).where(
+            RenderQcReport.business_id == business_id, RenderQcReport.id == report_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(RenderQcReport | None, await self._session.scalar(statement))
+
+    async def latest_qc_report(self, business_id: UUID, render_id: UUID) -> RenderQcReport | None:
+        """The newest report for one render. Newest, not only: re-runs are a later slice's."""
+
+        statement: Select[tuple[RenderQcReport]] = (
+            select(RenderQcReport)
+            .where(
+                RenderQcReport.business_id == business_id,
+                RenderQcReport.render_id == render_id,
+            )
+            .order_by(RenderQcReport.created_at.desc(), RenderQcReport.id.desc())
+            .limit(1)
+        )
+        return cast(RenderQcReport | None, await self._session.scalar(statement))
+
+    async def get_qc_report_for_job(self, business_id: UUID, job_id: UUID) -> RenderQcReport | None:
+        statement = (
+            select(RenderQcReport)
+            .where(RenderQcReport.business_id == business_id, RenderQcReport.job_id == job_id)
+            .with_for_update()
+        )
+        return cast(RenderQcReport | None, await self._session.scalar(statement))
+
+    async def claim_next_unchecked_render(self) -> RenderOutput | None:
+        """Claim one succeeded render that no QC run has touched yet, with SKIP LOCKED.
+
+        QC is driven by the absence of a report rather than by an event the render path emits.
+        That is deliberate under this slice's file ownership — nothing outside the QC files had
+        to change to make automatic QC exist — and it is also the more robust shape: a render
+        that completed while the QC worker was down is picked up when it returns, with no queue
+        entry to have been lost. The trade is a scan, bounded by the index on
+        `(business_id, created_at, id)` and by the report row this run writes immediately.
+
+        `NOT EXISTS` over *any* report, not only a completed one, is what keeps automatic QC to
+        one run per render: a run that failed permanently leaves a `failed` report and is not
+        retried forever.
+        """
+
+        outstanding = (
+            select(RenderQcReport.id).where(RenderQcReport.render_id == RenderOutput.id).exists()
+        )
+        statement = (
+            select(RenderOutput)
+            .where(
+                RenderOutput.status == RenderStatus.SUCCEEDED,
+                RenderOutput.master_object_key.is_not(None),
+                ~outstanding,
+            )
+            .order_by(RenderOutput.completed_at, RenderOutput.id)
+            .with_for_update(skip_locked=True, of=RenderOutput)
+            .limit(1)
+        )
+        return cast(RenderOutput | None, await self._session.scalar(statement))
+
+    async def claim_next_qc_retry(self) -> BackgroundJob | None:
+        """Claim one QC job whose transient failure has backed off, with SKIP LOCKED.
+
+        Retries are a separate claim from `claim_next_unchecked_render` because the report row
+        already exists for them — the render is no longer "unchecked" from the moment the run
+        opened, which is exactly the property that keeps automatic QC to one run per render.
+        Draining retries first stops a busy queue of new renders from starving a job that has
+        already spent attempts.
+        """
+
+        now = datetime.now(UTC)
+        statement = (
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.job_type == QC_JOB_TYPE,
+                BackgroundJob.status == JobStatus.FAILED,
+                BackgroundJob.next_attempt_at.is_not(None),
+                BackgroundJob.next_attempt_at <= now,
             )
             .order_by(BackgroundJob.requested_at, BackgroundJob.id)
             .with_for_update(skip_locked=True)
@@ -325,6 +423,30 @@ class ContentFactsReader:
             for row in (await self._session.scalars(statement)).all()
         }
 
+    async def voiceover_drift(self, business_id: UUID, voiceover_ids: Sequence[UUID]) -> int | None:
+        """Total measured drift across the timeline's voiceovers, or `None` when it places none.
+
+        Slice 2C stored `drift_ms` as a real column and deliberately refused to judge it; this is
+        the read that lets slice 2D do so. `None` means the document has no voiceover track — a
+        fact about the timeline, not a measurement that failed — which is why the check it feeds
+        passes with `applicable: false` rather than going `unknown`.
+
+        A voiceover row whose drift is `NULL` is a run that never settled, and that *is* an
+        unmeasured value; it contributes nothing to the sum but leaves the sum defined only when
+        at least one row carries a number.
+        """
+
+        if not voiceover_ids:
+            return None
+        statement = select(VoiceoverAsset.drift_ms).where(
+            VoiceoverAsset.business_id == business_id,
+            VoiceoverAsset.id.in_(tuple(voiceover_ids)),
+        )
+        measured = [
+            value for value in (await self._session.scalars(statement)).all() if value is not None
+        ]
+        return sum(measured) if measured else None
+
     async def logo_asset_ids(self, business_id: UUID) -> frozenset[UUID]:
         statement = select(BrandAsset.media_asset_id).where(
             BrandAsset.business_id == business_id,
@@ -464,6 +586,98 @@ class ContentFactsReader:
                     text=cta.value, within_window=True
                 )
         return resolved
+
+    async def verified_record_states(
+        self,
+        business_id: UUID,
+        references: Sequence[tuple[TextSource, UUID]],
+        *,
+        now: datetime,
+    ) -> dict[tuple[str, UUID], VerifiedRecordState]:
+        """Read each referenced record's existence, window and last change, tenant-scoped.
+
+        This is the raw material for §19.4's "fiyat ve tarih kaynağa uyuyor mu", kept separate
+        from `verified_values` on purpose: that method resolves a value *to draw*, this one reads
+        history *to judge*, and a QC path that resolved values would end up holding a price it
+        has no business holding.
+
+        `changed_at` is when the current value became current. `product_prices` is append-only,
+        so the open row's `effective_from` answers it exactly — a price row that opened after a
+        render finished means the render printed the row that has since been closed.
+        `campaign_offers` is edited in place and carries `updated_at`. `approved_ctas` carries
+        neither history nor an update timestamp, so `changed_at` is `None` there and an edited
+        CTA is a gap this check cannot see; only its disappearance is detectable. Recording that
+        as `None` rather than as "unchanged" is what keeps the limit visible instead of implied.
+        """
+
+        states: dict[tuple[str, UUID], VerifiedRecordState] = {}
+        wanted: dict[TextSource, set[UUID]] = {}
+        for source, reference_id in references:
+            wanted.setdefault(source, set()).add(reference_id)
+
+        campaign_sources = (
+            TextSource.VERIFIED_CAMPAIGN_TITLE,
+            TextSource.VERIFIED_CAMPAIGN_LEGAL_TEXT,
+        )
+        campaign_ids = {
+            reference_id for source in campaign_sources for reference_id in wanted.get(source, ())
+        }
+        if campaign_ids:
+            offers = await self._session.scalars(
+                select(CampaignOffer).where(
+                    CampaignOffer.business_id == business_id,
+                    CampaignOffer.id.in_(tuple(campaign_ids)),
+                )
+            )
+            found = {offer.id: offer for offer in offers}
+            for source in campaign_sources:
+                for reference_id in wanted.get(source, ()):
+                    offer = found.get(reference_id)
+                    if offer is None:
+                        states[(source.value, reference_id)] = VerifiedRecordState(
+                            exists=False, within_window=False, changed_at=None
+                        )
+                        continue
+                    states[(source.value, reference_id)] = VerifiedRecordState(
+                        exists=True,
+                        within_window=evaluate_campaign_activity(
+                            status=offer.status,
+                            approval_status=offer.approval_status,
+                            starts_at=offer.starts_at,
+                            ends_at=offer.ends_at,
+                            now=now,
+                        )
+                        is CampaignActivity.ACTIVE,
+                        changed_at=offer.updated_at,
+                    )
+
+        for reference_id in wanted.get(TextSource.VERIFIED_PRODUCT_PRICE, ()):
+            price = cast(
+                ProductPrice | None,
+                await self._session.scalar(
+                    select(ProductPrice).where(
+                        ProductPrice.business_id == business_id,
+                        ProductPrice.product_id == reference_id,
+                        ProductPrice.effective_to.is_(None),
+                    )
+                ),
+            )
+            states[(TextSource.VERIFIED_PRODUCT_PRICE.value, reference_id)] = VerifiedRecordState(
+                exists=price is not None,
+                within_window=price is not None,
+                changed_at=None if price is None else price.effective_from,
+            )
+
+        for reference_id in wanted.get(TextSource.VERIFIED_CTA_TEXT, ()):
+            cta = await self._session.scalar(
+                select(ApprovedCta.id).where(
+                    ApprovedCta.business_id == business_id, ApprovedCta.id == reference_id
+                )
+            )
+            states[(TextSource.VERIFIED_CTA_TEXT.value, reference_id)] = VerifiedRecordState(
+                exists=cta is not None, within_window=cta is not None, changed_at=None
+            )
+        return states
 
 
 class ScriptFactsReader:

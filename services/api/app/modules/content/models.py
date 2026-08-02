@@ -18,6 +18,16 @@ whose origin is unknown cannot be audited when a customer disputes what a post s
 `prompt_templates` (PRD §17.6) is platform configuration rather than tenant data and therefore
 carries no `business_id`; it is the one table here a tenant filter would be meaningless on.
 
+Slice 2D adds `render_qc_reports` (PRD §19.4, migration `0015`). Two of its columns are the
+reason it is a table rather than a handful of fields on `render_outputs`. `checks` holds the
+complete check set with the value each one measured, so a report can be read years later without
+re-running anything. `thresholds` holds the numbers that produced the verdict — a version alone
+would say *which* ruleset ran and not *what it compared against*, and two reports written a month
+apart would not be comparable. `verdict` and `recommended_path` are `NOT NULL` from the `pending`
+row onward and start at `needs_review`/`human_review`: a run killed mid-measurement must read as
+unreviewed, never as approved, and a nullable column would have left that to whoever wrote the
+query.
+
 Slice 2C adds `voiceover_assets` (PRD §28.5, migration `0014`). Its one structural decision is
 that the per-line records live in a JSONB column rather than a child table: PRD §28.5 names one
 table, the lines are written and read as a set in a single transaction, and their shape is a
@@ -51,6 +61,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.modules.content.qc import QcRunStatus, QcVerdict, RemediationPath
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
 from app.modules.content.script import ScenarioCode, ScriptStatus
 from app.modules.content.tts import VoiceoverStatus
@@ -169,6 +180,84 @@ class RenderOutput(Base):
     )
     # Where a signed C2PA manifest will live once signing exists. Always NULL in this slice.
     provenance_manifest_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    failure_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RenderQcReport(Base):
+    """One automatic QC run over one render output (PRD §19.4).
+
+    The row is written `pending` and committed *before* anything is measured, following the
+    pattern `content_scripts` and `voiceover_assets` set: a process killed during the run leaves
+    a record that says a run was under way rather than no record at all. What is different here
+    is what the pending row *claims*. A pending script says nothing about the script; a pending
+    QC report has to say something about the output, and the only safe thing to say is
+    `needs_review`. Both judgement columns are therefore `NOT NULL` and start pessimistic.
+
+    `checks` carries every member of `QcCheck` with its status, its reason code and the numbers
+    it was reached from — never a rendered string, a resolved price or an object key. A QC report
+    is read by support staff and kept indefinitely; turning it into a second place a tenant's
+    price is written down would undo what slice 2B built.
+
+    There is no unique constraint on `render_id`, only a partial unique index over runs still
+    `pending`. Automatic QC runs once per render because the claim looks for renders with no
+    report at all; a later slice re-running QC against changed thresholds should produce a second
+    row, and comparing the two is exactly why `thresholds` is snapshotted.
+    """
+
+    __tablename__ = "render_qc_reports"
+    __table_args__ = (
+        Index("ix_render_qc_reports_business_created", "business_id", "created_at", "id"),
+        Index("ix_render_qc_reports_business_render", "business_id", "render_id"),
+        Index("ix_render_qc_reports_business_verdict", "business_id", "verdict"),
+        # One run at a time per render. The claim already takes a row lock, so this is the
+        # database saying the same thing independently of the query that happens to run.
+        Index(
+            "uq_render_qc_report_pending",
+            "render_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    # RESTRICT: the report is the evidence about the output, and deleting the output must not
+    # silently erase the record of what was found in it.
+    render_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("render_outputs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    job_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[QcRunStatus] = mapped_column(_enum(QcRunStatus, "qc_run_status"))
+    verdict: Mapped[QcVerdict] = mapped_column(_enum(QcVerdict, "qc_verdict"))
+    recommended_path: Mapped[RemediationPath] = mapped_column(
+        _enum(RemediationPath, "qc_remediation_path")
+    )
+
+    checks: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    # What the file itself said. Empty when the measurement could not be taken — which is a
+    # fact the checks already carry as `unknown`, not something to be inferred from a NULL.
+    measurement: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    qc_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    thresholds: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+
+    # Which vision adapter was asked, under which ceiling (ADR-007). Written with the pending
+    # row, so a call that was billed and never returned still names its route.
+    route_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    provider_usage_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("provider_usage.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     failure_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
     correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)

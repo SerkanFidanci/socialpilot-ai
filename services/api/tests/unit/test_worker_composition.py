@@ -14,6 +14,7 @@ from typing import cast
 
 import pytest
 from sqlalchemy.exc import NoReferencedTableError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import logging as app_logging
 from app.core.config import Settings
@@ -263,6 +264,90 @@ def test_celery_drain_tasks_are_registered() -> None:
         "media.technical_analysis.drain",
         "media.scene_speech_analysis.drain",
         "media.video_understanding.drain",
+        "content.render.drain",
+        "content.qc.drain",
         "operations.outbox.dispatch",
         "operations.recovery.drain",
     }.issubset(celery_app.tasks)
+
+
+def test_every_scheduled_task_is_registered_and_every_registered_drain_is_scheduled() -> None:
+    """Totality both ways, so a task and its beat entry cannot be added one without the other.
+
+    Written as a set relation rather than a list because this repository keeps relearning the
+    same lesson: a hand-counted set is the thing the next round finds a hole in. A drain that
+    exists but is never woken is dead code that looks alive, and a beat entry naming a task
+    nobody registered is a worker that logs an unregistered-task error every tick.
+    """
+
+    import app.worker.tasks  # noqa: F401
+    from app.infrastructure.celery_app import celery_app
+
+    scheduled = {entry["task"] for entry in celery_app.conf.beat_schedule.values()}
+    registered = {name for name in celery_app.tasks if not name.startswith("celery.")}
+    assert scheduled <= registered, scheduled - registered
+    assert registered <= scheduled, registered - scheduled
+
+
+def test_the_qc_drain_runs_inside_the_guarded_scratch_root(tmp_path: Path) -> None:
+    """QC materializes an output and writes metadata dumps and frames; all of it is scratch.
+
+    `needs_workdir=True` is what puts the run inside the budget `WorkerScratchGuard` enforces
+    and what gets it swept afterwards — the same discipline the render drain follows.
+    """
+
+    import inspect
+
+    from app.worker import tasks
+
+    source = inspect.getsource(tasks.drain_content_qc)
+    assert "content_qc_service" in source
+    assert "needs_workdir=True" in source
+
+
+def test_the_qc_service_the_worker_builds_cannot_render(
+    tmp_path: Path, released_context: list[WorkerContext]
+) -> None:
+    """The composition root is where a render port would have to leak in. It does not.
+
+    Slice 2E owns automatic re-render and the attempt limit that bounds it. Handing the QC
+    service a render port here would create the loop before the bound exists, and no test inside
+    the content module would notice — the wiring is the only place it could happen.
+    """
+
+    context = build_worker_context(settings(worker_temp_root=str(tmp_path)))
+    released_context.append(context)
+    service = context.content_qc_service(cast(AsyncSession, SimpleNamespace()))
+    collaborators = {
+        name: value for name, value in vars(service).items() if not name.startswith("__")
+    }
+    assert not any(isinstance(value, type(context.render)) for value in collaborators.values())
+    assert context.qc_probe is not None and context.visual_qc is not None
+
+
+def test_the_worker_measures_with_the_real_probe_and_a_disabled_eye_in_production(
+    tmp_path: Path, released_context: list[WorkerContext]
+) -> None:
+    """Two adapters, two opposite rules, and the worker is where both have to hold.
+
+    Measurement has no fixture in any environment, because the probe *is* the guarantee that
+    nobody's account of the output is taken at face value. Vision is the reverse: its fixture
+    produces an approval a reviewer would act on, so production gets the adapter that declines
+    and the four model checks land `unknown`.
+    """
+
+    from app.infrastructure.ai.fake_visual_qc import DisabledVisualQcAdapter, FakeVisualQcAdapter
+    from app.infrastructure.render.qc_probe import FFmpegQcProbe
+
+    context = build_worker_context(settings(worker_temp_root=str(tmp_path)))
+    released_context.append(context)
+    assert isinstance(context.qc_probe, FFmpegQcProbe)
+    assert isinstance(context.visual_qc, FakeVisualQcAdapter)
+
+    from app.infrastructure.ai import create_visual_qc
+    from app.infrastructure.render import create_qc_probe
+
+    production = settings(worker_temp_root=str(tmp_path))
+    production.app_env = "production"
+    assert isinstance(create_qc_probe(production), FFmpegQcProbe)
+    assert isinstance(create_visual_qc(production), DisabledVisualQcAdapter)

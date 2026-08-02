@@ -120,6 +120,7 @@ bounded retry, and any other handoff failure is permanent and is not retried.
 | `media.technical_analysis.requested` | wake `media.technical_analysis.drain` |
 | `media.scene_speech.requested` | wake `media.scene_speech_analysis.drain` |
 | `media.video_understanding.requested` | wake `media.video_understanding.drain` |
+| `content.render.requested` | wake `content.render.drain` |
 | `media.technical_analysis.completed` | notification only; no message |
 | `media.scene_speech.completed` | notification only; no message |
 | `media.video_understanding.completed` | notification only; no message |
@@ -144,7 +145,26 @@ never depends on it, because every task re-derives its work from PostgreSQL.
 | `drain-technical` | `media.technical_analysis.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
 | `drain-scene-speech` | `media.scene_speech_analysis.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
 | `drain-video-understanding` | `media.video_understanding.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `drain-content-render` | `content.render.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `drain-content-qc` | `content.qc.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
 | `recover-stale-jobs` | `operations.recovery.drain` | `CELERY_BEAT_RECOVERY_INTERVAL_SECONDS` |
+
+**`content.qc.drain` is the one entry that is not a safety net — it is the trigger** (W18).
+Every other drain is woken twice: by the event its producer wrote and by the tick that sweeps up
+what the broker lost. Automatic QC (§19.4) has no producer, because nothing in the render path
+writes a `content.qc.requested` event, so its claim asks the database directly: *which succeeded
+render carries no QC report?* Two tests hold that shape in place — one asserts the beat entry
+exists while the outbox route does not, the other drives a real report through the task the
+schedule names.
+
+The trade is measured rather than assumed. That claim is a hash anti-join over two sequential
+scans, so it costs **~134 ms per tick at 200k renders** (measured, PostgreSQL 17, single
+server); the same query as a nested-loop anti-join over a partial index would cost **0.14 ms**,
+but the planner will not choose it, because it cannot know that unchecked renders are always the
+newest ones. Indexes alone therefore do not fix it — the claim has to express that correlation.
+The natural moment for both is slice 2E, which owns `render_service.py` and can enqueue on
+completion; the scan then drops to a slow sweep and the cost question disappears. Until then the
+figure is affordable and known.
 
 Beat runs as a separate read-only `celery-beat` Compose service rather than a
 worker `-B` flag, so scheduling never shares a process with media execution and

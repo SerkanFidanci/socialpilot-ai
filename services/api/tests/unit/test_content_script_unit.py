@@ -988,8 +988,15 @@ def test_the_suffix_alphabet_is_the_language_rather_than_a_word_list() -> None:
     assert not set("bfhjopqvwx") & set(_SUFFIX)
 
 
-def test_only_the_script_module_uses_the_shared_normalizer_so_far() -> None:
-    """Slice 2D merges the timeline matcher onto this function; W16 adds no second caller."""
+def test_the_shared_normalizer_has_exactly_the_callers_it_is_meant_to_have() -> None:
+    """W16 left one caller and named the second in advance; slice 2D added it and no more.
+
+    The list is asserted whole rather than as a membership test, because the risk this pin
+    guards against is a *third* copy of the fold appearing somewhere — a rule that matches
+    characters without normalizing them first is how every bypass in this pipeline's history got
+    in. `validation.py` is the timeline's forbidden-term gate, which now folds through exactly
+    the same functions the script side does instead of its own `re.IGNORECASE` matcher.
+    """
 
     importers = sorted(
         path.relative_to(MODULES.parent).as_posix()
@@ -997,7 +1004,7 @@ def test_only_the_script_module_uses_the_shared_normalizer_so_far() -> None:
         if "content.text_normalization import" in path.read_text(encoding="utf-8")
     )
 
-    assert importers == ["modules/content/script.py"]
+    assert importers == ["modules/content/script.py", "modules/content/validation.py"]
 
 
 def test_an_invented_price_in_a_generation_is_rejected_with_a_pointer() -> None:
