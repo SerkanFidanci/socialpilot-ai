@@ -457,3 +457,22 @@ unicodedata 15.1.0 · PostgreSQL 16.14 · MinIO · FFmpeg. İzole host portları
 | 6 | Mevcut kapı yeşil, ancak #1 için regresyon testi yok. | orta | Ruff check + format: yeşil; mypy: 178 dosya temiz; `RUN_INTEGRATION_TESTS=1` gerçek PG/MinIO/FFmpeg pytest: **864 passed** (1 Starlette/httpx deprecation uyarısı). Runtime imajında `make` yoktu; eşdeğer alt komutlar doğrudan çalıştırıldı. | açık |
 
 **Karar:** düzeltme gerekiyor. `lirayla` ve varyantlarını para birimi gramerine ekleyen, birim + HTTP kalıcılık engeli regresyonu içeren küçük bir W17 takip düzeltmesi gerekli.
+
+### Bağımsız takip-1 saldırı turu — 2026-08-02
+
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `855bd7a`) ·
+`COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose
+v2.24.6-desktop.1 · Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 ·
+unicodedata 15.1.0 · PostgreSQL 16.14 · MinIO · FFmpeg. İzole host portları
+`55433`/`56380`/`59002`/`8001`; Alembic head `0014_voiceover_assets`.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Yazıyla kesirli tutarlar çekim çapasının dışındadır. | kritik | `find_fabrication("bir buçuk lira")` ve `find_fabrication("beş buçuk lira")` → `None`; her ikisinde de `resolve_script(parse_script(...), context=...)` sonucu `document is not None`, `issues=[]`. Katlanmış `lìrÀylâ`, `dölârlâ`, `ŦL’yë`, `beşer lîra`, `yüzlerce lîra`, ay/oran çekimleri (**8/8**) yine reddedildi; açık yalnız kesirli yazılı-sayı gramerindedir. | açık |
+| 2 | Bitişik yazılan sayı bileşikleri sol taraftaki yazılı-sayı kuralını atlatır. | yüksek | `yüzbin lira`, `onbir lira`, `yüz ellibeş lira` ve boşluksuz `beşerlira` → `None`; ilk üçü çözümleme katmanında `document is not None`, `issues=[]` üretiyor. Sayılar Türkçe yazımında normalde ayrı yazılır, ancak bu yüzey insan tarafından tutar olarak okunur. | açık |
+| 3 | Boşluklu kısaltmanın işaretsiz ek biçimi `T Lye` istisnadan geçiyor. | orta | `find_fabrication("165 T Lye")` → `None`; çözümleme sonucu `document is not None`, `issues=[]`. Aynı matriste `TLye`, `TL'ye`, `TL’ye`, `TLnin`, `TL'nin`, `TRYye`, `USDden`, `EUROya`, `T.L.ye`, `T.L.'ye` ve `T L'ye` reddedildi (**15/16**). | açık |
+| 4 | Gerçek ad çekimlerinin ek-alfa kapsamı dışında yeni kaçış bulunamadı. | — | `lira`, `dolar`, `euro`, `kuruş`, `sterlin`, `avro`, `Türk lirası` üzerinde 23 nominal ek zinciri: **161/161** ret. Ek alfabesi dışında kalan `-yor`/`-ip` gibi biçimler fiil ekidir; para birimi adlarına dilbilgisel olarak bağlanmaz. | kabul edildi |
+| 5 | Kök-benzeri metinler, marka adları ve tarif kontrollerinde yeni yanlış pozitif yok. | — | `Bu yüzden …`, `Eurovision`, `Europa`, `Euro Kebap`, `Lirik`, `kurulum`, `Dolarli köfte`, `Lira` adlı kedi ile üç tarif metni: **12/12** geçti. | kabul edildi |
+| 6 | Mevcut kapı yeşil, fakat #1–#3 için regresyon yok. | orta | Ruff check + format: yeşil; mypy: 178 dosya temiz; `RUN_INTEGRATION_TESTS=1` gerçek PG/MinIO/FFmpeg pytest: **947 passed** (1 Starlette/httpx deprecation uyarısı). Runtime imajında `make` yoktu; eşdeğer alt komutlar doğrudan çalıştırıldı. | açık |
+
+**Karar:** düzeltme gerekiyor. Yazıyla kesirli/bitişik sayı grameri ile `T Lye` için birim ve HTTP kalıcılık-engeli regresyonları eklenmeden takip düzeltmesi teslim edilebilir değil.
