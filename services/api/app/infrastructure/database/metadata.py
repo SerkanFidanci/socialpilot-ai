@@ -21,6 +21,7 @@ from app.modules.entitlement import models as entitlement_models
 from app.modules.identity import models as identity_models
 from app.modules.media import models as media_models
 from app.modules.operations import models as operations_models
+from app.modules.planner import models as planner_models
 
 MODEL_MODULES = (
     brand_models,
@@ -30,6 +31,7 @@ MODEL_MODULES = (
     identity_models,
     media_models,
     operations_models,
+    planner_models,
 )
 
 metadata: MetaData = identity_models.Base.metadata

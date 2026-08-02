@@ -1206,6 +1206,33 @@
         "title": "CompletedPartRequest",
         "type": "object"
       },
+      "ContentCategory": {
+        "description": "§13.3's weekly mix rows, verbatim and in the section's own order.",
+        "enum": [
+          "product_service",
+          "educational",
+          "brand_story",
+          "social_proof",
+          "entertainment",
+          "campaign",
+          "corporate"
+        ],
+        "title": "ContentCategory",
+        "type": "string"
+      },
+      "ContentType": {
+        "description": "§13.1's `content_type`: the publishing surface an obligation is for.\n\nClosed, and deliberately *not* a second spelling of `RenderProfile`. A profile is a geometry;\na content type is what a tenant subscribes to (\"a Reel a day\"), and the mapping below is what\nconnects the two. `preview_540x960` has no member here because a review proxy is not a surface\nanybody publishes to — asking for one is something a person does to a project, not something a\nsubscription can standingly demand.",
+        "enum": [
+          "instagram_reels",
+          "instagram_story",
+          "instagram_feed",
+          "instagram_square",
+          "x_video",
+          "x_vertical"
+        ],
+        "title": "ContentType",
+        "type": "string"
+      },
       "CoverageResponse": {
         "properties": {
           "analyzed_scene_count": {
@@ -1411,6 +1438,219 @@
         ],
         "title": "IngestStatus",
         "type": "string"
+      },
+      "ItemPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ItemPageResponse",
+        "type": "object"
+      },
+      "ItemRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "campaign_offer_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Offer Id"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ContentCategory"
+          },
+          "content_type": {
+            "$ref": "#/components/schemas/ContentType"
+          },
+          "cta_id": {
+            "format": "uuid",
+            "title": "Cta Id",
+            "type": "string"
+          },
+          "lead_time_minutes": {
+            "default": 360,
+            "maximum": 10080.0,
+            "minimum": 0.0,
+            "title": "Lead Time Minutes",
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/PlanPeriod"
+          },
+          "preference_rank": {
+            "default": 0,
+            "maximum": 999.0,
+            "minimum": 0.0,
+            "title": "Preference Rank",
+            "type": "integer"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "publish_minute": {
+            "exclusiveMaximum": 1440.0,
+            "minimum": 0.0,
+            "title": "Publish Minute",
+            "type": "integer"
+          },
+          "source_asset_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Asset Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "content_type",
+          "category",
+          "period",
+          "publish_minute",
+          "product_id",
+          "cta_id"
+        ],
+        "title": "ItemRequest",
+        "type": "object"
+      },
+      "ItemResponse": {
+        "properties": {
+          "campaign_offer_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Offer Id"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ContentCategory"
+          },
+          "content_type": {
+            "$ref": "#/components/schemas/ContentType"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "cta_id": {
+            "format": "uuid",
+            "title": "Cta Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "lead_time_minutes": {
+            "title": "Lead Time Minutes",
+            "type": "integer"
+          },
+          "next_plan_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Plan At"
+          },
+          "period": {
+            "$ref": "#/components/schemas/PlanPeriod"
+          },
+          "preference_rank": {
+            "title": "Preference Rank",
+            "type": "integer"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "publish_minute": {
+            "title": "Publish Minute",
+            "type": "integer"
+          },
+          "source_asset_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Source Asset Ids",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlanItemStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "content_type",
+          "category",
+          "period",
+          "publish_minute",
+          "lead_time_minutes",
+          "preference_rank",
+          "product_id",
+          "cta_id",
+          "campaign_offer_id",
+          "source_asset_ids",
+          "next_plan_at",
+          "created_at"
+        ],
+        "title": "ItemResponse",
+        "type": "object"
+      },
+      "ItemStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/PlanItemStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ItemStatusRequest",
+        "type": "object"
       },
       "JobStatus": {
         "enum": [
@@ -1656,6 +1896,270 @@
         "title": "MembershipStatus",
         "type": "string"
       },
+      "MixEntryResponse": {
+        "properties": {
+          "actual_share": {
+            "title": "Actual Share",
+            "type": "integer"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ContentCategory"
+          },
+          "deviation_points": {
+            "title": "Deviation Points",
+            "type": "integer"
+          },
+          "observed": {
+            "title": "Observed",
+            "type": "integer"
+          },
+          "target_share": {
+            "title": "Target Share",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "target_share",
+          "actual_share",
+          "observed",
+          "deviation_points"
+        ],
+        "title": "MixEntryResponse",
+        "type": "object"
+      },
+      "MixResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MixEntryResponse"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "entries"
+        ],
+        "title": "MixResponse",
+        "type": "object"
+      },
+      "MixTargetRequest": {
+        "additionalProperties": false,
+        "description": "§13.3's distribution. Every category, whole percentage points, summing to 100.",
+        "properties": {
+          "brand_story": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Brand Story",
+            "type": "integer"
+          },
+          "campaign": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Campaign",
+            "type": "integer"
+          },
+          "corporate": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Corporate",
+            "type": "integer"
+          },
+          "educational": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Educational",
+            "type": "integer"
+          },
+          "entertainment": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Entertainment",
+            "type": "integer"
+          },
+          "product_service": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Product Service",
+            "type": "integer"
+          },
+          "social_proof": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Social Proof",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "product_service",
+          "educational",
+          "brand_story",
+          "social_proof",
+          "entertainment",
+          "campaign",
+          "corporate"
+        ],
+        "title": "MixTargetRequest",
+        "type": "object"
+      },
+      "ObligationPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ObligationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ObligationPageResponse",
+        "type": "object"
+      },
+      "ObligationResponse": {
+        "description": "PRD §13.1's record, read back, plus why it is where it is.",
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "category": {
+            "$ref": "#/components/schemas/ContentCategory"
+          },
+          "content_type": {
+            "$ref": "#/components/schemas/ContentType"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "generation_deadline_at": {
+            "format": "date-time",
+            "title": "Generation Deadline At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "period_end": {
+            "format": "date-time",
+            "title": "Period End",
+            "type": "string"
+          },
+          "period_start": {
+            "format": "date-time",
+            "title": "Period Start",
+            "type": "string"
+          },
+          "planned_publish_at": {
+            "format": "date-time",
+            "title": "Planned Publish At",
+            "type": "string"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "quiet_hours_shifted": {
+            "title": "Quiet Hours Shifted",
+            "type": "boolean"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObligationStatus"
+          },
+          "subscription_item_id": {
+            "format": "uuid",
+            "title": "Subscription Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subscription_item_id",
+          "content_type",
+          "category",
+          "status",
+          "period_start",
+          "period_end",
+          "planned_publish_at",
+          "generation_deadline_at",
+          "quiet_hours_shifted",
+          "project_id",
+          "reason_code",
+          "attempts",
+          "next_attempt_at",
+          "created_at"
+        ],
+        "title": "ObligationResponse",
+        "type": "object"
+      },
+      "ObligationStatus": {
+        "description": "§13.1's `status`, opened into the states a queue entry actually visits.\n\n§13.1 shows `planned`. The other five are what happens to a planned thing: it becomes work,\nor it cannot become work and has to say so, or its window closed, or the work it became ended\none way or the other. `blocked` is the one this slice was asked for by name — an obligation\nthat could not be converted must be *visible*, never silently dropped.",
+        "enum": [
+          "planned",
+          "in_progress",
+          "blocked",
+          "fulfilled",
+          "cancelled",
+          "expired"
+        ],
+        "title": "ObligationStatus",
+        "type": "string"
+      },
       "PartResponse": {
         "properties": {
           "part_number": {
@@ -1715,6 +2219,67 @@
           "operations"
         ],
         "title": "PatchRequest",
+        "type": "object"
+      },
+      "PlanEntryResponse": {
+        "properties": {
+          "obligation_id": {
+            "format": "uuid",
+            "title": "Obligation Id",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/RankReasonResponse"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "obligation_id",
+          "position",
+          "reasons"
+        ],
+        "title": "PlanEntryResponse",
+        "type": "object"
+      },
+      "PlanItemStatus": {
+        "description": "Whether a standing demand is currently producing obligations.",
+        "enum": [
+          "active",
+          "paused"
+        ],
+        "title": "PlanItemStatus",
+        "type": "string"
+      },
+      "PlanPeriod": {
+        "description": "How often one standing demand produces an obligation.\n\n§13.1's example window is a single day. Weekly exists because §13.3's mix is stated per week\nand a \"one premium video a week\" item (§14.2) is the shape that makes the distribution\nreachable at all. Both boundaries are *local* calendar boundaries — see `period_bounds`.",
+        "enum": [
+          "daily",
+          "weekly"
+        ],
+        "title": "PlanPeriod",
+        "type": "string"
+      },
+      "PlanResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PlanEntryResponse"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "PlanResponse",
         "type": "object"
       },
       "PricePayload": {
@@ -2390,6 +2955,7 @@
           "revision_scoped_to_script",
           "revision_scoped_to_voice",
           "revision_scoped_to_timeline",
+          "scheduled",
           "cancelled"
         ],
         "title": "ProjectEvent",
@@ -2659,7 +3225,7 @@
         "type": "object"
       },
       "ProjectState": {
-        "description": "PRD §20's states, up to the point slice 2F is responsible for.\n\nThe diagram continues past approval into scheduling and publishing. Those are slice 2G and\nPhase 4; adding them here as unreachable values would put states in the database that nothing\ncan produce and nothing can consume. `APPROVED` and `CANCELLED` are the two documented\nextensions — see the module docstring for why each exists.",
+        "description": "PRD §20's states, up to the point slice 2G is responsible for.\n\nThe diagram continues past scheduling into publishing. That is Phase 4; adding those values\nhere as unreachable ones would put states in the database that nothing can produce and nothing\ncan consume. `APPROVED` and `CANCELLED` are the two documented extensions — see the module\ndocstring for why each exists.",
         "enum": [
           "planned",
           "waiting_media",
@@ -2673,6 +3239,7 @@
           "waiting_approval",
           "revision_requested",
           "approved",
+          "scheduled",
           "failed",
           "retrying",
           "cancelled"
@@ -2938,6 +3505,30 @@
         ],
         "title": "QcVerdict",
         "type": "string"
+      },
+      "RankReasonResponse": {
+        "description": "One §13.2 priority's answer for one candidate.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priority",
+          "rank",
+          "code"
+        ],
+        "title": "RankReasonResponse",
+        "type": "object"
       },
       "ReadyHealthResponse": {
         "description": "Response for safe dependency readiness information.",
@@ -3814,6 +4405,96 @@
           "parts"
         ],
         "title": "SessionResponse",
+        "type": "object"
+      },
+      "SettingsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "mix_targets": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MixTargetRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planning_horizon_days": {
+            "default": 7,
+            "maximum": 60.0,
+            "minimum": 0.0,
+            "title": "Planning Horizon Days",
+            "type": "integer"
+          },
+          "quiet_hours_end_minute": {
+            "default": 480,
+            "exclusiveMaximum": 1440.0,
+            "minimum": 0.0,
+            "title": "Quiet Hours End Minute",
+            "type": "integer"
+          },
+          "quiet_hours_start_minute": {
+            "default": 1320,
+            "exclusiveMaximum": 1440.0,
+            "minimum": 0.0,
+            "title": "Quiet Hours Start Minute",
+            "type": "integer"
+          }
+        },
+        "title": "SettingsRequest",
+        "type": "object"
+      },
+      "SettingsResponse": {
+        "properties": {
+          "business_id": {
+            "format": "uuid",
+            "title": "Business Id",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "mix_targets": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Mix Targets",
+            "type": "object"
+          },
+          "planning_horizon_days": {
+            "title": "Planning Horizon Days",
+            "type": "integer"
+          },
+          "quiet_hours_end_minute": {
+            "title": "Quiet Hours End Minute",
+            "type": "integer"
+          },
+          "quiet_hours_start_minute": {
+            "title": "Quiet Hours Start Minute",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "business_id",
+          "timezone",
+          "enabled",
+          "quiet_hours_start_minute",
+          "quiet_hours_end_minute",
+          "mix_targets",
+          "planning_horizon_days"
+        ],
+        "title": "SettingsResponse",
         "type": "object"
       },
       "StageResponse": {
@@ -9734,6 +10415,1377 @@
         "summary": "Update Member",
         "tags": [
           "businesses"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/mix": {
+      "get": {
+        "description": "§13.3's distribution, measured against the target. A report, never a quota",
+        "operationId": "read_mix_v1_businesses__business_id__planner_mix_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MixResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Mix",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/obligations": {
+      "get": {
+        "description": "List §13.1's queue — including everything that is blocked, and why",
+        "operationId": "list_obligations_v1_businesses__business_id__planner_obligations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ObligationStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObligationPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Obligations",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/obligations/{obligation_id}": {
+      "get": {
+        "description": "Read one obligation and the project it became, if it became one",
+        "operationId": "get_obligation_v1_businesses__business_id__planner_obligations__obligation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "obligation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Obligation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObligationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Obligation",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/obligations/{obligation_id}/cancel": {
+      "post": {
+        "description": "Withdraw an obligation that has not become a project. Cancel the project otherwise",
+        "operationId": "cancel_obligation_v1_businesses__business_id__planner_obligations__obligation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "obligation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Obligation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObligationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Obligation",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/plan": {
+      "get": {
+        "description": "§13.2's order over what is convertible now, with every priority's reason attached",
+        "operationId": "read_plan_v1_businesses__business_id__planner_plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Plan",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/settings": {
+      "get": {
+        "description": "Read this business's effective planning configuration, deployment defaults included",
+        "operationId": "read_settings_v1_businesses__business_id__planner_settings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Settings",
+        "tags": [
+          "planner"
+        ]
+      },
+      "put": {
+        "description": "Set the quiet window, the §13.3 targets and the planning horizon. Admin and owner only",
+        "operationId": "upsert_settings_v1_businesses__business_id__planner_settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert Settings",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/subscription-items": {
+      "get": {
+        "description": "List this business's standing demands, newest first, with an opaque cursor",
+        "operationId": "list_items_v1_businesses__business_id__planner_subscription_items_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PlanItemStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Items",
+        "tags": [
+          "planner"
+        ]
+      },
+      "post": {
+        "description": "Register a standing demand for content — §13.1's `subscription_item`, in the small",
+        "operationId": "create_item_v1_businesses__business_id__planner_subscription_items_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Item",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/subscription-items/{item_id}": {
+      "get": {
+        "description": "Read one standing demand",
+        "operationId": "get_item_v1_businesses__business_id__planner_subscription_items__item_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Item",
+        "tags": [
+          "planner"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/planner/subscription-items/{item_id}/status": {
+      "post": {
+        "description": "Pause or resume a standing demand. Obligations already planned are left alone",
+        "operationId": "set_item_status_v1_businesses__business_id__planner_subscription_items__item_id__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Item Status",
+        "tags": [
+          "planner"
         ]
       }
     },

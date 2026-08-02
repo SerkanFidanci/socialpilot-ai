@@ -268,8 +268,11 @@ def test_source_outcome_is_total_over_the_project_state_machine() -> None:
 def test_a_project_that_never_previewed_delivers_only_from_preview_ready() -> None:
     for state in ProjectState:
         outcome = source_outcome(state, preview_delivered=False)
+        # Three states deliver and all three mean the same thing: a preview exists. `approved` and
+        # `scheduled` are reachable only through `preview_ready`, so nothing is charged twice —
+        # `resolve_settlement` answers `ALREADY_APPLIED` for every pass after the first.
         assert (outcome is SourceOutcome.DELIVERED) is (
-            state in {ProjectState.PREVIEW_READY, ProjectState.APPROVED}
+            state in {ProjectState.PREVIEW_READY, ProjectState.APPROVED, ProjectState.SCHEDULED}
         )
         assert (outcome is SourceOutcome.ABANDONED) is (
             state in {ProjectState.FAILED, ProjectState.CANCELLED}
@@ -319,12 +322,13 @@ def test_the_composed_rule_charges_exactly_one_project_state() -> None:
         }[answer]
         bucket.add((state.value, code))
     assert len(charged) + len(held) + len(released) == len(list(ProjectState)) * len(codes)
-    # Two states charge, and both mean the same thing: a preview exists. `approved` is only
-    # reachable through `preview_ready`, so nothing is charged twice — `resolve_settlement`
-    # answers `ALREADY_APPLIED` for the second pass.
+    # Three states charge, and all three mean the same thing: a preview exists. `approved` and
+    # slice 2G's `scheduled` are reachable only through `preview_ready`, so nothing is charged
+    # twice — `resolve_settlement` answers `ALREADY_APPLIED` for every pass after the first.
     assert {state for state, _ in charged} == {
         ProjectState.PREVIEW_READY.value,
         ProjectState.APPROVED.value,
+        ProjectState.SCHEDULED.value,
     }
     # Two states release, and both mean the same thing: no preview was ever produced. The
     # cancellation codes slice 2F introduces are not in `FAILURE_CLASSES` and therefore classify

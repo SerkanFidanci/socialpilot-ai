@@ -16,6 +16,7 @@ from app.api.routes.entitlement import router as entitlement_router
 from app.api.routes.health import router as health_router
 from app.api.routes.identity import router as identity_router
 from app.api.routes.media import router as media_router
+from app.api.routes.planner import router as planner_router
 
 
 def register_routes(application: FastAPI) -> None:
@@ -28,3 +29,4 @@ def register_routes(application: FastAPI) -> None:
     application.include_router(media_router)
     application.include_router(content_router)
     application.include_router(entitlement_router)
+    application.include_router(planner_router)

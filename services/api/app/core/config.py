@@ -332,6 +332,59 @@ class Settings(BaseSettings):
     entitlement_sweep_batch_size: int = Field(default=200, ge=1, le=500)
     # The sweep is a safety net over a settlement that is already atomic, so it runs rarely.
     celery_beat_entitlement_sweep_interval_seconds: int = Field(default=3_600, ge=1, le=86_400)
+    # --- content planner (PRD §13, slice 2G) ---------------------------------------------------
+    # The quiet window a business inherits until it stores one of its own (§13.2/8), as minutes
+    # past *local* midnight. 22:00–08:00: a window that wraps midnight, which is what a quiet
+    # window normally does, and the reason the pair is two numbers rather than an interval.
+    planner_quiet_hours_start_minute: int = Field(default=1_320, ge=0, le=1_439)
+    planner_quiet_hours_end_minute: int = Field(default=480, ge=0, le=1_439)
+    # How far ahead obligations are materialised. A week by default: far enough that a customer
+    # can see and edit what is coming, near enough that a change to the catalogue is not fighting
+    # a month of already-planned content.
+    planner_planning_horizon_days: int = Field(default=7, ge=0, le=60)
+    # How long a standing demand rests between planning passes, and how long one pass may hold it
+    # before the item becomes claimable again. The lease is the shorter of the two by validation
+    # below — a lease longer than the interval would stop an item ever being replanned.
+    planner_replan_interval_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    planner_plan_lease_seconds: int = Field(default=300, ge=10, le=3_600)
+    # §13.2/2's bucket boundary: how close a generation deadline has to be before the obligation
+    # counts as urgent rather than merely scheduled. Six hours, which is a night's queue.
+    planner_urgent_window_seconds: int = Field(default=21_600, ge=60, le=604_800)
+    # §13.2/5. How many renderable source assets a standing demand needs before its obligation
+    # ranks as having enough footage. Not a refusal — §14.1's fallback is to wait, so an
+    # obligation below this ranks last and its window is what eventually closes it.
+    planner_min_renderable_assets: int = Field(default=1, ge=1, le=50)
+    # §13.2/6. How far back "the same product again" looks.
+    planner_repetition_window_days: int = Field(default=14, ge=1, le=365)
+    # §13.3 states the mix per week, so measuring it over less than one would compare a partial
+    # week against a weekly target. Four weeks by default, which is what a monthly report reads.
+    planner_mix_window_days: int = Field(default=28, ge=7, le=365)
+    # Ceilings. The first bounds how much standing demand one tenant can register, the second how
+    # many obligations one planning pass may create, the third how many candidates §13.2 ranks in
+    # one go. All three are reported when they bind rather than silently truncating.
+    planner_max_items_per_business: int = Field(default=50, ge=1, le=500)
+    planner_max_obligations_per_run: int = Field(default=100, ge=1, le=1_000)
+    planner_candidate_limit: int = Field(default=200, ge=1, le=1_000)
+    planner_batch_size: int = Field(default=50, ge=1, le=500)
+    # The conversion claim's lease, its transient-failure backoff base, and how many transient
+    # failures one obligation may cost before it blocks with a documented code.
+    planner_dispatch_lease_seconds: int = Field(default=300, ge=10, le=3_600)
+    planner_dispatch_retry_seconds: int = Field(default=30, ge=1, le=3_600)
+    planner_dispatch_max_attempts: int = Field(default=5, ge=1, le=20)
+    # How long a blocked obligation waits before the dispatcher tries it again. Blocking is not
+    # death: a tenant tops up their balance, and the next pass inside the same window converts.
+    planner_blocked_retry_seconds: int = Field(default=900, ge=60, le=86_400)
+    # When a project that no obligation planned — one somebody created by hand — is published
+    # after it is approved. Fifteen minutes, then pushed out of the quiet window like any slot.
+    planner_manual_publish_delay_seconds: int = Field(default=900, ge=0, le=604_800)
+    # Planning is the one drain here that can have no producer: nothing emits "a new period
+    # began", and a tick is the only thing that can observe the arrival of a date. Hourly.
+    celery_beat_planner_plan_interval_seconds: int = Field(default=3_600, ge=1, le=86_400)
+    # Conversion and scheduling could be woken by an event and deliberately are not in this
+    # slice — see the module `CLAUDE.md`. The intervals are therefore the whole latency budget,
+    # and both are short.
+    celery_beat_planner_dispatch_interval_seconds: int = Field(default=60, ge=1, le=86_400)
+    celery_beat_planner_schedule_interval_seconds: int = Field(default=120, ge=1, le=86_400)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.
@@ -624,6 +677,18 @@ class Settings(BaseSettings):
             raise ValueError("REVISION_QUOTA_MAJOR_COST cannot exceed REVISION_QUOTA_DEFAULT")
         if self.revision_quota_minor_cost > self.revision_quota_major_cost:
             raise ValueError("REVISION_QUOTA_MINOR_COST cannot exceed REVISION_QUOTA_MAJOR_COST")
+        # A planning lease that outlived the interval between passes would stop a standing demand
+        # ever being replanned: the item would still be leased when its next turn came.
+        if self.planner_plan_lease_seconds >= self.planner_replan_interval_seconds:
+            raise ValueError(
+                "PLANNER_PLAN_LEASE_SECONDS must be below PLANNER_REPLAN_INTERVAL_SECONDS"
+            )
+        # The conversion backoff is bounded by the lease, so a backoff that already exceeded it
+        # would make the bound meaningless and every retry immediate.
+        if self.planner_dispatch_retry_seconds >= self.planner_dispatch_lease_seconds:
+            raise ValueError(
+                "PLANNER_DISPATCH_RETRY_SECONDS must be below PLANNER_DISPATCH_LEASE_SECONDS"
+            )
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,
             self.scene_speech_job_timeout_seconds,

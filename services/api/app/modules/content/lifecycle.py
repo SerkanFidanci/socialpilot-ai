@@ -14,21 +14,33 @@ pair in the product, and answers `None` for the ones PRD §20 does not draw. A c
 for `RENDERING → PREVIEW_READY` gets a refusal, not a `KeyError` and not a silent success, which
 is what makes "no state may be skipped" a property of the data rather than of everyone's care.
 
-**The states are PRD §20's, not a summary of them.** `SCHEDULED`, `PUBLISHING` and `PUBLISHED` are
-absent because slice 2G and Phase 4 own them; every state this slice does reach is spelled the way
-§20 spells it. There are three documented extensions, each one a state or event the diagram does
-not draw and the product needs:
+**The states are PRD §20's, not a summary of them.** `PUBLISHING` and `PUBLISHED` are absent
+because Phase 4 owns them; every state this slice does reach is spelled the way §20 spells it.
+There are three documented extensions, each one a state or event the diagram does not draw and the
+product needs:
 
 - `ProjectEvent.STEP_FAILED` (slice 2E). The diagram reaches `FAILED` only from `QUALITY_CHECK`
   and `PUBLISHING`, and a project whose script generation failed has nowhere to be.
 - `ProjectState.APPROVED` (slice 2F). §20 draws `WAITING_APPROVAL --> SCHEDULED` directly, and
-  there is no scheduler until 2G. An approved project has to rest *somewhere* that is not
+  there was no scheduler until 2G. An approved project has to rest *somewhere* that is not
   `WAITING_APPROVAL`, or "approved" would be invisible to every query the product asks — the list
   of things awaiting a decision would contain the things that already got one. Slice 2G adds the
-  edge `APPROVED --> SCHEDULED`; §20's arrow is that path with this state named in the middle.
+  edge `APPROVED --> SCHEDULED`, so §20's arrow is now that path with this state named in the
+  middle, exactly as slice 2F predicted.
 - `ProjectState.CANCELLED` (slice 2F). A customer withdrawing a project is not a failure, and the
   distinction is not cosmetic: `failure_code` drives the refund classification and a support
   answer that cannot separate "the encoder died" from "they changed their mind" is not an answer.
+
+**`SCHEDULED` is where slice 2G stops.** The project has a publication slot and nothing left to
+compute; `PUBLISHING` is Phase 4's, so this is the end of the machine as it stands. The edge into
+it is drawn from `APPROVED` and from nowhere else (PM decision, slice 2G): content nobody approved
+must not be able to reach a calendar, and the `never_within_guardrails` policy already lands in
+`APPROVED` through an actorless `auto_approved` record, so every §21.1 policy has a route.
+
+**Not every move is the sequencer's.** Three states wait on a person and one waits on the planner;
+`waits_for_handoff` is the set, and it does two things — the step timeout does not apply, and the
+poll interval drops to the lease. A project sitting in `APPROVED` is no more a stalled job than one
+sitting in `WAITING_APPROVAL`.
 
 **Reaching `PREVIEW_READY` is no longer the end.** Slice 2E made it terminal because approval did
 not exist. It is now a state the sequencer passes through — it evaluates §21.1's policy there and
@@ -109,12 +121,12 @@ FAILURE_ABANDONED: Final = "PROJECT_ABANDONED"
 
 
 class ProjectState(StrEnum):
-    """PRD §20's states, up to the point slice 2F is responsible for.
+    """PRD §20's states, up to the point slice 2G is responsible for.
 
-    The diagram continues past approval into scheduling and publishing. Those are slice 2G and
-    Phase 4; adding them here as unreachable values would put states in the database that nothing
-    can produce and nothing can consume. `APPROVED` and `CANCELLED` are the two documented
-    extensions — see the module docstring for why each exists.
+    The diagram continues past scheduling into publishing. That is Phase 4; adding those values
+    here as unreachable ones would put states in the database that nothing can produce and nothing
+    can consume. `APPROVED` and `CANCELLED` are the two documented extensions — see the module
+    docstring for why each exists.
     """
 
     PLANNED = "planned"
@@ -129,6 +141,7 @@ class ProjectState(StrEnum):
     WAITING_APPROVAL = "waiting_approval"
     REVISION_REQUESTED = "revision_requested"
     APPROVED = "approved"
+    SCHEDULED = "scheduled"
     FAILED = "failed"
     RETRYING = "retrying"
     CANCELLED = "cancelled"
@@ -170,6 +183,9 @@ class ProjectEvent(StrEnum):
     REVISION_SCOPED_TO_SCRIPT = "revision_scoped_to_script"
     REVISION_SCOPED_TO_VOICE = "revision_scoped_to_voice"
     REVISION_SCOPED_TO_TIMELINE = "revision_scoped_to_timeline"
+    # The planner gave an approved project a publication slot (slice 2G). A fact about a decision
+    # made outside the sequencer, exactly like `APPROVED` and `REJECTED` above it.
+    SCHEDULED = "scheduled"
     CANCELLED = "cancelled"
 
 
@@ -188,17 +204,26 @@ _WORKING_STATES: Final[tuple[ProjectState, ...]] = (
     ProjectState.RETRYING,
 )
 
+# Slice 2G reopens `APPROVED` for the same reason slice 2F reopened `PREVIEW_READY`: something now
+# happens after it. The set is written out rather than derived, so adding a state is a decision
+# about whether the project is over.
 _TERMINAL_STATES: Final[frozenset[ProjectState]] = frozenset(
-    {ProjectState.APPROVED, ProjectState.FAILED, ProjectState.CANCELLED}
+    {ProjectState.SCHEDULED, ProjectState.FAILED, ProjectState.CANCELLED}
 )
 
-# The states in which the sequencer is waiting on a person rather than on itself. They are
-# claimed like any other working state — a project has to be able to notice its media arrived —
-# but the step timeout does not apply to them, because "the customer has not uploaded yet" and
-# "the approver is at lunch" are not stalled jobs. What catches a project abandoned in one of
-# these is the age sweep, which is a much longer clock and gives the credit back.
-_USER_WAIT_STATES: Final[frozenset[ProjectState]] = frozenset(
-    {ProjectState.WAITING_MEDIA, ProjectState.WAITING_APPROVAL, ProjectState.REVISION_REQUESTED}
+# The states in which the sequencer is waiting on somebody else rather than on itself — three on a
+# person and one on the planner. They are claimed like any other state (a project has to be able to
+# notice its media arrived) but the step timeout does not apply, because "the customer has not
+# uploaded yet", "the approver is at lunch" and "the planner has not run yet" are not stalled jobs.
+# What catches a project abandoned in one of these is the age sweep, which is a much longer clock
+# and gives the credit back.
+_HANDOFF_STATES: Final[frozenset[ProjectState]] = frozenset(
+    {
+        ProjectState.WAITING_MEDIA,
+        ProjectState.WAITING_APPROVAL,
+        ProjectState.REVISION_REQUESTED,
+        ProjectState.APPROVED,
+    }
 )
 
 _TRANSITIONS: Final[Mapping[tuple[ProjectState, ProjectEvent], ProjectState]] = {
@@ -242,6 +267,12 @@ _TRANSITIONS: Final[Mapping[tuple[ProjectState, ProjectEvent], ProjectState]] = 
     (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_TIMELINE): (
         ProjectState.TIMELINE_BUILDING
     ),
+    # --- slice 2G's one edge ------------------------------------------------------------------
+    # §20 draws `WAITING_APPROVAL --> SCHEDULED`. The PM decision for this slice keeps the arrow
+    # and names the state in the middle: nothing reaches a calendar without an approval behind it,
+    # automatic or otherwise. There is deliberately no edge from `WAITING_APPROVAL` — that would
+    # be a second, unapproved way onto the same calendar.
+    (ProjectState.APPROVED, ProjectEvent.SCHEDULED): ProjectState.SCHEDULED,
     **{(state, ProjectEvent.STEP_FAILED): ProjectState.FAILED for state in _WORKING_STATES},
     # Cancellation is available from every state the project has not already finished in, and
     # from nowhere else. Written over the same closed list the terminal set is defined by, so
@@ -268,11 +299,12 @@ def next_state(state: ProjectState, event: ProjectEvent) -> ProjectState | None:
 
 
 def is_terminal(state: ProjectState) -> bool:
-    """A state the project never leaves. `APPROVED`, `FAILED` and `CANCELLED`, and no others.
+    """A state the project never leaves. `SCHEDULED`, `FAILED` and `CANCELLED`, and no others.
 
-    `PREVIEW_READY` was terminal in slice 2E and is not any more: the sequencer passes through
-    it to apply §21.1's policy. `WAITING_APPROVAL` and `REVISION_REQUESTED` are not terminal
-    either — they wait on a person, which `waits_for_user` is what says.
+    Two states have lost this property, one per slice, and both for the same reason: something
+    came to happen after them. `PREVIEW_READY` stopped being terminal when §21's decision arrived
+    in slice 2F; `APPROVED` stops being terminal here, because slice 2G gives an approved project
+    somewhere to go. `SCHEDULED` is terminal only until Phase 4 draws `PUBLISHING`.
     """
 
     return state in _TERMINAL_STATES
@@ -304,10 +336,16 @@ def revision_event(scope: RevisionScope) -> ProjectEvent:
     return _SCOPE_EVENTS[scope]
 
 
-def waits_for_user(state: ProjectState) -> bool:
-    """Whether the project is blocked on a person, so the step timeout must not apply."""
+def waits_for_handoff(state: ProjectState) -> bool:
+    """Whether the next move belongs to somebody other than the sequencer.
 
-    return state in _USER_WAIT_STATES
+    Three of these wait on a person (upload, decide, revise) and one waits on the planner
+    (`APPROVED`). The consequence is the same in both cases and is why they share a predicate:
+    the step timeout must not fire, and polling has to be cheap. Named for the handoff rather
+    than for the actor, because slice 2G added a machine to a set that used to be only people.
+    """
+
+    return state in _HANDOFF_STATES
 
 
 def advanceable_states() -> tuple[ProjectState, ...]:
@@ -319,9 +357,10 @@ def advanceable_states() -> tuple[ProjectState, ...]:
 def working_states() -> tuple[ProjectState, ...]:
     """The states in which the machine is doing the work, so a step can fail underneath it.
 
-    Distinct from `advanceable_states` by exactly the states that wait on a person and by
-    `PREVIEW_READY`: a customer who has not uploaded anything has not failed at anything, and a
-    finished preview has nothing left to fail at. Those waits end by cancellation, not failure.
+    Distinct from `advanceable_states` by exactly the handoff states and by `PREVIEW_READY`: a
+    customer who has not uploaded anything has not failed at anything, an approved project waiting
+    for a slot has not either, and a finished preview has nothing left to fail at. Those waits end
+    by cancellation, not failure.
     """
 
     return _WORKING_STATES

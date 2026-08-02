@@ -181,6 +181,45 @@ def sweep_abandoned_reservations() -> dict[str, object]:
     return context.run(_drain(context, context.entitlement_sweeper, needs_workdir=False))
 
 
+@celery_app.task(name="planner.obligations.plan")
+def plan_content_obligations() -> dict[str, object]:
+    """Materialise §13.1 obligations for standing demands whose next planning pass is due.
+
+    The third drain here with no producer, and the reason is the same shape as the other two:
+    nothing emits "a new period began". A tick is the only thing that can observe the arrival of
+    a date. No workdir — the planner touches no media at all.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.planner_planning_service, needs_workdir=False))
+
+
+@celery_app.task(name="planner.obligations.dispatch")
+def dispatch_content_obligations() -> dict[str, object]:
+    """Turn the highest-ranked convertible obligation into a content project (PRD §13.2).
+
+    This is the drain that spends credit, and it spends it through `create_project` — so the
+    reservation is opened in the transaction that creates the project, exactly as it is for a
+    person clicking the button. An obligation that cannot be converted blocks and says why.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.planner_dispatch_service, needs_workdir=False))
+
+
+@celery_app.task(name="planner.projects.schedule")
+def schedule_approved_projects() -> dict[str, object]:
+    """Give approved projects a publication slot, and reconcile obligations with reality.
+
+    `APPROVED --> SCHEDULED` is this slice's one new edge and it belongs here rather than in the
+    sequencer: the slot is a §13 question — a timezone, a quiet window, a standing demand — and
+    answering it inside `content` would make that module depend on this one.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.planner_scheduling_service, needs_workdir=False))
+
+
 @celery_app.task(name="operations.recovery.drain")
 def recover_stale_jobs() -> dict[str, object]:
     context = get_worker_context()

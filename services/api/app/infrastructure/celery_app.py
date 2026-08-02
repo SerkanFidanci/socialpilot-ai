@@ -84,6 +84,24 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "entitlement.reservation.sweep",
                 "schedule": settings.celery_beat_entitlement_sweep_interval_seconds,
             },
+            # PRD §13's three planner drains. The first joins the two sweeps above as an entry
+            # with no event behind it, and for the same kind of reason: nothing emits "a new
+            # period began", and a tick is the only thing that can observe the arrival of a date.
+            # The other two *could* be woken by an event and are not in this slice — the outbox
+            # envelope is not this work order's file — so their intervals are the whole latency
+            # budget, which is why they are short.
+            "plan-content-obligations": {
+                "task": "planner.obligations.plan",
+                "schedule": settings.celery_beat_planner_plan_interval_seconds,
+            },
+            "dispatch-content-obligations": {
+                "task": "planner.obligations.dispatch",
+                "schedule": settings.celery_beat_planner_dispatch_interval_seconds,
+            },
+            "schedule-approved-projects": {
+                "task": "planner.projects.schedule",
+                "schedule": settings.celery_beat_planner_schedule_interval_seconds,
+            },
             "recover-stale-jobs": {
                 "task": "operations.recovery.drain",
                 "schedule": settings.celery_beat_recovery_interval_seconds,

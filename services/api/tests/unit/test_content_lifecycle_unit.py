@@ -39,7 +39,7 @@ from app.modules.content.lifecycle import (
     next_state,
     normalize_scene_tag,
     require_next_state,
-    waits_for_user,
+    waits_for_handoff,
     working_states,
 )
 from app.modules.content.qc import QcVerdict, RemediationPath
@@ -96,11 +96,16 @@ PRD_EDGES = {
 # its own set so that "which parts of this machine are ours?" is a question with a written answer
 # rather than a diff between a diagram and a table.
 EXTENSION_EDGES = {
-    # There is no scheduler until slice 2G, so an approved project has to rest somewhere that is
-    # not "awaiting a decision" — otherwise the list of things awaiting a decision contains the
-    # things that already got one.
+    # `APPROVED` names the middle of §20's `WAITING_APPROVAL --> SCHEDULED` arrow: an approved
+    # project has to rest somewhere that is not "awaiting a decision", or the list of things
+    # awaiting a decision contains the things that already got one. Slice 2G completes the arrow
+    # with the edge below, so this is no longer a place the machine stops.
     (ProjectState.PREVIEW_READY, ProjectEvent.AUTO_APPROVED): ProjectState.APPROVED,
     (ProjectState.WAITING_APPROVAL, ProjectEvent.APPROVED): ProjectState.APPROVED,
+    # Slice 2G's one edge, and it is drawn from `APPROVED` alone: content nobody approved must
+    # not be able to reach a calendar. The `never_within_guardrails` policy still gets there,
+    # through the actorless `auto_approved` record above it.
+    (ProjectState.APPROVED, ProjectEvent.SCHEDULED): ProjectState.SCHEDULED,
     # §21.3's small revisions: a new voice needs the same words, and a new caption style needs
     # neither new words nor new speech.
     (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_VOICE): (
@@ -187,7 +192,12 @@ def test_the_defined_edges_are_exactly_the_prd_diagram_plus_the_documented_exten
         (ProjectState.PREVIEW_READY, ProjectEvent.REVISION_SCOPED_TO_TIMELINE),
         (ProjectState.APPROVED, ProjectEvent.REJECTED),
         (ProjectState.CANCELLED, ProjectEvent.CANCELLED),
-        (ProjectState.APPROVED, ProjectEvent.CANCELLED),
+        # Slice 2G's own escapes: scheduling something nobody approved, scheduling twice, and
+        # withdrawing something that already has a publication slot.
+        (ProjectState.WAITING_APPROVAL, ProjectEvent.SCHEDULED),
+        (ProjectState.PREVIEW_READY, ProjectEvent.SCHEDULED),
+        (ProjectState.SCHEDULED, ProjectEvent.SCHEDULED),
+        (ProjectState.SCHEDULED, ProjectEvent.CANCELLED),
     ],
 )
 def test_a_state_cannot_be_skipped_or_walked_backwards(
@@ -206,23 +216,28 @@ def test_creation_is_an_entry_arrow_and_not_a_transition() -> None:
 
 def test_terminal_states_are_never_claimed_and_wait_states_are() -> None:
     assert set(advanceable_states()) == {state for state in ProjectState if not is_terminal(state)}
-    # The terminal set slice 2F moved to. `PREVIEW_READY` is deliberately no longer in it: the
-    # sequencer passes through that state to apply §21.1's policy, and a project that stopped
-    # there would never be offered for approval at all.
+    # The terminal set slice 2G moved to. Two states have left it, one per slice, and for the same
+    # reason each time: something came to happen after them. `PREVIEW_READY` left in 2F because
+    # §21.1's policy is applied there; `APPROVED` leaves here because the planner gives an approved
+    # project a publication slot, which is §20's `--> SCHEDULED` arrow finally drawn.
     assert set(ProjectState) - set(advanceable_states()) == {
-        ProjectState.APPROVED,
+        ProjectState.SCHEDULED,
         ProjectState.FAILED,
         ProjectState.CANCELLED,
     }
     assert ProjectState.PREVIEW_READY in advanceable_states()
-    # A project waiting on a person is still claimed — it has to notice its media arrived, or its
-    # decision — but the step timeout must not apply to it.
-    assert {state for state in ProjectState if waits_for_user(state)} == {
+    assert ProjectState.APPROVED in advanceable_states()
+    # A project whose next move belongs to somebody else is still claimed — it has to notice its
+    # media arrived, or its decision, or its slot — but the step timeout must not apply to it.
+    # `APPROVED` joined this set in slice 2G: it waits on the planner, not on a person, and the
+    # consequence is identical.
+    assert {state for state in ProjectState if waits_for_handoff(state)} == {
         ProjectState.WAITING_MEDIA,
         ProjectState.WAITING_APPROVAL,
         ProjectState.REVISION_REQUESTED,
+        ProjectState.APPROVED,
     }
-    assert all(state in advanceable_states() for state in ProjectState if waits_for_user(state))
+    assert all(state in advanceable_states() for state in ProjectState if waits_for_handoff(state))
 
 
 # --- the QC decision table (criteria 3 and 4) -------------------------------------------------
