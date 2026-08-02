@@ -25,6 +25,64 @@ Codex turu QC'nin gerçek ölçümlerini kıramadı (bozuk medya 5/5, fail-close
 5. Rapor "Rapor — takip 2" başlığıyla; araç zinciri. **Merge etme, dalda bırak.**
 **Model/effort:** Opus 5 / high
 
+## Rapor — takip 2 · 2026-08-02 · Opus 5 / high
+
+**Dal:** `fix/verification-followups-4` (base `main` `255a7c0`) · **Durum:** tamamlandı, **merge edilmedi**
+W17 takip düzeltmesi 3 ile **aynı dalda**, PM'in isteği üzerine birlikte.
+
+### Yapılanlar
+
+Tek bir sebep, iki yerde: birleştirme son-yazan-kazanır bir sözlük kuruyordu
+(`{result.check: result for result in results}`), yani sıraya bağlıydı ve bir reddi ikinci bir
+cevapla geri almak mümkündü.
+
+- **`merge_check_results` (yeni, saf).** Bir kontrol için birden fazla cevabı
+  `failed` > `unknown` > `passed` sırasına göre birleştirir. Eşitlikte sıralama `RemediationPath`
+  sırası → kod → pointer; bu **tam** sıralama sayesinde karıştırılmış girdi yalnızca aynı kararı
+  değil **byte-özdeş raporu** üretiyor. `_PATH_SEVERITY` §19.4'ün kendi eskalasyon sırasıdır ve
+  "yeni medya iste, insan incelemesinden kötüdür" iddiası taşımaz — yalnızca birleştirmeyi
+  *total* yapmak için var, gerekçesi kodda yazılı.
+- **`build_results`** artık önce birleştiriyor, **sonra** iç yinelemeyi
+  `QC_REPORT_DUPLICATE_RESULT` ile reddediyor. Sıra bilinçli: birleştirme önce koştuğu için
+  fail-closed özelliği istisnanın fırlatılmasına bağlı değil — hatayı yutan bir çağıran da en
+  kötü cevabı alır.
+- **`model_check_results`** sağlayıcı cevabındaki yinelemeyi **veri** olarak birleştiriyor,
+  reddetmiyor; ayrıca istenmemiş bir kontrol için gelen bulguyu düşürüyor (adapter soru kümesini
+  genişletemez).
+- Dokümantasyon: `content-render.md` birleştirme bölümü, modül `CLAUDE.md` değişmezi.
+
+### Doğrulama
+
+Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest 9.1.1 · FFmpeg 7.1.5.
+`COMPOSE_PROJECT_NAME=sp-fix4`, izole portlar (8023/55473/56399/59050/59051).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` · `ruff format --check` | ✅ temiz · 205 dosya biçimli |
+| `mypy .` (strict) | ✅ 193 dosya, hata yok |
+| `pytest` (gerçek PostgreSQL + MinIO + FFmpeg) | ✅ **1237 passed** (taban 1204, +33 — W17 takip 3 ile birlikte) |
+| migration | yok |
+
+| Kabul kriteri | Sonuç |
+|---|---|
+| 1 · Codex'in iki reprosu birebir kapanıyor | ✅ deterministik taraf ve port cevabı, **her iki sırada da** `failed`; altı `(ilk, ikinci)` kombinasyonu parametreli |
+| 2 · kommutatiflik testi (tohumlanmış) | ✅ 2.000 küme × 4 karıştırma, her kontrol 1–3 kez tekrarlanacak şekilde üretiliyor; hem karar hem **serileştirilmiş rapor** değişmiyor |
+| 3 · iç yineleme kod hatası, dış yineleme fail-closed — ayrı testlerde | ✅ `test_our_own_duplicate_is_a_caller_bug_and_is_refused` / `test_a_repeated_answer_from_the_provider_is_merged_rather_than_refused` |
+| 4 · mevcut QC testleri aynen geçiyor, `make verify` yeşil, ≥1204, migration yok | ✅ |
+| 5 · rapor + araç zinciri, merge yok | ✅ |
+
+### Açıkça belirtmem gerekenler
+
+1. **Tekrarsız girdi için davranış birebir aynı** — birleştirme yalnızca yineleme olduğunda
+   devreye giriyor, bu yüzden mevcut 13 kontrollük raporların hiçbiri değişmedi (1204 testin
+   tamamı dokunulmadan geçti).
+2. **`QC_REPORT_DUPLICATE_RESULT` yeni bir dahili hata**, HTTP yüzeyinde görünmüyor:
+   `decide`'ın `QC_REPORT_INCOMPLETE`'i gibi çağıran hatası. Servis bugün tetikleyemiyor —
+   `_model_results` logo kontrolünü yalnızca istenmediğinde ekliyor, o da `requested`'dan
+   çıkarılmış oluyor.
+3. **Ölçüm, eşik ve karar tablosu değişmedi** — PM kararı 3 gereği yalnızca birleştirmeye
+   dokunuldu.
+
 ## Takip 1 — Celery bağlantısı (PM, 2026-08-02)
 
 **Bu benim WO hatam, oturumun değil:** kapsam "ölçüm worker'da" diyordu ama dosya listesine worker dosyalarını koymamıştım. Oturum çelişkiyi sessizce çözmek yerine bildirdi — doğru davranış. İzin veriliyor, sıcak oturum aynı dalda (`slice/2d-automatic-qc`) tamamlıyor:

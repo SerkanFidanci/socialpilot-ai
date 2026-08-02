@@ -297,7 +297,25 @@ _MONTH: Final = rf"(?:{_MONTH_ROOT}){_SUFFIX}"
 # this group carries mean a segmentation has to consume the whole word, so `onbir` is `on`+`bir`
 # and `birey` is not a number — `ey` is not a number word, and the pin says so.
 _JOINED: Final = r"[-\s]*"
-_WRITTEN_NUMBER: Final = rf"(?:{_NUMBER_WORD})(?:{_JOINED}(?:{_NUMBER_WORD}))*"
+# Turkish writes a decimal as a fraction in words: `bir tam onda beş` is 1,5 and
+# `iki tam yüzde yirmi beş` is 2,25. `tam` separates the whole from the fraction and
+# `onda`/`binde`/`yüzde` name the denominator, so these four are part of how a number is spelled
+# rather than words that happen to sit near one — and the set is closed for the same reason the
+# number words are: the language does not coin new decimal connectives.
+#
+# They are admitted **only after a number word**, which is not a second grammar but the one fact
+# that makes them safe. `tam` is an extremely common ordinary word — "tam 5 dakika", "tam
+# zamanında", "tamamen ücretsiz" — and a decimal never begins with it: there is always a whole
+# part in front. Letting `tam` open an amount would have made `tamamen liraya endeksli` a
+# fabricated price, which is the kind of false rejection this rule cannot afford, because the
+# text it guards is on its way to a human reviewer.
+#
+# `yuzde` keeps its `(?!n)` carve-out here too. "Bu yüzden" is a conjunction, and `n` is an
+# ordinary suffix letter, so without the guard `yüzden lira` would read as a rate.
+_FRACTION_CONNECTIVE: Final = r"tam|onda|binde|yuzde(?!n)"
+_WRITTEN_NUMBER: Final = (
+    rf"(?:{_NUMBER_WORD})(?:{_JOINED}(?:{_NUMBER_WORD}|{_FRACTION_CONNECTIVE}))*"
+)
 # A written calendar day has a much smaller grammar than a currency amount. Keeping it bounded
 # avoids turning arbitrary prose ending in a month name into a date, while covering 1–31.
 _WRITTEN_DAY: Final = (
@@ -316,9 +334,12 @@ _PRICE_PATTERNS: Final = (
     # too, and closing it is worth more than the grammar suggests: `yuzlerce lira`,
     # `binlerce dolar` and `onlarca euro` are exactly the vague money claims a model reaches for
     # when it is told not to write a figure, and all three read as `<number word>+suffix`.
-    # `\s*`, not `\s+`: `beserlira` runs the amount straight into the unit, and a reader still
-    # reads a price. Backtracking sorts the two apart — the inflection chain gives `lira` back.
-    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER}){_SUFFIX}\s*(?:{_CURRENCY_WORD})(?!\w)"),
+    # `_JOINED`, not `\s+`: `beserlira` runs the amount straight into the unit and
+    # `bir-tam-onda-bes-lira` hyphenates every gap including this one, and a reader still reads a
+    # price in both. The gap between the amount and its unit is written the same three ways as
+    # the gaps *inside* the amount, so it uses the same class rather than a narrower one.
+    # Backtracking sorts the run-together case apart — the inflection chain gives `lira` back.
+    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER}){_SUFFIX}{_JOINED}(?:{_CURRENCY_WORD})(?!\w)"),
     re.compile(
         rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s+(?:{_WRITTEN_NUMBER}){_SUFFIX}(?!\w)"
     ),
