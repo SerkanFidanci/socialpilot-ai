@@ -12,7 +12,24 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**2026-08-02 · W17 ve W18 KAPANDI, merge edildi, PM koşusu `1151 pytest` yeşil, head `0015`. Phase 2'nin ilk dört dilimi (2A–2D) bitti.**
+**2026-08-02 · W19 + düzeltme turu 4 merge edildi; Codex W19 turu TEMİZ. `main` head `0016`, dal koşusu 1237 pytest (PM tam koşusu arka planda).**
+
+- **W19 (2E birinci yarı):** artık bir "içerik projesi" var — `PLANNED`→`PREVIEW_READY` uçtan uca. Proje satırının kendisi dayanıklı job (ayrı `jobs` satırı yok: "sıralayıcının durumu zaten sonucudur"). Üç borç kapandı: voiceover miksajı (üç render'ın PCM hash'i farklı — iddia değil kanıt), QC olayı + claim sorgusunun yeniden şekillenmesi (199 ms → 3,6 ms, durağanda 0,05 ms), `pending` süpürücü.
+- **Düzeltme turu 4:** QC birleştirmesi artık sıra-bağımsız (`failed`>`unknown`>`passed`, tam sıralama sayesinde **byte-özdeş rapor**); ondalık kesir sözcükleri kapandı (`bir tam onda bes lira` 0/81, `iki tam yuzde yirmi bes lira` 0/243 — Codex'te 45/81 ve 75/243 kaçıyordu). Oturum `tam`'ın tutar **başlatamayacağı** kısıtını kendisi ekledi ve gerekçesini ölçtü (`tamamen liraya endeksli` fiyat sanılıyordu).
+
+**Codex turunun kalitesi hakkında not (PM):** W19 turu bulgu döndürmedi ama **kendi girdilerini üretmek yerine W19'un yazdığı testleri koşup denetledi**. Bu zayıf bir doğrulama — testin yazarı ile testin denetleyicisi aynı olduğunda tur bağımsızlığını kaybeder. Bundan sonraki Codex prompt'larına açık cümle giriyor: *"mevcut testleri koşmak doğrulama değildir; kendi girdilerini üret."* (W20'nin Doğrulama bölümüne yazıldı.)
+
+**Sıradaki tetikleme — W20 (2E ikinci yarı: kredi defteri)** ([W20-entitlement-ledger.md](W20-entitlement-ledger.md), slot `0017`, taban 1237):
+```
+docs/handoffs/W20-entitlement-ledger.md dosyasındaki iş emrini oku ve uygula. Protokol: docs/handoffs/README.md. Başlamadan önce docs/STATUS.md oku. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w20 ile çalıştır. Migration slotu sende (0017). Sahibi olmadığın dosyaya dokunma. Merge etme, dalda bırak.
+```
+
+**W20'nin kapsam sınırı bilinçli:** ödeme/mağaza **yok** (K1 hâlâ kullanıcının kararı, Phase 3). Yalnızca defter + tüketim. Gerekçe: tüketim tarafı doğru kurulursa kaynak tarafı sonradan tek bir grant yazıcısı olarak takılır; tersi mümkün değil — önce ödeme alıp sonra saymaya başlamak, sayılmamış tüketimi kalıcı borca çevirir. **Ve bu, ücretli sağlayıcı bağlamadan önce kapatılması gereken açık:** bugün bir kullanıcı sınırsız render tetikleyebilir ve her render gerçek para harcar.
+
+**Kuyruk:** W20 → 2F onay/revizyon → 2G planlayıcı → W06 → Phase 3 (mağaza/ödeme, K1 kararıyla).
+
+<!-- arşiv -->
+**~~2026-08-02 · W17 ve W18 KAPANDI (1151 pytest, head 0015).~~**
 
 - **W18 (2D QC):** 13 kontrol raporda ve *atlanması ifade edilemiyor* (`build_results` tamamıyla `unknown` başlar, `decide` eksik kümeyi reddeder, DB check constraint aynı kuralı tekrarlar). Gerçek bozuk medya fixture'ları, karar tablosu tüm çift permütasyonlar + 3.000 rastgele atamayla tüketildi. Celery bağlantısı takip 1'de yapıldı. **Oturum index eklemeyi ölçüp reddetti:** 200 bin render'da claim 134 ms; index eklense de planlayıcı hash anti-join'i seçiyor (korelasyonu bilemiyor), zorlanan plan 0,14 ms — yani sorgunun yeniden şekillenmesi gerek, index kozmetik olurdu. Ölçüm W19'a devredildi.
 - **W17:** üç tur sonunda kapandı. Son turda sayı sözcükleri liste ama **birleşimleri gramer** (bitişik/tireli dahil), `T Lye` kapalı Türkçe ek kümesiyle çözüldü ve `Şef T. Lezzetli` pini korundu. **111.129 varyant / 0 kaçış.**
