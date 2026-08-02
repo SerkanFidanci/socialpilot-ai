@@ -28,7 +28,10 @@ from app.core.pagination import MAX_PAGE_SIZE, decode_cursor
 from app.infrastructure.ai import create_audio_probe, create_script_generator, create_tts
 from app.infrastructure.database.session import get_session
 from app.infrastructure.render import create_render
+from app.modules.content.lifecycle import ProjectEvent, ProjectState
 from app.modules.content.models import (
+    ContentProject,
+    ContentProjectTransition,
     ContentScript,
     RenderOutput,
     RenderQcReport,
@@ -37,6 +40,7 @@ from app.modules.content.models import (
     VoiceoverAsset,
 )
 from app.modules.content.patch import MAX_PATCH_OPERATIONS, parse_patch
+from app.modules.content.project_service import ContentProjectService
 from app.modules.content.qc import QcRunStatus, QcVerdict, RemediationPath
 from app.modules.content.qc_service import ContentQcReportService
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
@@ -100,6 +104,17 @@ def voiceover_service(session: AsyncSession, request: Request, tts: TTSPort) -> 
         create_audio_probe(settings),
         cast(MultipartStoragePort, request.app.state.storage),
     )
+
+
+def project_service(session: AsyncSession, request: Request) -> ContentProjectService:
+    """The API half of the sequencer. It holds no capability port at all.
+
+    Opening a project schedules work; it does not do any. The ports that produce a script, a
+    voiceover or a render live in the worker's composition root, which is what keeps a provider
+    call — and an FFmpeg process — out of a request.
+    """
+
+    return ContentProjectService(session, cast(Settings, request.app.state.settings))
 
 
 def correlation() -> str:
@@ -389,6 +404,244 @@ async def get_render_qc_report(
         user_id=user.id, business_id=business_id, render_id=render_id
     )
     return QcReportResponse.make(report)
+
+
+class ProjectCreateRequest(BaseModel):
+    """Which scenario, which target profile, and which verified records it may draw on.
+
+    The same shape as a script request plus the render profile, and for the same reason: a
+    project is a sequence of the writes the individual endpoints already accept, so it can carry
+    no field they refuse. There is no text here, no price and no date.
+
+    `source_asset_ids` may be empty. That is not an oversight — it is PRD §20's `WAITING_MEDIA`:
+    a project can be planned before the footage exists, and the sequencer parks it until media
+    is attached.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_code: ScenarioCode
+    profile: RenderProfile
+    product_id: UUID
+    cta_id: UUID
+    campaign_offer_id: UUID | None = None
+    source_asset_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCE_ASSETS)
+
+
+class ProjectMediaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_asset_ids: list[UUID] = Field(min_length=1, max_length=MAX_SOURCE_ASSETS)
+
+
+class ProjectResponse(BaseModel):
+    id: UUID
+    business_id: UUID
+    scenario_code: ScenarioCode
+    profile: RenderProfile
+    state: ProjectState
+    product_id: UUID | None
+    campaign_offer_id: UUID | None
+    cta_id: UUID | None
+    source_asset_ids: list[UUID]
+    # What the project produced, as references. The documents themselves are read through their
+    # own endpoints, which already answer the authorization question for each.
+    script_id: UUID | None
+    voiceover_id: UUID | None
+    timeline_id: UUID | None
+    render_id: UUID | None
+    qc_report_id: UUID | None
+    render_attempts: int
+    # Set when QC said `needs_review`, or when the project failed. Every render is `needs_review`
+    # today: the vision adapter is disabled until a real provider is connected, and slice 2D's
+    # fail-closed rule will not call an unmeasured check a pass.
+    requires_human_review: bool
+    recommended_path: RemediationPath
+    failure_code: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def make(cls, project: ContentProject) -> ProjectResponse:
+        return cls(
+            id=project.id,
+            business_id=project.business_id,
+            scenario_code=project.scenario_code,
+            profile=project.profile,
+            state=project.state,
+            product_id=project.product_id,
+            campaign_offer_id=project.campaign_offer_id,
+            cta_id=project.cta_id,
+            source_asset_ids=[UUID(value) for value in project.source_asset_ids],
+            script_id=project.script_id,
+            voiceover_id=project.voiceover_id,
+            timeline_id=project.timeline_id,
+            render_id=project.render_id,
+            qc_report_id=project.qc_report_id,
+            render_attempts=project.render_attempts,
+            requires_human_review=project.requires_human_review,
+            recommended_path=project.recommended_path,
+            failure_code=project.failure_code,
+            created_at=project.created_at,
+            updated_at=project.updated_at,
+        )
+
+
+class ProjectPageResponse(BaseModel):
+    items: list[ProjectResponse]
+    next_cursor: str | None
+
+
+class ProjectTransitionResponse(BaseModel):
+    """One recorded state change. Codes only — never why in a tenant's own words."""
+
+    sequence: int
+    from_state: ProjectState | None
+    to_state: ProjectState
+    event: ProjectEvent
+    reason: str | None
+    actor_user_id: UUID | None
+    created_at: datetime
+
+    @classmethod
+    def make(cls, transition: ContentProjectTransition) -> ProjectTransitionResponse:
+        return cls(
+            sequence=transition.sequence,
+            from_state=transition.from_state,
+            to_state=transition.to_state,
+            event=transition.event,
+            reason=transition.reason,
+            actor_user_id=transition.actor_user_id,
+            created_at=transition.created_at,
+        )
+
+
+class ProjectTransitionsResponse(BaseModel):
+    items: list[ProjectTransitionResponse]
+
+
+@router.post(
+    "/businesses/{business_id}/content/projects",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_project(
+    business_id: UUID,
+    payload: ProjectCreateRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ProjectResponse:
+    """Open a content project (PRD §20). The response is the record, not the video."""
+
+    project = await project_service(session, request).create_project(
+        user_id=user.id,
+        business_id=business_id,
+        scenario_code=payload.scenario_code,
+        profile=payload.profile,
+        product_id=payload.product_id,
+        cta_id=payload.cta_id,
+        campaign_offer_id=payload.campaign_offer_id,
+        source_asset_ids=tuple(payload.source_asset_ids),
+        idempotency_key=idempotency_key,
+        correlation_id=correlation(),
+    )
+    return ProjectResponse.make(project)
+
+
+@router.post(
+    "/businesses/{business_id}/content/projects/{project_id}/media",
+    response_model=ProjectResponse,
+)
+async def attach_project_media(
+    business_id: UUID,
+    project_id: UUID,
+    payload: ProjectMediaRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectResponse:
+    """Give a project waiting on footage the assets it was waiting for
+
+    No `Idempotency-Key`, and that is the considered answer rather than an omission: this is a
+    guarded transition, not a create. A duplicate delivery finds the project already past
+    `WAITING_MEDIA` and is refused with `PROJECT_TRANSITION_NOT_ALLOWED`, so replaying it cannot
+    apply twice and cannot produce a second anything. The state machine is the idempotency.
+    """
+
+    project = await project_service(session, request).attach_media(
+        user_id=user.id,
+        business_id=business_id,
+        project_id=project_id,
+        source_asset_ids=tuple(payload.source_asset_ids),
+        correlation_id=correlation(),
+    )
+    return ProjectResponse.make(project)
+
+
+@router.get("/businesses/{business_id}/content/projects", response_model=ProjectPageResponse)
+async def list_projects(
+    business_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    cursor: Annotated[str | None, Query(max_length=256)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 20,
+    project_state: Annotated[ProjectState | None, Query(alias="state")] = None,
+) -> ProjectPageResponse:
+    """List this business's content projects newest first, with an opaque cursor"""
+
+    page = await project_service(session, request).list_projects(
+        user_id=user.id,
+        business_id=business_id,
+        cursor=decode_cursor(cursor),
+        limit=limit,
+        state=project_state,
+    )
+    return ProjectPageResponse(
+        items=[ProjectResponse.make(project) for project in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.get(
+    "/businesses/{business_id}/content/projects/{project_id}", response_model=ProjectResponse
+)
+async def get_project(
+    business_id: UUID,
+    project_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectResponse:
+    """Read one project: its state, what it produced, and why it stopped if it did"""
+
+    project = await project_service(session, request).get_project(
+        user_id=user.id, business_id=business_id, project_id=project_id
+    )
+    return ProjectResponse.make(project)
+
+
+@router.get(
+    "/businesses/{business_id}/content/projects/{project_id}/transitions",
+    response_model=ProjectTransitionsResponse,
+)
+async def list_project_transitions(
+    business_id: UUID,
+    project_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectTransitionsResponse:
+    """Read a project's whole history (PRD §20) — the answer to "where did this get stuck?\""""
+
+    transitions = await project_service(session, request).list_transitions(
+        user_id=user.id, business_id=business_id, project_id=project_id
+    )
+    return ProjectTransitionsResponse(
+        items=[ProjectTransitionResponse.make(entry) for entry in transitions]
+    )
 
 
 class ScriptGenerateRequest(BaseModel):

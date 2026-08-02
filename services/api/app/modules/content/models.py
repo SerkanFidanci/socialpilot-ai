@@ -35,6 +35,15 @@ contract (`VoiceoverSegment.as_document`) rather than a query surface. What is *
 everything a later slice filters or joins on — status, total duration, drift, the voice profile
 version, the route and usage references — because those are the questions QC and entitlement
 will ask across rows.
+
+Slice 2E adds `content_projects` and `content_project_transitions` (PRD §20, migration `0016`)
+and one column to `render_outputs`. The project row is itself the durable record of a sequencer
+run: it carries the state, the counters that bound the render loop, and the timestamps its claim
+orders by, so there is no second job table restating the same facts in different words. The
+transition table beside it is §20's closing sentence — every transition recorded, with who and
+why — kept as its own queryable surface rather than folded into the audit log, because the
+question it exists to answer ("where did this project get stuck?") is a walk over one project's
+history while the audit log is a stream over everything a tenant did.
 """
 
 from __future__ import annotations
@@ -61,6 +70,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.modules.content.lifecycle import ProjectEvent, ProjectState
 from app.modules.content.qc import QcRunStatus, QcVerdict, RemediationPath
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
 from app.modules.content.script import ScenarioCode, ScriptStatus
@@ -141,6 +151,18 @@ class RenderOutput(Base):
     __table_args__ = (
         Index("ix_render_outputs_business_created", "business_id", "created_at", "id"),
         Index("ix_render_outputs_timeline", "business_id", "timeline_id"),
+        # The set of outputs still waiting for automatic QC, as an index rather than as an
+        # anti-join. Slice 2D measured its claim at 134 ms per tick over 200k renders and showed
+        # the planner would not use an index on the old shape, because nothing told it that
+        # unreported renders are always the newest ones. A partial index over a predicate that
+        # becomes false the moment QC opens states that correlation directly: in steady state
+        # this index holds the empty set, and the claim is an index scan over it.
+        Index(
+            "ix_render_outputs_awaiting_qc",
+            "completed_at",
+            "id",
+            postgresql_where=text("status = 'succeeded' AND qc_claimed_at IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -187,6 +209,12 @@ class RenderOutput(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When automatic QC opened a report over this output. Set once, in the same transaction that
+    # writes the `pending` report, and never cleared — a re-run against changed thresholds is a
+    # deliberate second report, not a repeat of the automatic pass. It exists so "awaiting QC"
+    # is a predicate on this row rather than an anti-join against another table; see the index
+    # above and slice 2D's measurement.
+    qc_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RenderQcReport(Base):
@@ -373,6 +401,172 @@ class ContentScript(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ContentProject(Base):
+    """One run of the content pipeline, from a brief to a preview (PRD §20).
+
+    This row is the durable job. The other worker services in this module put their state in
+    `jobs` and their result in a table beside it, and that split is right when the work is one
+    step; a sequencer's state *is* its result, and duplicating it into a second row would create
+    two answers to "where is this project" that can disagree after a crash. What the row keeps
+    from the job pattern is every property AGENTS.md requires of background work: a status
+    (`state`), a timeout (`state_entered_at` against the configured step ceiling), an attempt
+    count (`render_attempts`, `step_attempts`), a correlation id, and a terminal `FAILED` state
+    that is the dead letter.
+
+    `render_attempts` is the counter that makes an unbounded re-render loop inexpressible. It is
+    incremented where a render is *requested*, never where one is judged, so the ceiling holds
+    whether the loop came from a failing check or a broken encode. Slice 2D refused to hold a
+    render port for exactly this reason; the port is not here either — the service reads this
+    number before it asks anyone to render anything.
+
+    The produced artefacts are `RESTRICT` references, not `CASCADE`: the project is the record of
+    what was made, and deleting the script it was made from must not quietly leave a project
+    claiming a preview whose origin is gone.
+    """
+
+    __tablename__ = "content_projects"
+    __table_args__ = (
+        Index("ix_content_projects_business_created", "business_id", "created_at", "id"),
+        Index("ix_content_projects_business_state", "business_id", "state"),
+        # The worker's claim. Partial over the non-terminal states so the index holds only live
+        # work: a tenant with ten thousand finished projects contributes nothing to it.
+        Index(
+            "ix_content_projects_due",
+            "next_check_at",
+            "id",
+            postgresql_where=text("state NOT IN ('preview_ready', 'failed')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    scenario_code: Mapped[ScenarioCode] = mapped_column(
+        _enum(ScenarioCode, "content_scenario_code")
+    )
+    profile: Mapped[RenderProfile] = mapped_column(_enum(RenderProfile, "render_profile"))
+    state: Mapped[ProjectState] = mapped_column(_enum(ProjectState, "content_project_state"))
+
+    # The verified records the script generation may draw on — the same three the script service
+    # takes, held here because a retry has to ask for the same thing a second time.
+    product_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
+    )
+    campaign_offer_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("campaign_offers.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    cta_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("approved_ctas.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    source_asset_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+
+    script_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_scripts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    voiceover_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("voiceover_assets.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    timeline_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_timelines.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    render_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("render_outputs.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    qc_report_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("render_qc_reports.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
+    render_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    step_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Set when QC said `needs_review`, or when the project failed and a person has to look. Slice
+    # 2F's approval flow reads it; nothing in this slice acts on it.
+    requires_human_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # What slice 2D suggested, recorded even when this slice cannot carry it out. A project that
+    # failed with `alternative_scene` is a queryable backlog for 2F/2G rather than a lost note.
+    recommended_path: Mapped[RemediationPath] = mapped_column(
+        _enum(RemediationPath, "qc_remediation_path")
+    )
+
+    state_entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # When the sequencer should look at this project again. `NULL` in a terminal state, which is
+    # also what keeps finished projects out of the claim index.
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    failure_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ContentProjectTransition(Base):
+    """One recorded state change (PRD §20: "her durum geçişi transactional olarak kaydedilmeli").
+
+    Written in the same transaction as the state change it describes, never after it — a
+    transition that committed without its record would be exactly the gap this table exists to
+    close. `sequence` is per project and unique, so the history has an order that does not depend
+    on timestamp resolution and a duplicated write is refused by the database.
+
+    `from_state` is nullable for the one entry that is not a transition: §20's `[*] --> PLANNED`,
+    written when the project is created. `reason` is a documented code, never prose and never
+    tenant text — a project can fail because a script mentioned something forbidden, and this
+    table must not become the place that sentence is stored.
+
+    `actor_user_id` is nullable because most transitions are the sequencer's own. When a person
+    caused one — creating the project, attaching media — the row names them, which is the "kim"
+    half of §20's sentence.
+    """
+
+    __tablename__ = "content_project_transitions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "sequence", name="uq_content_project_transition_sequence"),
+        Index("ix_content_project_transitions_project", "business_id", "project_id", "sequence"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    # CASCADE, unlike every produced artefact above: this row is not evidence *about* the
+    # project, it is part of it, and a history without its project is unreadable.
+    project_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_state: Mapped[ProjectState | None] = mapped_column(
+        _enum(ProjectState, "content_project_state"), nullable=True
+    )
+    to_state: Mapped[ProjectState] = mapped_column(_enum(ProjectState, "content_project_state"))
+    event: Mapped[ProjectEvent] = mapped_column(_enum(ProjectEvent, "content_project_event"))
+    reason: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class VoiceoverAsset(Base):

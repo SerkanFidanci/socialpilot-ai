@@ -1,10 +1,11 @@
-# content — senaryo, seslendirme, timeline, parametrik düzenleme, render ve QC modülü
+# content — senaryo, seslendirme, timeline, parametrik düzenleme, render, QC ve yaşam döngüsü
 
 **Sahibi:** senaryo contract'ı (PRD §18.1) ve `script_generation` kabiliyet portu, seslendirme
 (§14.8) ve `tts` kabiliyet portu, timeline dokümanı (§18.2), render öncesi doğrulama (§18.3),
 parametrik düzenleme (K4), `RenderPort` kabiliyet portu ve dayanıklı render job'ı, otomatik
 kalite kontrol (§19.4) — kontrol kümesi, karar tablosu, `MediaQcProbePort` ve `VisualQcPort` —
-prompt ve ses profili versiyonlama (§17.6).
+içerik projesi yaşam döngüsü (§20): kapalı durum makinesi, geçiş kaydı, QC kararının sınırlı
+eyleme dönüşü ve senaryodan timeline kurulumu, prompt ve ses profili versiyonlama (§17.6).
 **Sahibi değil:** FFmpeg/render ve AI adapter uygulamaları (→ `../../infrastructure/render/`,
 `../../infrastructure/ai/`), medya byte'ı ve materializer (→ `../media/`, ADR-002), doğrulanmış
 kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../operations/`), HTTP taşıma
@@ -111,6 +112,35 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - **QC karar verir, eylem yapmaz.** `ContentQcService` yapıcısında render/senaryo/tts portu
   **yoktur**; yeniden render, sağlayıcı değişimi ve deneme sınırı 2E'nindir. Döngüyü sınırı
   gelmeden kurmak, sınırsız render döngüsünü kontrol edicinin içine gömmek olurdu.
+- **Proje sıralayıcıdır, sahip değildir.** `ContentProjectAdvanceService` hiçbir sağlayıcı portu
+  taşımaz; her adım o işi zaten yapan servisi çağırır (`ScriptGenerationService`,
+  `VoiceoverService`, `ContentTimelineService`), kendi yetkisi ve idempotency'siyle. Yapıcının
+  şekli iddianın kendisidir. Mevcut tekil uçlar değişmedi; proje bağlamı bir katmandır.
+- **Geçiş tablosu kapalı ve total.** `next_state` `(durum, olay)` çarpımının tamamı için cevap
+  verir; §20'nin çizmediği çift `None` döner ve `require_next_state` onu hataya çevirir. Tanımsız
+  geçiş kod hatasıdır, veri hatası değil. Tek ekleme `STEP_FAILED` — §20 `FAILED`'a yalnızca
+  `QUALITY_CHECK`/`PUBLISHING`'den geliyor, oysa senaryosu düşen projenin gidecek yeri yok.
+- **Döngü sınırı `lifecycle.py`'de, servis katmanında değil.** `decide_after_qc` tavana ulaşınca
+  hiçbir girdi için "retry" dönmez ve `render_attempts` render **istenmeden önce** okunur;
+  sınırsız döngü ifade edilemez. Sayaç QC başarısızlığıyla render başarısızlığı arasında
+  paylaşılır — ikisi arasında gidip gelmek fazladan render satın alamaz.
+- **Proje satırının kendisi dayanıklı job'dır.** Ayrı `jobs` satırı yok: sıralayıcının durumu
+  zaten sonucudur, ikisini iki tabloya yazmak çökme sonrası iki cevap üretirdi. `next_check_at`
+  hem sıralama anahtarı hem lease'tir; claim onu ileri iter, ölen worker'ın projesi lease dolunca
+  serbest kalır ve adım baştan koşar — her alt çağrının idempotency anahtarı deterministik.
+- **Her adım iki transaction'dır: claim + settle.** Aradaki iş açık transaction olmadan koşar,
+  çünkü alt servisler kendilerininkini açar. Adımların *okumaları* da kendi `begin()`'i içindedir
+  ve dışarıya düz değer çıkar: hem iç içe transaction olmasın diye, hem de kapanmış bir session'a
+  karşı lazy-load olmasın diye.
+- **QC olayı render'ı başarılı yapan transaction'da yazılır.** `content.qc.requested` +
+  `render_outputs.qc_claimed_at`; tarama seyrek bir süpürmeye düştü. W18'in "index tek başına
+  çözmüyor" ölçümünün cevabı sorgunun yeniden şekillenmesiydi, index'in eklenmesi değil.
+- **Sahne etiketi iki tarafta aynı yazımla karşılaştırılır.** `normalize_scene_tag`
+  `script._scene_tags`'in uyguladığı iki adımın aynısıdır (`normalize_encoding` + ayırıcı → alt
+  çizgi) ve **eşleştirme katlaması değildir** — `ürün`ü `urun` yapmak eşitliğin bir tarafını
+  bozardı. Yalnızca karşılaştırmada bir ek adım var (`_match_key`): Türkçe küçük harf `I`'yi `ı`
+  yapıyor, bu yüzden `PREPARATION` yazan sağlayıcı ile `preparation` isteyen senaryo asla
+  buluşamazdı. Saklanan değer değişmez.
 - **Koşunun başarısızlığı ile videonun başarısızlığı ayrı sütunlardır.** `RenderQcReport.status`
   koşuyu, `verdict` çıktıyı anlatır. Ölçüm alınamadan denemeler tükenirse satır
   `failed` + `needs_review` + `failure_code` ile kapanır — `pending`'de bırakmak, kimsenin
@@ -142,7 +172,9 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti (kalıp literalleri **katlanmış alfabede**), `T.L.`/`T L` kısaltma grameri, yasak terim eşleyici, `ScriptGenerationPort`, `ProviderDescriptor`, `RouteSnapshot` (her kabiliyet aynı route kaydını kullanır), prompt payload kurucusu |
 | `text_normalization.py` | `normalize_for_matching` — eşleştirme katlaması (süslü rakam açma → `Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf → **Latin harflerin ASCII'ye katlanması**) · `normalize_encoding` — saklanan değerler için aynısının Latin adımı olmayan hâli · `contains_unsupported_letter` — alfabe kısıtı, katlamanın kendisiyle ifade edilir. Kural içermez; `script.py` ve `validation.py` (2D) aynı fonksiyonları çağırır, üçüncü bir çağıran testle yasaktır |
 | `qc.py` | §19.4 kontrol kümesi (`QcCheck`), `CHECK_POLICIES`, saf karar tablosu (`decide`), `build_results` bütünlük garantisi, `QcThresholds` anlık görüntüsü, deterministik değerlendiriciler, doğrulanmış kayıt denetimi (`audit_verified_sources`), `MediaQcProbePort` + `QcMeasurement`, `VisualQcPort` + `VisualQcDisabledError` |
-| `qc_service.py` | `ContentQcService` — QC raporu olmayan `succeeded` render'ı claim, dayanıklı job (durum/timeout/deneme/correlation/dead-letter), materialize + ölçüm + VLM çağrısı, `provider_usage`, iki transaction · `ContentQcReportService` — yalnızca okuma (yetki + rapor), ölçüm portu taşımaz |
+| `qc_service.py` | `ContentQcService` — QC açılmamış `succeeded` render'ı claim, dayanıklı job (durum/timeout/deneme/correlation/dead-letter), materialize + ölçüm + VLM çağrısı, `provider_usage`, iki transaction · `ContentQcReportService` — yalnızca okuma (yetki + rapor), ölçüm portu taşımaz |
+| `lifecycle.py` | §20'nin **saf** yarısı: `ProjectState`/`ProjectEvent`, kapalı ve total geçiş tablosu (`next_state`, `require_next_state`), `decide_after_qc`/`decide_after_render_failure` karar tablosu ve döngü sınırı, `compose_timeline` (senaryo + sahneler → §18.2 dokümanı), `normalize_scene_tag`, dokümante hata kodları. Session/saat/sağlayıcı yok |
+| `project_service.py` | `ContentProjectService` — proje açma, medya bağlama, okuma (yetki, idempotency, audit, outbox uyandırma) · `ContentProjectAdvanceService` — claim + adım + settle; her adım alt servisi çağırır, sağlayıcı portu taşımaz · `AbandonedRunSweeper` — `pending`de kalmış senaryo/seslendirme satırlarını yaş eşiğine göre `failed`e düşürür |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
 | `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |
@@ -150,8 +182,8 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | `validation.py` | §18.3 kuralları (saf), `ValidationContext`, `layout_text_in_frame` (2D ölçülen kareyle de çağırır), `resolve_overlay_text`, `script.forbidden_matcher` + alfabe kısıtı üzerinden yasak terim kapısı, dokümante hata kodları |
 | `patch.py` | K4 parametrik düzenleme: kapalı operasyon kümesi, segment sınırına snap, track yeniden dizilimi, `serialize_patch` (idempotency fingerprint'inin alındığı kanonik biçim) |
 | `render.py` | `RenderPort`, `RenderCapabilities`, `RenderPlan`, §19.2 profilleri, disclosure/provenance durumları |
-| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) + `render_qc_reports` (kontroller ve eşik anlık görüntüsü JSONB; `verdict`/`recommended_path` `pending` satırında bile NOT NULL ve karamsar) |
-| `repository.py` | `ContentRepository` (tenant-kapsamlı; senaryo, prompt sürümü, seslendirme ve QC raporu okumaları dahil) + `ContentFactsReader` (`voiceover_facts`, `voiceover_drift`, `verified_record_states` dahil) + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim + QC claim (raporu olmayan `succeeded` render / geri çekilmiş QC job'ı) |
+| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` (+ `qc_claimed_at` ve "QC bekleyenler" kısmi index'i) + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) + `render_qc_reports` (kontroller ve eşik anlık görüntüsü JSONB; `verdict`/`recommended_path` `pending` satırında bile NOT NULL ve karamsar) + `content_projects` (durum, sayaçlar, üretilen artefakt referansları, lease) + `content_project_transitions` (proje başına sıralı, `from_state` yalnız girişte NULL) |
+| `repository.py` | `ContentRepository` (tenant-kapsamlı; senaryo, prompt sürümü, seslendirme, QC raporu ve proje okumaları dahil) + `ContentFactsReader` (`voiceover_facts`, `voiceover_drift`, `voiceover_object_keys`, `scene_candidates`, `verified_record_states` dahil) + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim + QC claim (`qc_claimed_at` damgasını da o basar) + proje claim + terk edilmiş `pending` satır claim'leri |
 | `service.py` | `ContentTimelineService` — yetki, doğrulama, revizyon, render isteği, idempotency, audit |
 | `render_service.py` | `ContentRenderService` — job claim, materialize, render, depolama, dead-letter |
 | `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (**her yazma** `content.generate`, her okuma `business.read`) |
@@ -176,7 +208,8 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 `tests/unit/test_content_timeline.py` · `tests/unit/test_render_port.py` ·
 `tests/unit/test_content_render_worker.py` · `tests/unit/test_content_script_unit.py` ·
 `tests/unit/test_voiceover_unit.py` · `tests/unit/test_content_qc_unit.py` ·
-`tests/unit/test_qc_probe.py` · `tests/unit/test_visual_qc_port.py` ·
+`tests/unit/test_content_lifecycle_unit.py` · `tests/unit/test_qc_probe.py` ·
+`tests/unit/test_visual_qc_port.py` ·
 `tests/unit/test_timeline_forbidden_terms.py` · `tests/integration/test_content_render.py` ·
 `tests/integration/test_content_script.py` · `tests/integration/test_content_voiceover.py` ·
-`tests/integration/test_content_qc.py`
+`tests/integration/test_content_qc.py` · `tests/integration/test_content_lifecycle.py`

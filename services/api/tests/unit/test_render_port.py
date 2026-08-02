@@ -132,7 +132,11 @@ def test_fake_and_real_adapters_declare_the_same_capabilities() -> None:
 def test_capabilities_exclude_what_this_slice_cannot_do() -> None:
     capabilities = FFmpegRenderAdapter(settings(render_adapter="ffmpeg")).capabilities
     assert TransitionKind.FADE not in capabilities.transitions
-    assert AudioTrackKind.VOICEOVER not in capabilities.audio_sources
+    # Slice 2E implemented speech, so it is declared. `music` is not, and the distinction is not
+    # effort: a music track needs a licence record (§18.3) before anything may lay one, and
+    # declaring the source would turn that missing record into a half-finished render.
+    assert AudioTrackKind.VOICEOVER in capabilities.audio_sources
+    assert AudioTrackKind.MUSIC not in capabilities.audio_sources
     assert CaptionSource.VOICEOVER not in capabilities.caption_sources
     assert capabilities.supports_provenance_manifest is False
     assert set(capabilities.profiles) == set(RenderProfile)

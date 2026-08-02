@@ -46,7 +46,15 @@ from app.modules.brands.models import (
     ProductPrice,
 )
 from app.modules.content.domain import format_money
+from app.modules.content.lifecycle import (
+    ProjectState,
+    SceneCandidate,
+    is_terminal,
+    normalize_scene_tag,
+)
 from app.modules.content.models import (
+    ContentProject,
+    ContentProjectTransition,
     ContentScript,
     ContentTimeline,
     PromptTemplate,
@@ -86,6 +94,11 @@ RENDER_JOB_TYPE = "content.render"
 RENDER_RESOURCE_TYPE = "render_output"
 QC_JOB_TYPE = "content.qc"
 QC_RESOURCE_TYPE = "render_qc_report"
+PROJECT_RESOURCE_TYPE = "content_project"
+
+# Derived from the state machine rather than restated, so the claim predicate, the partial index
+# and `lifecycle.is_terminal` cannot drift apart when a state is added.
+_TERMINAL_PROJECT_STATES = tuple(state for state in ProjectState if is_terminal(state))
 
 
 class ContentRepository:
@@ -96,7 +109,13 @@ class ContentRepository:
 
     def add(
         self,
-        value: ContentScript | ContentTimeline | RenderOutput | RenderQcReport | VoiceoverAsset,
+        value: ContentProject
+        | ContentProjectTransition
+        | ContentScript
+        | ContentTimeline
+        | RenderOutput
+        | RenderQcReport
+        | VoiceoverAsset,
     ) -> None:
         self._session.add(value)
 
@@ -206,18 +225,22 @@ class ContentRepository:
         return cast(RenderQcReport | None, await self._session.scalar(statement))
 
     async def claim_next_unchecked_render(self) -> RenderOutput | None:
-        """Claim one succeeded render that no QC run has touched yet, with SKIP LOCKED.
+        """Claim one succeeded render no QC run has opened over yet, with SKIP LOCKED.
 
-        QC is driven by the absence of a report rather than by an event the render path emits.
-        That is deliberate under this slice's file ownership — nothing outside the QC files had
-        to change to make automatic QC exist — and it is also the more robust shape: a render
-        that completed while the QC worker was down is picked up when it returns, with no queue
-        entry to have been lost. The trade is a scan, bounded by the index on
-        `(business_id, created_at, id)` and by the report row this run writes immediately.
+        Slice 2D wrote this as an anti-join — "a succeeded render with no report" — and measured
+        it at 134 ms per tick over 200k renders, with an index making no difference because
+        nothing told the planner that unreported renders are always the newest ones. Slice 2E
+        reshapes it as that report asked: `qc_claimed_at` is set on the render row in the same
+        transaction that writes the `pending` report, so "awaiting QC" is a predicate on one
+        table and `ix_render_outputs_awaiting_qc` is a partial index over a set that is empty in
+        steady state.
 
-        `NOT EXISTS` over *any* report, not only a completed one, is what keeps automatic QC to
-        one run per render: a run that failed permanently leaves a `failed` report and is not
-        retried forever.
+        The `NOT EXISTS` clause stays as a second, independent statement of the same rule. It is
+        not redundancy for its own sake: the column and the report are written together and can
+        only diverge through a defect, and after the reshape the anti-join runs over the handful
+        of rows the index yielded rather than over the table. `NOT EXISTS` over *any* report —
+        not only a completed one — is what keeps automatic QC to one run per render, so a run
+        that failed permanently stays dead-lettered instead of being retried forever.
         """
 
         outstanding = (
@@ -227,6 +250,7 @@ class ContentRepository:
             select(RenderOutput)
             .where(
                 RenderOutput.status == RenderStatus.SUCCEEDED,
+                RenderOutput.qc_claimed_at.is_(None),
                 RenderOutput.master_object_key.is_not(None),
                 ~outstanding,
             )
@@ -234,7 +258,13 @@ class ContentRepository:
             .with_for_update(skip_locked=True, of=RenderOutput)
             .limit(1)
         )
-        return cast(RenderOutput | None, await self._session.scalar(statement))
+        render = cast(RenderOutput | None, await self._session.scalar(statement))
+        if render is not None:
+            # Stamped here rather than by the caller so the mark and the claim cannot come apart:
+            # any future service that claims through this method is claimed *by* this method, and
+            # the caller's transaction is the one that makes both durable together.
+            render.qc_claimed_at = datetime.now(UTC)
+        return render
 
     async def claim_next_qc_retry(self) -> BackgroundJob | None:
         """Claim one QC job whose transient failure has backed off, with SKIP LOCKED.
@@ -260,6 +290,129 @@ class ContentRepository:
             .limit(1)
         )
         return cast(BackgroundJob | None, await self._session.scalar(statement))
+
+    # --- projects ------------------------------------------------------------------------
+
+    async def get_project(
+        self, business_id: UUID, project_id: UUID, *, lock: bool = False
+    ) -> ContentProject | None:
+        statement = select(ContentProject).where(
+            ContentProject.business_id == business_id, ContentProject.id == project_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return cast(ContentProject | None, await self._session.scalar(statement))
+
+    async def list_projects(
+        self,
+        business_id: UUID,
+        *,
+        cursor: Cursor | None,
+        limit: int,
+        state: ProjectState | None = None,
+    ) -> list[ContentProject]:
+        """Return at most `limit + 1` rows so the caller can detect a next page."""
+
+        statement: Select[tuple[ContentProject]] = select(ContentProject).where(
+            ContentProject.business_id == business_id
+        )
+        if state is not None:
+            statement = statement.where(ContentProject.state == state)
+        paged = apply_cursor(
+            statement,
+            created_at=ContentProject.created_at,
+            identifier=ContentProject.id,
+            cursor=cursor,
+        ).limit(fetch_size(limit))
+        return list((await self._session.scalars(paged)).all())
+
+    async def list_transitions(
+        self, business_id: UUID, project_id: UUID
+    ) -> list[ContentProjectTransition]:
+        """One project's whole history, in order. Bounded by the states a project can visit."""
+
+        statement: Select[tuple[ContentProjectTransition]] = (
+            select(ContentProjectTransition)
+            .where(
+                ContentProjectTransition.business_id == business_id,
+                ContentProjectTransition.project_id == project_id,
+            )
+            .order_by(ContentProjectTransition.sequence)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def next_transition_sequence(self, business_id: UUID, project_id: UUID) -> int:
+        statement = select(func.max(ContentProjectTransition.sequence)).where(
+            ContentProjectTransition.business_id == business_id,
+            ContentProjectTransition.project_id == project_id,
+        )
+        return (await self._session.scalar(statement) or 0) + 1
+
+    async def claim_next_due_project(self) -> ContentProject | None:
+        """Claim one live project whose next check has come due, with SKIP LOCKED.
+
+        The project row is the durable job (see `models.ContentProject`), so this is the claim
+        the whole sequencer runs on. The predicate matches `ix_content_projects_due` exactly —
+        terminal projects carry no due time and are therefore not merely filtered out but absent
+        from the index, which is what keeps the claim independent of how much history a tenant
+        has accumulated.
+        """
+
+        now = datetime.now(UTC)
+        statement = (
+            select(ContentProject)
+            .where(
+                ContentProject.state.notin_(_TERMINAL_PROJECT_STATES),
+                ContentProject.next_check_at.is_not(None),
+                ContentProject.next_check_at <= now,
+            )
+            .order_by(ContentProject.next_check_at, ContentProject.id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        return cast(ContentProject | None, await self._session.scalar(statement))
+
+    # --- abandoned provider runs -----------------------------------------------------------
+
+    async def claim_stale_pending_scripts(
+        self, *, older_than: datetime, limit: int
+    ) -> list[ContentScript]:
+        """Script rows that opened before `older_than` and never settled, locked for update.
+
+        A `pending` row means a provider call may have been billed and never returned — slice 2B
+        writes it before the call precisely so that is visible. What it must not do is stay
+        visible forever: an abandoned row keeps a script that will never exist in a state that
+        reads like one still being produced, and slice 2E's sequencer would wait on it.
+        """
+
+        statement: Select[tuple[ContentScript]] = (
+            select(ContentScript)
+            .where(
+                ContentScript.status == ScriptStatus.PENDING,
+                ContentScript.created_at < older_than,
+            )
+            .order_by(ContentScript.created_at, ContentScript.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def claim_stale_pending_voiceovers(
+        self, *, older_than: datetime, limit: int
+    ) -> list[VoiceoverAsset]:
+        """The same sweep for speech runs, which spend several calls behind one row."""
+
+        statement: Select[tuple[VoiceoverAsset]] = (
+            select(VoiceoverAsset)
+            .where(
+                VoiceoverAsset.status == VoiceoverStatus.PENDING,
+                VoiceoverAsset.created_at < older_than,
+            )
+            .order_by(VoiceoverAsset.created_at, VoiceoverAsset.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list((await self._session.scalars(statement)).all())
 
     # --- scripts -------------------------------------------------------------------------
 
@@ -446,6 +599,76 @@ class ContentFactsReader:
             value for value in (await self._session.scalars(statement)).all() if value is not None
         ]
         return sum(measured) if measured else None
+
+    async def voiceover_object_keys(
+        self, business_id: UUID, voiceover_ids: Sequence[UUID]
+    ) -> dict[UUID, tuple[str, ...]]:
+        """Each voiceover's stored audio objects, in line order, tenant-scoped.
+
+        Only a `generated` run yields keys. A `pending` or `failed` row may own objects on
+        storage — slice 2C records partial runs deliberately — but those are evidence of what was
+        billed, not audio anything may lay over a frame, and returning them here would let the
+        renderer mix half a script.
+        """
+
+        if not voiceover_ids:
+            return {}
+        statement = select(VoiceoverAsset).where(
+            VoiceoverAsset.business_id == business_id,
+            VoiceoverAsset.id.in_(tuple(voiceover_ids)),
+            VoiceoverAsset.status == VoiceoverStatus.GENERATED,
+        )
+        keys: dict[UUID, tuple[str, ...]] = {}
+        for row in (await self._session.scalars(statement)).all():
+            ordered = sorted(
+                (segment for segment in row.segments or []),
+                key=lambda segment: int(cast(int, segment.get("index", 0))),
+            )
+            keys[row.id] = tuple(
+                str(segment["object_key"]) for segment in ordered if segment.get("object_key")
+            )
+        return keys
+
+    async def scene_candidates(
+        self, business_id: UUID, asset_ids: Sequence[UUID], *, limit: int
+    ) -> tuple[SceneCandidate, ...]:
+        """Detected scenes with whatever video understanding labelled them, in asset order.
+
+        The tags are `labels + objects + actions` from the understanding row, put through
+        `lifecycle.normalize_scene_tag` — the one definition of how a scene tag is spelled, so
+        both sides of the comparison are normalized identically and neither is folded to ASCII.
+
+        A scene with no understanding row still comes back, with no tags. It is usable footage;
+        it simply cannot be selected *because of* what is in it.
+        """
+
+        if not asset_ids:
+            return ()
+        order = {asset_id: index for index, asset_id in enumerate(asset_ids)}
+        statement = (
+            select(MediaScene, MediaSceneUnderstanding)
+            .outerjoin(
+                MediaSceneUnderstanding,
+                MediaSceneUnderstanding.scene_id == MediaScene.id,
+            )
+            .where(MediaScene.business_id == business_id, MediaScene.asset_id.in_(tuple(asset_ids)))
+            .order_by(MediaScene.asset_id, MediaScene.scene_index)
+            .limit(limit)
+        )
+        rows = (await self._session.execute(statement)).all()
+        candidates = [
+            SceneCandidate(
+                asset_id=scene.asset_id,
+                start_ms=scene.start_ms,
+                end_ms=scene.end_ms,
+                tags=_scene_candidate_tags(understanding),
+            )
+            for scene, understanding in rows
+        ]
+        # The caller passed assets in a meaningful order (the project's own list); the query can
+        # only order by id, so the intended order is restored here rather than left to chance.
+        candidates.sort(key=lambda item: (order.get(item.asset_id, len(order)), item.start_ms))
+        return tuple(candidates)
 
     async def logo_asset_ids(self, business_id: UUID) -> frozenset[UUID]:
         statement = select(BrandAsset.media_asset_id).where(
@@ -869,6 +1092,19 @@ class ScriptFactsReader:
             if cta is not None:
                 values[(SlotKind.CTA.value, cta_id)] = VerifiedValue(text=cta, within_window=True)
         return values
+
+
+def _scene_candidate_tags(understanding: MediaSceneUnderstanding | None) -> frozenset[str]:
+    """Flatten one understanding row into the tag vocabulary scene selection matches on."""
+
+    if understanding is None:
+        return frozenset()
+    values = (
+        *(understanding.labels or ()),
+        *(understanding.objects or ()),
+        *(understanding.actions or ()),
+    )
+    return frozenset(tag for value in values if (tag := normalize_scene_tag(str(value))))
 
 
 def references_in(

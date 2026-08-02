@@ -23,6 +23,13 @@ budget in `worker/scratch.py` measures only live work.
 The render is four bounded stages: normalize each cut to identical parameters, concatenate and
 draw over the result, downscale to a preview, and pull a thumbnail. Stage one exists so that
 stage two's concat demuxer can stream-copy rather than re-decode every source twice.
+
+Slice 2E adds speech, which slice 2C produced and no adapter could use. Voiceover lines are
+joined into one uniform track and mixed under the footage's own sound, with the bed ducked when
+the timeline asks for it (§18.2's `duck_under_voice`, §19.1's "music ducking" applied to the one
+bed that exists today). The mix runs inside `filter_complex` rather than through `-af` because a
+sidechain compressor needs both signals in the same graph; a timeline that places no speech takes
+exactly the path it took before, mapping `0:a` and nothing else.
 """
 
 from __future__ import annotations
@@ -105,16 +112,18 @@ class FFmpegRenderAdapter(RenderPort):
     def capabilities(self) -> RenderCapabilities:
         """What this adapter can do today.
 
-        `fade` and the voiceover/music audio sources are absent on purpose: they are real
-        features that land with slice 2C and later, and declaring them here would turn a clean
-        validation rejection into a job that fails halfway through a render.
+        `voiceover` joins `original` in slice 2E: speech is joined, gained and mixed under the
+        footage below. `fade` and `music` stay absent on purpose — a crossfade is a real filter
+        nobody has written and music needs a licence record (§18.3) before a track may be laid
+        at all. Declaring either here would turn a clean validation rejection into a job that
+        fails halfway through a render.
         """
 
         return RenderCapabilities(
             profiles=frozenset(RenderProfile),
             crop_modes=frozenset(CropMode),
             transitions=frozenset({TransitionKind.CUT}),
-            audio_sources=frozenset({AudioTrackKind.ORIGINAL}),
+            audio_sources=frozenset({AudioTrackKind.ORIGINAL, AudioTrackKind.VOICEOVER}),
             caption_sources=frozenset({CaptionSource.TRANSCRIPT}),
             max_duration_ms=self._settings.render_max_duration_ms,
             max_video_tracks=1,
@@ -127,7 +136,8 @@ class FFmpegRenderAdapter(RenderPort):
         created: list[Path] = []
         try:
             segments = await self._normalize_segments(request.plan, spec, workdir, created)
-            master = await self._compose(request.plan, spec, segments, workdir, created)
+            voice = await self._join_voiceover(request.plan, workdir, created)
+            master = await self._compose(request.plan, spec, segments, voice, workdir, created)
             preview = await self._downscale(master, request.preview_profile, workdir, created)
             thumbnail = await self._thumbnail(master, workdir, created)
             summary = await self._probe(master, workdir)
@@ -200,6 +210,57 @@ class FFmpegRenderAdapter(RenderPort):
             outputs.append(output)
         return outputs
 
+    # --- stage 1b: one uniform speech track ------------------------------------------------
+
+    async def _join_voiceover(
+        self, plan: RenderPlan, workdir: Path, created: list[Path]
+    ) -> Path | None:
+        """Join the voiceover's lines into a single track, or return `None` when there is none.
+
+        Slice 2C stores one object per script line, so speech arrives as an ordered set of files
+        rather than one. They are concatenated through the filter graph rather than the concat
+        demuxer because the demuxer requires identical stream parameters and a provider is under
+        no obligation to return them; `aformat` makes that true instead of assuming it.
+
+        The line count is bounded here as well as upstream. A cap that only exists in the domain
+        is a cap the adapter is trusting someone else to have applied, and the filter string
+        below grows with it.
+        """
+
+        voiceover = plan.audio.voiceover
+        if voiceover is None or not voiceover.segment_paths:
+            return None
+        if len(voiceover.segment_paths) > _MAX_VOICE_INPUTS:
+            raise RenderPermanentError("RENDER_VOICEOVER_UNSUPPORTED")
+        output = workdir / "voice.m4a"
+        created.append(output)
+        command = [
+            self._settings.ffmpeg_binary,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+        ]
+        for path in voiceover.segment_paths:
+            command += ["-i", str(_controlled_source(path))]
+        labels = "".join(f"[a{index}]" for index in range(len(voiceover.segment_paths)))
+        chain = [
+            f"[{index}:a]{_AUDIO_FORMAT}[a{index}]" for index in range(len(voiceover.segment_paths))
+        ]
+        chain.append(f"{labels}concat=n={len(voiceover.segment_paths)}:v=0:a=1[voice]")
+        command += [
+            "-filter_complex",
+            ";".join(chain),
+            "-map",
+            "[voice]",
+            *_AUDIO_ENCODING,
+            str(output),
+        ]
+        await self._run(command, workdir, "RENDER_VOICEOVER_FAILED")
+        _require_output(output)
+        return output
+
     # --- stage 2: concat, overlay, burn captions -----------------------------------------
 
     async def _compose(
@@ -207,6 +268,7 @@ class FFmpegRenderAdapter(RenderPort):
         plan: RenderPlan,
         spec: RenderProfileSpec,
         segments: list[Path],
+        voice: Path | None,
         workdir: Path,
         created: list[Path],
     ) -> Path:
@@ -236,14 +298,21 @@ class FFmpegRenderAdapter(RenderPort):
         ]
         for logo in plan.logos:
             command += ["-i", str(_controlled_source(logo.source_path))]
+        # The speech track goes in *after* the logos so the logo input indices stay `offset + 1`
+        # and the filter graph built below does not have to know whether speech exists.
+        voice_index = len(plan.logos) + 1
+        if voice is not None:
+            command += ["-i", str(_controlled_source(voice))]
 
         chain, video_label = self._filter_chain(plan, spec, box, workdir, created)
-        if chain:
-            command += ["-filter_complex", ";".join(chain)]
-        command += ["-map", video_label, "-map", "0:a"]
-        if plan.audio.gain_db != 0:
+        audio_chain, audio_label = _audio_chain(plan, voice_index=voice_index if voice else None)
+        if chain or audio_chain:
+            command += ["-filter_complex", ";".join([*chain, *audio_chain])]
+        command += ["-map", video_label, "-map", audio_label]
+        if audio_label == "0:a" and plan.audio.gain_db != 0:
             # An integer decibel from a bounded schema field, so the expression cannot carry
-            # anything but a number into the filter.
+            # anything but a number into the filter. Only reachable without speech; the mix
+            # below applies the same gain inside the graph.
             command += ["-af", f"volume={plan.audio.gain_db}dB"]
         command += [
             *self._video_encoding(),
@@ -491,9 +560,61 @@ class FFmpegRenderAdapter(RenderPort):
 
 
 _AUDIO_ENCODING = ("-c:a", "aac", "-ar", "48000", "-ac", "2")
+# Every audio stream entering a mix is forced to one shape first. `sidechaincompress` and `amix`
+# both require their inputs to agree, and a synthesized line arrives in whatever the provider
+# chose to write.
+_AUDIO_FORMAT = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+# Speech lines per render. Slice 2C caps a script at eight; this is the adapter's own bound,
+# because a cap that lives only in the domain is one the adapter is trusting a caller to apply.
+_MAX_VOICE_INPUTS = 16
+# The ducking curve. These are product judgements, not platform facts: the bed drops when speech
+# crosses the threshold and recovers over a third of a second, which is slow enough not to pump
+# between words and fast enough to come back inside a pause.
+_DUCK_FILTER = "sidechaincompress=threshold=0.03:ratio=6:attack=20:release=350"
+# A hard ceiling after the mix. `amix` with `normalize=0` keeps both signals at their intended
+# level, which is what makes the gains in the timeline mean something — and which can sum above
+# full scale. The limiter is what stops that becoming the clipping §18.3 asks about.
+_MIX_LIMITER = "alimiter=limit=0.95"
 
 
 # --- module-level helpers -------------------------------------------------------------------
+
+
+def _audio_chain(plan: RenderPlan, *, voice_index: int | None) -> tuple[list[str], str]:
+    """Build the audio graph. Returns the graph and the label to map as audio.
+
+    With no speech the graph is empty and `0:a` is mapped directly, so a timeline that placed no
+    voiceover renders through exactly the path it did before slice 2E — including its `-af` gain.
+
+    With speech the bed and the voice are formatted alike, gained, optionally ducked, mixed
+    without `amix`'s normalization (so the timeline's decibels survive) and limited. `duration`
+    is `first`, meaning the bed: speech shorter than the footage leaves silence at the end rather
+    than truncating the video, and speech longer than the footage cannot occur because §18.3
+    refuses that timeline before a render starts.
+    """
+
+    if voice_index is None:
+        return ([], "0:a")
+    voice_gain = plan.audio.voiceover.gain_db if plan.audio.voiceover is not None else 0
+    chain = [
+        f"[0:a]{_AUDIO_FORMAT},volume={plan.audio.gain_db}dB[bed]",
+        f"[{voice_index}:a]{_AUDIO_FORMAT},volume={voice_gain}dB[voice]",
+    ]
+    if plan.audio.duck_under_voice:
+        chain += [
+            # The key has to be a *copy* of the voice: the same stream cannot be both the
+            # sidechain input and a mix input.
+            "[voice]asplit=2[voicemix][voicekey]",
+            f"[bed][voicekey]{_DUCK_FILTER}[bedducked]",
+            "[bedducked][voicemix]amix=inputs=2:duration=first:dropout_transition=0:"
+            f"normalize=0,{_MIX_LIMITER}[aout]",
+        ]
+    else:
+        chain.append(
+            "[bed][voice]amix=inputs=2:duration=first:dropout_transition=0:"
+            f"normalize=0,{_MIX_LIMITER}[aout]"
+        )
+    return (chain, "[aout]")
 
 
 def _run_with_bounded_diagnostics(

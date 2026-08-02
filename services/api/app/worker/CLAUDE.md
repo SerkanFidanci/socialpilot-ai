@@ -8,7 +8,9 @@ Celery uygulama nesnesi (→ `../infrastructure/celery_app.py`), HTTP katmanı.
 ## Değişmezler
 
 - **Mesaj payload'ındaki ID'ye güvenilmez.** Task'lar payload'dan iş almaz; veritabanındaki uygun işi kendileri seçip boşaltır. Bu, tekrarlanan mesajı zararsız kılar.
-- **`content.qc.drain` arkasında outbox olayı olmayan tek drain'dir** (W18 takip 1). Diğerleri iki kez uyandırılır: üreticisinin yazdığı olayla ve broker'ın kaybettiğini süpüren beat tick'iyle. QC'nin üreticisi yok — render yolunda `content.qc.requested` yazan bir yer yok — bu yüzden claim "raporu olmayan `succeeded` render" taraması yapıyor ve tick tetiklemenin tamamı. `test_automatic_qc_is_the_one_drain_with_no_event_behind_it` bu iddiayı sabitliyor: bir gün olay eklenirse, taramanın kalıp kalmayacağını soran şey o test olur.
+- **`content.pending.sweep` arkasında outbox olayı olmayan tek drain'dir** (W19). Diğerleri iki kez uyandırılır: üreticisinin yazdığı olayla ve broker'ın kaybettiğini süpüren beat tick'iyle. Bunun üreticisi *olamaz*: sağlayıcı çağrısı ortasında ölen süreç kendi ölümü için olay yazmaz, ve bu süpürme tam olarak o yokluğu fark etmek için var. `test_the_abandoned_run_sweep_is_the_one_tick_that_can_have_no_event` iddiayı sabitliyor.
+- **`content.qc.drain` W18'de olayı olmayan drain'di; W19'da üreticisini aldı.** `render_service._succeed` `content.qc.requested` yazıyor, `sweep-content-qc` tick'i tetikleyici değil ağ oldu (`CELERY_BEAT_QC_SWEEP_INTERVAL_SECONDS`, varsayılan 900 s). W18'in bu testte sorduğu soru — "olay eklenirse tarama kalsın mı" — cevaplandı: kalıyor, çünkü worker düşükken biten render'ı bulan tek şey o.
+- **`content.project.drain` `workdir` istemez.** Sıralayıcı medyaya dokunmaz; adımları dokunan servisleri çağırır ve onların her biri kendi scratch'ini korumalı kökün içinde tutar.
 - Composition **süreç başınadır.** `build_worker_context` worker süreci başlarken kurulur, `worker_process_init`/`worker_process_shutdown` sinyallerine bağlıdır; global paylaşılan bağlantı taşınmaz.
 - Her task bir queue'ya ve timeout'a bağlıdır; süresi geçmiş işler `operations.recovery.drain` ile geri alınır.
 - Task adları (`media.*.drain`, `operations.*`) kontrattır; yeniden adlandırmak kuyruktaki mesajları düşürür.
@@ -18,8 +20,8 @@ Celery uygulama nesnesi (→ `../infrastructure/celery_app.py`), HTTP katmanı.
 
 | Dosya | İş |
 |---|---|
-| `composition.py` | `WorkerContext`, `build_worker_context`, `get_worker_context`, `start_worker_process` — süreç sahipli composition root; init'te renice + scratch reclaim. `qc_probe` her ortamda **gerçek** adapter (ölçümün fake'i yok), `visual_qc` üretimde **disabled** — iki zıt kuralın birlikte tutması gereken yer burası. `content_qc_service` render portu **almaz**: yeniden render 2E'nin |
-| `tasks.py` | Drain task'ları: `media.ingest`, `media.technical_analysis`, `media.scene_speech_analysis`, `media.video_understanding`, `content.render`, `content.qc`, `operations.recovery`, `operations.outbox.dispatch` + süreç init/shutdown sinyalleri; her drain scratch bütçesini kontrol eder |
+| `composition.py` | `WorkerContext`, `build_worker_context`, `get_worker_context`, `start_worker_process` — süreç sahipli composition root; init'te renice + scratch reclaim. `qc_probe` her ortamda **gerçek** adapter (ölçümün fake'i yok), `visual_qc` üretimde **disabled** — iki zıt kuralın birlikte tutması gereken yer burası. `content_qc_service` render portu **almaz**: yeniden render 2E'nin. `content_project_service` sıralayıcıyı kurar ve alt servislerin sahip olmadığı hiçbir port taşımaz |
+| `tasks.py` | Drain task'ları: `media.ingest`, `media.technical_analysis`, `media.scene_speech_analysis`, `media.video_understanding`, `content.render`, `content.qc`, `content.project`, `content.pending.sweep`, `operations.recovery`, `operations.outbox.dispatch` + süreç init/shutdown sinyalleri; her drain scratch bütçesini kontrol eder |
 | `scratch.py` | `WorkerScratchGuard`, `WorkerScratchExhausted` — tek sunucuda scratch bütçe/orphan temizliği (ADR-013) |
 | `__init__.py` | Paket |
 
@@ -33,4 +35,5 @@ Celery uygulama nesnesi (→ `../infrastructure/celery_app.py`), HTTP katmanı.
 
 `tests/unit/test_worker_composition.py` · `tests/unit/test_worker_scratch.py` ·
 `tests/unit/test_celery_publisher.py` · `tests/integration/test_celery_orchestration.py` ·
-`tests/integration/test_content_qc.py` (beat girdisi → task kaydı → gerçek rapor zinciri)
+`tests/integration/test_content_qc.py` (beat girdisi → task kaydı → gerçek rapor zinciri) ·
+`tests/integration/test_content_lifecycle.py` (üç worker birlikte, gerçek PostgreSQL/MinIO/FFmpeg)

@@ -16,6 +16,11 @@ DRAIN_TASK_BY_EVENT: dict[str, str] = {
     "media.scene_speech.requested": "media.scene_speech_analysis.drain",
     "media.video_understanding.requested": "media.video_understanding.drain",
     "content.render.requested": "content.render.drain",
+    # Slice 2E gives automatic QC the producer it did not have. Until now `content.qc.drain` was
+    # the one drain woken only by the beat tick, and its claim scanned for succeeded renders with
+    # no report; the render path now announces itself, and the tick drops to a rare sweep.
+    "content.qc.requested": "content.qc.drain",
+    "content.project.advance.requested": "content.project.drain",
 }
 """Requested events whose only transport effect is waking the matching drain task."""
 

@@ -3,7 +3,7 @@
 <!-- ÜRETİLMİŞ DOSYA — elle düzenlenmez. Kaynak: docs/generated/openapi.json
      Üreten: services/api/scripts/generate_endpoints_doc.py (`make generate-docs`) -->
 
-**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **36 endpoint**
+**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **41 endpoint**
 
 > Bu dosya [`../generated/openapi.json`](../generated/openapi.json) yerine okunur:
 > aynı kontrat, ~%98 daha az token. Şema/alan detayı gerekiyorsa tek endpoint'i
@@ -59,6 +59,11 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 
 | Metot | Yol | Amaç | Yetki | Idempotency | Başarı |
 |---|---|---|---|---|---|
+| `GET` | `/v1/businesses/{business_id}/content/projects` | List this business's content projects newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/projects` | Open a content project (PRD §20). The response is the record, not the video | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
+| `GET` | `/v1/businesses/{business_id}/content/projects/{project_id}` | Read one project: its state, what it produced, and why it stopped if it did | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/projects/{project_id}/media` | Give a project waiting on footage the assets it was waiting for | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
+| `GET` | `/v1/businesses/{business_id}/content/projects/{project_id}/transitions` | Read a project's whole history (PRD §20) — the answer to "where did this get stuck?" | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `GET` | `/v1/businesses/{business_id}/content/renders/{render_id}` | Get Render | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `GET` | `/v1/businesses/{business_id}/content/renders/{render_id}/qc` | Read the automatic QC report for one render: every check, its verdict, its thresholds | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `POST` | `/v1/businesses/{business_id}/content/timelines` | Create Timeline | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |

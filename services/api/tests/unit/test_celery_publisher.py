@@ -49,6 +49,8 @@ async def test_publisher_maps_requested_events_to_empty_wake_up_messages() -> No
         ("media.scene_speech.requested", "media.scene_speech_analysis.drain"),
         ("media.video_understanding.requested", "media.video_understanding.drain"),
         ("content.render.requested", "content.render.drain"),
+        ("content.qc.requested", "content.qc.drain"),
+        ("content.project.advance.requested", "content.project.drain"),
     ):
         await publisher.publish(event(event_type))
         assert sent[-1] == (task_name, (), {})
@@ -142,6 +144,8 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
             celery_beat_outbox_interval_seconds=11,
             celery_beat_media_drain_interval_seconds=22,
             celery_beat_recovery_interval_seconds=33,
+            celery_beat_qc_sweep_interval_seconds=44,
+            celery_beat_pending_sweep_interval_seconds=55,
         )
     )
     schedule = application.conf.beat_schedule
@@ -152,15 +156,27 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
         "drain-scene-speech": "media.scene_speech_analysis.drain",
         "drain-video-understanding": "media.video_understanding.drain",
         "drain-content-render": "content.render.drain",
-        "drain-content-qc": "content.qc.drain",
+        "sweep-content-qc": "content.qc.drain",
+        "drain-content-projects": "content.project.drain",
+        "sweep-abandoned-runs": "content.pending.sweep",
         "recover-stale-jobs": "operations.recovery.drain",
     }
     assert schedule["dispatch-outbox"]["schedule"] == 11
     assert schedule["recover-stale-jobs"]["schedule"] == 33
+    # The two sweeps run on their own, much longer intervals. That separation is the point of
+    # slice 2E's change: QC is now event-driven, so its tick is a net rather than a trigger.
+    assert schedule["sweep-content-qc"]["schedule"] == 44
+    assert schedule["sweep-abandoned-runs"]["schedule"] == 55
     assert {
         schedule[name]["schedule"]
         for name in schedule
-        if name not in {"dispatch-outbox", "recover-stale-jobs"}
+        if name
+        not in {
+            "dispatch-outbox",
+            "recover-stale-jobs",
+            "sweep-content-qc",
+            "sweep-abandoned-runs",
+        }
     } == {22}
 
 
@@ -170,19 +186,41 @@ def test_beat_schedule_wakes_every_drain_task_the_publisher_can_route() -> None:
     assert set(DRAIN_TASK_BY_EVENT.values()) <= scheduled
 
 
-def test_automatic_qc_is_the_one_drain_with_no_event_behind_it() -> None:
+def test_automatic_qc_now_has_a_producer_and_keeps_its_tick_as_a_sweep() -> None:
+    """Slice 2D asked this question; slice 2E answers it, and the answer is asserted.
+
+    W18 left this test saying "if a later slice adds the event, this is the thing that fails and
+    asks whether the scan should stay". It was added, and the scan stays — as a *sweep*. The
+    render path writes `content.qc.requested` in the transaction that makes a render succeed, so
+    the tick no longer triggers QC; it catches a render that finished while the worker was down
+    or an event the broker lost. Both halves are pinned here, because either alone would be a
+    different design: the event without the sweep loses renders, the sweep without the event is
+    the 134 ms-per-tick scan W18 measured.
+    """
+
+    application = create_celery_app(settings())
+    schedule = application.conf.beat_schedule
+    scheduled = {entry["task"] for entry in schedule.values()}
+    assert "content.qc.drain" in scheduled
+    assert DRAIN_TASK_BY_EVENT["content.qc.requested"] == "content.qc.drain"
+    # And the tick is genuinely a sweep, not the trigger under another name: it runs on its own
+    # interval, far apart from the drains an event also wakes.
+    qc_interval = schedule["sweep-content-qc"]["schedule"]
+    assert qc_interval == settings().celery_beat_qc_sweep_interval_seconds
+    assert qc_interval > schedule["drain-content-render"]["schedule"]
+
+
+def test_the_abandoned_run_sweep_is_the_one_tick_that_can_have_no_event() -> None:
     """A beat entry with no outbox route is a claim, so it is asserted rather than assumed.
 
-    Every other drain is woken twice: by the event its producer wrote and by the beat tick that
-    sweeps up anything the broker lost. QC has no producer — nothing in the render path writes a
-    `content.qc.requested` event — so the tick is the whole trigger, and its claim is a scan for
-    a succeeded render carrying no report. If a later slice adds the event, this test is the
-    thing that fails and asks whether the scan should stay.
+    Every drain is woken twice — by the event its producer wrote and by the tick that sweeps up
+    what the broker lost. This one cannot be: it exists to notice that a process died mid-call,
+    and nothing emits an event for its own death. If a producer ever appears for it, this test is
+    what asks whether the sweep should stay.
     """
 
     scheduled = {
         entry["task"] for entry in create_celery_app(settings()).conf.beat_schedule.values()
     }
-    assert "content.qc.drain" in scheduled
-    assert "content.qc.drain" not in set(DRAIN_TASK_BY_EVENT.values())
-    assert not any(name.startswith("content.qc") for name in DRAIN_TASK_BY_EVENT)
+    assert "content.pending.sweep" in scheduled
+    assert "content.pending.sweep" not in set(DRAIN_TASK_BY_EVENT.values())
