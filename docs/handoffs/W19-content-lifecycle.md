@@ -91,7 +91,8 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. (Durum makinesi
 
 ## Rapor — 2026-08-02 · Opus 5 / high
 
-**Dal:** `slice/2e-content-lifecycle` (base `main` = `1e28746`) · **Durum:** tamamlandı, merge edilmedi
+**Dal:** `slice/2e-content-lifecycle` (base `main` = `1e28746`) · **Commit:** `3378b98`
+**Durum:** tamamlandı, **merge edilmedi** (iş emri gereği dalda bırakıldı)
 
 ### Yapılanlar
 
