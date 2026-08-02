@@ -94,9 +94,225 @@ Kredi işlem tipleri kapalı bir küme (`grant`/`consume`/`refund`/`expire`) —
 
 Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. (Append-only defter + rezervasyon/sonuçlandırma duruşu ADR'lık.)
 
-## Rapor
+## Rapor — 2026-08-02 · Claude Code (Opus 5 / high)
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/2e-entitlement` (base `main` = `f22c980`) · **Durum:** tamamlandı, **merge edilmedi**
+**Doğrulama ortamı:** `COMPOSE_PROJECT_NAME=sp-w20` (host portları worktree'ye özel bir
+gitignore'lu `.env` ile ayrıldı: 8020/55440/56390/59100 — başka worktree'lerin konteynerleri
+ele geçirilmedi)
+
+### Yapılanlar
+
+**Yeni modül `services/api/app/modules/entitlement/`** — `points.py` (§12.4 sürümlü puan
+tablosu), `ledger.py` (saf aritmetik + iki total karar tablosu), `models.py`, `repository.py`,
+`policy.py`, `service.py`, `CLAUDE.md`.
+
+1. **Defter append-only, bakiye türetilir (PM kararı 1).** `credit_ledger` yalnızca satır ekler;
+   `bakiye = SUM(delta_credits)`. Hiçbir yerde `balance` sütunu yok ve entegrasyon testi bunu
+   `information_schema` taramasıyla **zorluyor** (kriter 2'nin "okuyan hiçbir yol yok" kısmı).
+   `delta_credits` işaretli ve işaret `ck_credit_ledger_delta_sign` ile tipine bağlı, yani bakiye
+   tek bir ifade — ikinci bir `CASE` yazılamaz.
+2. **Append-only ve negatif bakiye veritabanı seviyesinde.** `trg_credit_ledger_append_only`
+   `UPDATE`/`DELETE`'i reddeder; `trg_credit_ledger_non_negative` §32.4'ün "Negatif bakiye
+   oluşmamalıdır" kuralını uygular. Trigger **mekanizma değil yedektir**: asıl kesinlik tenant
+   advisory lock'undan gelir ve trigger yalnızca commit edilmiş satırları görür. `TRUNCATE` satır
+   trigger'ı tetiklemediği için test temizliği etkilenmiyor.
+3. **Rezervasyon + sonuçlandırma (PM kararı 2), `consume` satırı başta.** Rezervasyon açılırken
+   `usage_reservations` (`reserved`) + `credit_ledger` `consume` (−N) yazılır. Sonuçlandırma satır
+   **yazmaz** (tahsilat oldu); iade telafi edici `refund` (+N) yazar. Böylece açık rezervasyon
+   bakiyeyi zaten düşürmüştür ve bakiye tek bir sütunun toplamı olarak kalır — alternatif
+   ("`consume`'u sonda yaz") bakiyeye ikinci bir terim eklerdi.
+4. **Kontrol + rezervasyon aynı transaction'da (PM kararı 4).** `reserve`/`settle` kendi
+   transaction'ını açmaz; `create_project`'in `begin()`'i içinde koşar. Yarışı kapatan mekanizma
+   `pg_advisory_xact_lock(namespace, hashtext(business_id))` ve **bakiye okunmadan önce**
+   alınıyor. `businesses` satır kilidi yerine advisory lock: satır kilidi rezervasyon boyunca o
+   işletmeye yapılan alakasız her yazmayı da bloke ederdi.
+5. **Puan tablosu sürümlü (PM kararı 3).** `POINT_TABLES` sürüm kaydı; aktif sürüm
+   `ENTITLEMENT_POINTS_VERSION`. Çözümleme rezervasyon açılırken **bir kez**; sonuç hem
+   rezervasyona hem defter satırına yazılır ve **saklanmış bir satırdan krediyi yeniden türeten
+   hiçbir fonksiyon yok**. `PointTable` yapıcısı **import anında** totallik ister: her
+   `ContentPointKind` fiyatlı, `ScenarioCode × RenderProfile` çarpımının tamamı eşlenmiş —
+   fiyatlanmamış bir render profili uygulamayı açtırmaz, çünkü fiyatlanmamış içerik bedava
+   içeriktir.
+6. **Tüketim noktası proje başlatma (PM kararı 5).** Tek rezervasyon senaryoyu, seslendirmeyi,
+   timeline'ı ve **tüm render denemelerini** kapsar. **K4 böylece yapısal olarak sağlanıyor:**
+   rezervasyon render'a değil projeye bağlı olduğu için QC başarısızlığından doğan yeniden render
+   yeni rezervasyon *açamaz*.
+7. **Sonuçlandırma projeyi terminal yapan transaction'ın içinde.** `_settle` içinde
+   `source_outcome(state)` → `settle(...)`. Ayrı bir job olsaydı "bitmiş proje hâlâ hak tutuyor"
+   penceresi olurdu; bu şekilde ya iki gerçek de commit oldu ya hiçbiri.
+8. **Enumerasyon kuralı: iki total tablo.** `settlement_outcome` (`SourceOutcome` × hata kodu) ve
+   `resolve_settlement` (`ReservationStatus` × `SettlementOutcome`); eşlenmemiş hata kodu
+   `UNCLASSIFIED`, yani cevabı olan bir durum. **Tekrar ile çelişki ayrı cevaplar:** aynı sonucun
+   ikinci uygulaması `ALREADY_APPLIED` (hiçbir şey yazılmaz), tersi `CONFLICT` (409). Permütasyon
+   testleri `ProjectState × hata kodu` (11 × 15) ve `durum × sonuç` (3 × 2) çarpımlarını **tam**
+   dolaşıyor.
+9. **Uçlar.** `GET .../entitlement/{balance,ledger,reservations}` (`business.read`) ve
+   `POST .../entitlement/grants` (**yalnızca `owner`** — yeni `Permission.ENTITLEMENT_GRANT`).
+   Harcama için yetki **yok ve olmayacak**: harcama, ihtiyacı olan işlemin kendi yetkisiyle onun
+   transaction'ında olur.
+10. **Süpürücü** `entitlement.reservation.sweep` (beat: saatlik). Yaş eşiği + `SKIP LOCKED` +
+    boş dönünce `None`, W19 desenini izliyor. **Asla tahmin etmez:** bir hakkı ancak işi sahiplenen
+    modül "iş bitti" derse bırakır (`ReservationSourceProbe` protokolü, uygulaması `content`'te) —
+    yaş tek başına kanıt değil.
+11. **Modül sınırı.** `entitlement` `content`'in *sözlüğünü* okur (`ScenarioCode`,
+    `RenderProfile` — fiyat listesinin totalliği buna dayanır), **tablolarını değil**. Bir proje
+    hakkında sorulan tek sorgu probe protokolünden geçer, bu yüzden bağımlılık tek yönlü:
+    `content → entitlement`.
+
+**Migration `0017_entitlement_ledger`** — iki tablo, iki enum, iki trigger, beş index (biri
+kısmi tekil).
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Mağaza/IAP, webhook, yenileme, plan eşleme, fiyat** → Phase 3 (K1 açık). Bu slice'ta tek
+  kredi kaynağı `owner`'ın manuel grant'i.
+- **Tekil uçlar ücretsiz kaldı** (proje bağlamı olmayan senaryo üretimi, seslendirme, timeline
+  yazma, tekil render isteği) — iş emrinin kararı 5 böyle diyor. Bilinçli ve **geçici**; Phase 3
+  kapatmalı. Bugün bir geliştirici bu uçlarla ücretsiz senaryo üretebilir.
+- **Proje iptali yok** → 2F. Sonucu: `WAITING_MEDIA`'da park eden bir proje kredisini **süresiz**
+  tutar. Adım zaman aşımı bu durumu kapsamıyor (o durum muaf) ve süpürme de kapsamıyor (kaynak
+  canlı). **PM'e bırakılan iş.**
+- **§12.7'nin `CONSUMED → REFUNDED` yolu yok** (tüketilmiş üretimin sonradan iadesi) — destek/admin
+  yüzeyi ister. `refund` girdi tipi var; bugün tek üreticisi bırakılan bir rezervasyon.
+- **§12.6/§12.9 hak penceresi, süre sonu ve devir yok.** `expire` girdi tipi şemada var, üreticisi
+  yok; `entitlement_windows` tablosu yok (§28.9'un index'i `(business_id, status)` olarak duruyor).
+- **`docs/index.md` ve `docs/adr/README.md` güncellenmedi** (iş emri kapsam dışı bırakıyor).
+  Eklenmesi gerekenler: router'a `entitlement` satırı,
+  [`docs/architecture/entitlement.md`](../architecture/entitlement.md) ve ADR-017.
+- **`docs/plans/active/phase-2-content-generation.md` güncellenmedi** — ilan listesinde yok.
+- `script.py`, `qc.py`, `text_normalization.py`, W19 durum makinesi: dokunulmadı.
+
+### İlan dışı dokunuşlar (dördü zorunlu, gerekçeleriyle)
+
+| Dosya | Neden |
+|---|---|
+| `app/modules/businesses/policy.py` | `Permission.ENTITLEMENT_GRANT` — **tek satır**. Kriter 7 "manuel grant yalnızca `owner`" diyor; `businesses/CLAUDE.md` "yetki kararı yalnızca `policy.permits` üzerinden, elle rol karşılaştırması yazılmaz" diyor. İkisini birden karşılamanın tek yolu merkezî tabloya bir üye eklemek. `ROLE_PERMISSIONS[OWNER] = frozenset(Permission)` olduğu için diğer roller otomatik olarak dışarıda. |
+| `app/infrastructure/database/metadata.py` | Yeni model modülü burada kayıtlı değilse `verify_mapping_is_complete` cross-module FK'yi çözemez ve worker/API açılışta patlar. Bir import + bir tuple girdisi. |
+| `app/infrastructure/celery_app.py` | Beat girdisi (`sweep-entitlement-reservations`). İlan `worker/{tasks,composition}.py` veriyor ama beat schedule bu dosyada; task'ı zamanlamadan bırakmak yarım iş olurdu. |
+| `app/modules/content/CLAUDE.md` | `project_service.py` değiştiği için AGENTS.md'nin "modülün `CLAUDE.md`'si aynı değişiklikte güncellenir" kuralı. |
+
+Ayrıca **`docs/STATUS.md`'de kendi satırımın dışına da yazdım**: Alembic head satırı (`0016` →
+`0017`, dal notuyla), dosya sahipliği tablosunda W19 satırının yerine W20 satırı (W19 kapandı),
+ve "Sırada" bloğuna 2E ikinci yarı özeti + açık kalanlar. PM isterse geri alsın.
+`docs/architecture/background-jobs.md`'ye beat tablosu satırı + süpürme bölümü eklendi (iş emri
+"hangi dosyaya yazdığını raporda bildir" diyordu: **yeni dosya
+[`docs/architecture/entitlement.md`](../architecture/entitlement.md)**, artı background-jobs'a
+süpürücü girdisi).
+`docs/generated/openapi.json` + `docs/api/endpoints.md` `make generate-docs` ile yeniden üretildi.
+Worktree kökünde gitignore'lu bir `.env` var (yalnızca host port ayrımı) — commit edilmiyor.
+
+### Yol boyunca çıkan ve düzeltilen bir tuzak: TRUNCATE kilit sırası
+
+İlk tam koşu **5 düşen + 2 hata** verdi ve hiçbiri benim testlerimde değildi
+(`test_brand_catalog`, `test_celery_orchestration`). Kök sebep:
+`asyncpg.exceptions.DeadlockDetectedError` — bir teardown `TRUNCATE ... CASCADE`'i. Düşen dosyalar
+tek başlarına **geçiyordu**; birlikte koşunca değil.
+
+Sebep benim değişikliğim: `businesses` iki yeni bağımlı tablo kazandı (`credit_ledger`,
+`usage_reservations`), dolayısıyla `TRUNCATE businesses CASCADE` artık onları da kilitliyor.
+`credit_ledger` **iki** ebeveyni birden gösterdiği için (`businesses` ve `usage_reservations`),
+bir tarafın satır kilitleriyle TRUNCATE'in tablo kilitleri arasında bir döngü kurulabiliyor.
+Latent olan bir yarış, kilit kümesi genişleyince görünür oldu. Bir teardown deadlock'ta düşünce
+veri sızıyor ve **sonraki dosya** yanlış sayı görüyor (`processed: 2 != 1`) — düşen testlerin
+benim dosyalarımda olmamasının sebebi bu.
+
+Düzeltme: **her** entegrasyon teardown'ında iki tablo listenin **başına** açıkça yazıldı (16
+dosya). Cascade'in kendi bulacağı sırayı kullanmak yerine adlandırmak, süitteki bütün
+TRUNCATE'lere aynı kilit sırasını verir. Tekrar koşu temiz.
+
+Not: bu, W19'un `test_content_lifecycle.py`'sinde de gerekli olacaktı; deadlock'un ilk turda
+yalnızca iki dosyada görünmesi zamanlamaya bağlıydı. Yeni bir tablo `businesses`'e bağlandığında
+aynı adımı atmak gerekiyor.
+
+### PRD ile ayrışma (metin değiştirilmedi, PM'e bırakıldı)
+
+1. **§32.4'ün `balance_after` sütunu uygulanmadı.** Satır başına yürüyen toplam, yazımların tam
+   sıralı olmasını gerektirir ve girdilerin zaten verdiği cevabı saklar; çeliştiği gün hangisinin
+   doğru olduğunu söyleyecek bir şey yoktur. PM kararı 1 zaten "bakiye hiçbir yerde tek bir sayı
+   olarak saklanmaz" diyor. §32.4'ün asıl talebi (negatif bakiye olmaması) trigger'la karşılandı.
+   Gerekçe ADR-017'de; **gereksinim metni değiştirilmedi** (AGENTS.md gereksinim metnini
+   yeniden yazmayı yasaklıyor ve dosya ilan listemde değil).
+2. **§32.4'ün `reserve` ve `adjust` girdi tipleri yok.** PM kararı 1 kümeyi
+   `grant`/`consume`/`refund`/`expire` olarak kapattı. `reserve`, `consume` + rezervasyon durumu
+   olarak ifade ediliyor (bakiyenin tek toplam kalması için); `adjust`'ın üreticisi yok.
+3. **"Puan tablosu veri, kod değil" (PM kararı 3) kısmen.** Tablo sürümlenmiş bir Python kaydı,
+   aktif sürüm konfigürasyon. Gerekçe: bu slice'ta tabloyu yazacak admin yüzeyi yok (Phase 3),
+   dolayısıyla DB tablosu yalnızca migration'la yazılabilirdi — fazladan adımı olan kod. Kararın
+   **amacı** (sürümlü + denetlenebilir + dünkü tahsilatın hangi tabloyla hesaplandığının
+   bilinmesi) tam karşılanıyor ve taşıma geriye dönük hiçbir şeyi değiştirmez, çünkü defter
+   satırları sürümü zaten taşıyor.
+
+### Kabul kriteri 5'i nasıl okudum
+
+"Saf yeniden render hak tüketmiyor; timeline değişmişse tüketiyor." Kararı 5 tüketim noktasını
+**proje başlatma** olarak sabitlediği ve tekil uçları ücretsiz bıraktığı için bu ikisi ancak
+proje bağlamında ölçülebilir. Uyguladığım okuma:
+
+- **Saf yeniden render → ücretsiz:** aynı projenin QC sonrası yeniden render'ı ikinci bir
+  rezervasyon açmaz. Kanıt uçtan uca: iki `render_outputs` satırı, **tek** `consume` satırı, ve
+  ikinci render `consumes_entitlement = false`.
+- **"Timeline değişmişse tüketiyor" → yeni bir üretim yeni bir projedir ve yeniden ücretlendirilir.**
+  Kanıt: ikinci `create_project` ikinci rezervasyonu açıyor.
+
+Mevcut `service.request_render` semantiği (revizyon 1 = `INITIAL`, sonrası = `REVISION`)
+**değiştirilmedi** — W11/W19'un kararı ve K4'ün "parametrik düzenleme revizyon kotasından düşer"
+kuralıyla tutarlı. Farklı okunması gerekiyorsa PM söylemeli.
+
+### Doğrulama
+
+Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest 9.1.1 · SQLAlchemy 2.0.51 ·
+Alembic 1.18.5 · FastAPI 0.141.1 · Pydantic 2.13.4 · PostgreSQL 16.14 (konteyner) · gerçek MinIO
++ FFmpeg.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` + `ruff format --check` | ✅ temiz (217 dosya) |
+| `mypy .` (strict) | ✅ `no issues found in 204 source files` |
+| `pytest` (`RUN_INTEGRATION_TESTS=1`, gerçek PostgreSQL + MinIO + FFmpeg) | ✅ **1325 passed** (taban 1237, +88; azalma yok) |
+| `make check-openapi` | ✅ kontrat + `endpoints.md` yeniden üretildi ve commit'li |
+| migration `0017` up → down → up, tek head | ✅ `0017_entitlement_ledger (head)` |
+| **K1** migration up/down/up, tek head | ✅ |
+| **K2** bakiye türetiliyor, saklanmıyor | ✅ defterden hesaplanan = beklenen; ayrıca `information_schema` taraması `balance`/`credits_remaining` adlı **hiçbir sütun** bulmuyor |
+| **K3** eşzamanlılık | ✅ son krediyi hedefleyen 2 eşzamanlı `create_project` → tam 1 başarı + 1 `ENTITLEMENT_INSUFFICIENT_CREDITS`; 3 kredilik bakiyeye 10 eşzamanlı istek → tam 3 başarı. Gerçek PostgreSQL, `asyncio.gather` ile gerçek paralel transaction, mock yok |
+| **K4** rezervasyon yaşam döngüsü | ✅ başarılı proje → `consumed` (ek satır yok); teknik başarısızlık (deneme tükenmesi) → `released` + `refund`, bakiye eski haline döndü; yetim rezervasyon süpürüldü (`ENTITLEMENT_RESERVATION_ABANDONED`), canlı proje ve eşik altındaki hak **dokunulmadı** |
+| **K5** saf yeniden render ücretsiz | ✅ 2 render / 1 `consume`; yeni proje → yeni rezervasyon |
+| **K6** puan tablosu sürümlü | ✅ sürüm 2 kaydedilip aktif edildiğinde eski rezervasyon ve defter satırları **birebir aynı**, yeni iş 3× fiyatla açıldı |
+| **K7** tenant izolasyonu + roller | ✅ başka tenant'ın `balance`/`ledger`/`reservations`/`grants` uçları `404 BUSINESS_NOT_FOUND` (uydurma id ile **ayırt edilemez**); `admin`/`editor`/`viewer`/`approver` grant'te `403`; `admin`/`editor`/`viewer` bakiyeyi okuyabiliyor |
+| **K8** sayısal disiplin + `provider_usage` ilişkisi | ✅ krediler tam sayı (JSON float `400 REQUEST_VALIDATION_FAILED`), negatif bakiye trigger'la reddediliyor, ters işaretli/sürümsüz/rezervasyonsuz satır kısıtlarla reddediliyor, ikinci iade kısmi tekil index'le reddediliyor; rezervasyon ↔ `provider_usage` `correlation_id` ile joinleniyor (uçtan uca testte gerçek sağlayıcı kaydıyla) |
+| **K9** test sayısı + kontrat + `CLAUDE.md` | ✅ |
+| **K10** rapor + sürümler, **merge yok** | ✅ |
+
+Yeni test: `tests/unit/test_entitlement_unit.py` (54) · `tests/integration/test_entitlement.py`
+(34); ayrıca `test_content_lifecycle.py`'nin iki uçtan uca testine sonuçlandırma ve K4
+doğrulaması eklendi. `tests/unit/test_celery_publisher.py`'nin beat schedule beklentisine yeni
+girdi eklendi; 16 entegrasyon dosyasının teardown listesine iki yeni tablo yazıldı (yukarıdaki
+deadlock notu).
+
+### Açıkça belirtmem gerekenler
+
+1. **ADR numarası PM'in.** `ADR-017-entitlement-ledger.md` yazıldı (sıradaki boş numara) ve
+   `docs/adr/README.md` indeksine **eklenmedi**. Numara teyidi + indeks PM'de.
+2. **Park etmiş proje kredisi tutar.** İptal ucu 2F'de olduğu için `WAITING_MEDIA`'da bekleyen
+   proje hakkını süresiz tutuyor. Bugün çıkış yolu yok; ürün tarafında kabul edilebilir mi, PM
+   kararı.
+3. **Tekil uçlar ücretsiz.** İş emrinin kararı, ama üretimde gerçek sağlayıcı bağlanmadan **önce**
+   kapatılması gereken bir açık — bu slice'ın var olma gerekçesinin aynısı.
+4. **Süpürme partisi sessiz kısaltma yapmıyor ama teorik bir starvation var:** en eskiden başlar
+   ve `ENTITLEMENT_SWEEP_BATCH_SIZE` ile sınırlıdır, dolayısıyla çok sayıda eski *canlı* hak
+   (park etmiş projeler) arkasındaki gerçek bir yetimi geciktirebilir. Parti dolduğunda sonuç
+   `batch_full` ile bunu bildiriyor. Süpürme zaten atomik sonuçlandırmanın üstünde bir yedek
+   olduğu için kabul edildi.
+5. **Puan tablosu kalibre değil** (STATUS'ta zaten kayıtlı açık). §12.4'ün örnek puanları
+   birebir alındı. Kalibrasyon **yeni bir sürüm** olarak gelmeli; eski satırlar sürümlerini
+   taşıdığı için yeniden yorumlanmaz.
+6. **`ENTITLEMENT_POINTS_VERSION` boot'ta doğrulanmıyor.** `core` `modules`'e bağımlılık
+   veremediği için (core/CLAUDE.md değişmezi) kayıtlı olmayan bir sürüme pinlemek ilk
+   rezervasyonda `PointTableError` ile patlar. Birim testi varsayılanın kayıtlı olduğunu pinliyor;
+   yine de bilinçli bir boşluk.
+7. **PostgreSQL sürümü.** Doğrulama konteynerde PostgreSQL **16.14** ile koştu (compose'un
+   mevcut imajı). W06 (PostgreSQL 18 geçişi) bekletilmiş durumda; advisory lock, kısmi tekil
+   index ve `plpgsql` trigger'ları sürümden bağımsız, ama not düşüyorum.
 
 ## Doğrulama
 

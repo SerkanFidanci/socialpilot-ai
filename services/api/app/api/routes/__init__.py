@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from app.api.routes.brands import router as brands_router
 from app.api.routes.businesses import router as businesses_router
 from app.api.routes.content import router as content_router
+from app.api.routes.entitlement import router as entitlement_router
 from app.api.routes.health import router as health_router
 from app.api.routes.identity import router as identity_router
 from app.api.routes.media import router as media_router
@@ -26,3 +27,4 @@ def register_routes(application: FastAPI) -> None:
     application.include_router(brands_router)
     application.include_router(media_router)
     application.include_router(content_router)
+    application.include_router(entitlement_router)

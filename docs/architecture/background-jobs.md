@@ -151,6 +151,7 @@ never depends on it, because every task re-derives its work from PostgreSQL.
 | `drain-content-projects` | `content.project.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
 | `sweep-content-qc` | `content.qc.drain` | `CELERY_BEAT_QC_SWEEP_INTERVAL_SECONDS` |
 | `sweep-abandoned-runs` | `content.pending.sweep` | `CELERY_BEAT_PENDING_SWEEP_INTERVAL_SECONDS` |
+| `sweep-entitlement-reservations` | `entitlement.reservation.sweep` | `CELERY_BEAT_ENTITLEMENT_SWEEP_INTERVAL_SECONDS` |
 | `recover-stale-jobs` | `operations.recovery.drain` | `CELERY_BEAT_RECOVERY_INTERVAL_SECONDS` |
 
 **Automatic QC got its producer in slice 2E, and the measurement W18 left behind is settled.**
@@ -190,7 +191,17 @@ cost is paid only on a tick that is about to run a whole QC job and the write co
 by every report. The anti-join itself stays as a second, independent statement of "one run per
 render": the column and the report are written together and can only diverge through a defect.
 
-**`content.pending.sweep` is now the one entry that cannot have a producer.** It settles script
+**`entitlement.reservation.sweep` maintains a set that should always be empty (slice W20).**
+A credit hold is settled inside the transaction that makes its content project terminal, so there
+is no window in which a finished project still holds credit and no crash that can create one.
+What this tick covers is the case atomicity cannot: a source row that no longer exists. It never
+guesses — a hold is released only when the module that owns the work says the work is over,
+through `ReservationSourceProbe`, so age alone is never evidence. `ENTITLEMENT_RESERVATION_SWEEP_AGE_SECONDS`
+is validated at startup to exceed one lifecycle step timeout, and the batch is capped by
+`ENTITLEMENT_SWEEP_BATCH_SIZE`; a full batch is **reported** in the task result (`batch_full`)
+rather than silently truncated, because a truncated sweep reads exactly like a clean one.
+
+**`content.pending.sweep` is the other entry that cannot have a producer.** It settles script
 and voiceover rows that opened before a provider call and never came back, and nothing emits an
 event for a process dying mid-call — an absence is only observable on a tick. Its age threshold
 (`LIFECYCLE_PENDING_SWEEP_AGE_SECONDS`) is validated at startup to exceed the longest honest run

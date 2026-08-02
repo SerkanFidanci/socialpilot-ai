@@ -46,7 +46,9 @@ async def clear_identity_tables() -> None:
     try:
         async with engine.begin() as connection:
             await connection.execute(
-                text("TRUNCATE business_members, businesses, external_identities, users CASCADE")
+                text(
+                    "TRUNCATE credit_ledger, usage_reservations, business_members, businesses, external_identities, users CASCADE"
+                )
             )
     finally:
         await engine.dispose()

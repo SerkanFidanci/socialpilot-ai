@@ -66,6 +66,8 @@ requires_storage = pytest.mark.skipif(
 requires_ffmpeg = pytest.mark.skipif(not Path(FFMPEG).exists(), reason="requires the ffmpeg binary")
 
 TABLES = (
+    "credit_ledger",
+    "usage_reservations",
     "content_project_transitions",
     "content_projects",
     "render_qc_reports",
@@ -337,6 +339,24 @@ class Tenant:
                 business=self.business_id,
             )[0][0]
         )
+        # Every generation draws on the credit ledger from W20 onward, so a seeded tenant needs
+        # credit before it can open anything. Enough for the projects these tests run; the
+        # ledger's own behaviour is exercised in `test_entitlement.py`, not here.
+        self.grant_credits(500)
+
+    def grant_credits(self, credits: int, *, headers: dict[str, str] | None = None) -> Any:
+        return self.client.post(
+            f"/v1/businesses/{self.business_id}/entitlement/grants",
+            headers=headers or self.headers,
+            json={"credits": credits},
+        )
+
+    def balance(self) -> int:
+        response = self.client.get(
+            f"/v1/businesses/{self.business_id}/entitlement/balance", headers=self.headers
+        )
+        assert response.status_code == 200, response.text
+        return int(response.json()["balance_credits"])
 
     def seed_asset(self, *, duration_ms: int, video: Path | None = None) -> str:
         """An analyzed, renderable asset, with its bytes in storage when one is supplied."""
@@ -608,6 +628,33 @@ def test_a_project_walks_from_planned_to_preview_ready_with_every_step_recorded(
         "SELECT count(*) FROM render_outputs WHERE qc_claimed_at IS NULL AND status = 'succeeded'"
     ) == [(0,)]
 
+    # W20: the preview exists, so the hold this project opened is consumed (PRD §12.7). The
+    # settlement rode the same transaction that made the project terminal, so there is no tick
+    # to wait for and no window in which a finished project still holds credit.
+    hold = query(
+        "SELECT status, credits, correlation_id FROM usage_reservations"
+        " WHERE source_id = CAST(:id AS uuid)",
+        id=project_id,
+    )
+    assert len(hold) == 1
+    assert hold[0][0] == "consumed"
+    # One charge and no refund: the grant, one `consume`, nothing else.
+    assert [
+        row[0]
+        for row in query(
+            "SELECT entry_type FROM credit_ledger WHERE business_id = CAST(:b AS uuid)"
+            " ORDER BY created_at, id",
+            b=tenant.business_id,
+        )
+    ] == ["grant", "consume"]
+    # Criterion 8's relation, on real data: the provider calls this project actually made carry
+    # the reservation's correlation id, so what was charged joins to what it cost.
+    spend = query(
+        "SELECT count(*) FROM provider_usage WHERE correlation_id = :correlation",
+        correlation=hold[0][2],
+    )
+    assert spend[0][0] > 0
+
 
 # --- criterion 3: speech is actually in the output --------------------------------------------------
 
@@ -817,6 +864,33 @@ def test_a_render_that_never_passes_quality_control_stops_at_the_configured_ceil
     events = [row[3] for row in transitions(project_id)]
     assert events.count(ProjectEvent.RETRY_REQUESTED.value) == 1
     assert events[-1] in {ProjectEvent.QC_FAILED.value, ProjectEvent.STEP_FAILED.value}
+
+    # W20, and this is K4 observed rather than argued: the project rendered twice and was
+    # charged once. The second render is a re-render of the same timeline — no provider was
+    # called and nothing new was generated — so it draws on the revision quota rather than on a
+    # fresh generation right.
+    ledger = [
+        tuple(row)
+        for row in query(
+            "SELECT entry_type, delta_credits FROM credit_ledger"
+            " WHERE business_id = CAST(:b AS uuid) ORDER BY created_at, id",
+            b=tenant.business_id,
+        )
+    ]
+    assert [row[0] for row in ledger].count("consume") == 1
+    assert query("SELECT count(*) FROM render_outputs WHERE consumes_entitlement IS FALSE") == [
+        (1,)
+    ]
+    # And the whole thing failed technically, so the credit went back: released hold, one
+    # compensating refund, balance where it started.
+    hold = query(
+        "SELECT status, failure_code FROM usage_reservations WHERE source_id = CAST(:id AS uuid)",
+        id=project_id,
+    )
+    assert hold[0][0] == "released"
+    assert hold[0][1] == failure
+    assert [row[0] for row in ledger] == ["grant", "consume", "refund"]
+    assert sum(row[1] for row in ledger) == 500
 
 
 # --- criterion 7: the abandoned-run sweep ------------------------------------------------------------

@@ -235,6 +235,35 @@
         "title": "AudienceResponse",
         "type": "object"
       },
+      "BalanceResponse": {
+        "properties": {
+          "balance_credits": {
+            "title": "Balance Credits",
+            "type": "integer"
+          },
+          "business_id": {
+            "format": "uuid",
+            "title": "Business Id",
+            "type": "string"
+          },
+          "points_table_version": {
+            "title": "Points Table Version",
+            "type": "integer"
+          },
+          "reserved_credits": {
+            "title": "Reserved Credits",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "business_id",
+          "balance_credits",
+          "reserved_credits",
+          "points_table_version"
+        ],
+        "title": "BalanceResponse",
+        "type": "object"
+      },
       "BrandAssetPayload": {
         "additionalProperties": false,
         "properties": {
@@ -1132,6 +1161,17 @@
         "title": "CreateRequest",
         "type": "object"
       },
+      "CreditEntryType": {
+        "description": "The closed set of things that can appear in the ledger (PRD §32.4).\n\n`refund` is credit going back to the tenant. Today it has exactly one producer — a released\nreservation, PRD §12.7's `RESERVED --> RELEASED` — because there is no support surface yet\nthat can refund an already-consumed generation (§12.7's `CONSUMED --> REFUNDED`). The entry\ntype is the same either way; *why* is on the reservation the entry points at.",
+        "enum": [
+          "grant",
+          "consume",
+          "refund",
+          "expire"
+        ],
+        "title": "CreditEntryType",
+        "type": "string"
+      },
       "DiscountType": {
         "enum": [
           "percentage",
@@ -1139,6 +1179,34 @@
         ],
         "title": "DiscountType",
         "type": "string"
+      },
+      "GrantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credits": {
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Credits",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 96,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "credits"
+        ],
+        "title": "GrantRequest",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1201,6 +1269,118 @@
         ],
         "title": "JobStatus",
         "type": "string"
+      },
+      "LedgerEntryResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delta_credits": {
+            "title": "Delta Credits",
+            "type": "integer"
+          },
+          "entry_type": {
+            "$ref": "#/components/schemas/CreditEntryType"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "points_table_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Points Table Version"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reservation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reservation Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "entry_type",
+          "delta_credits",
+          "points_table_version",
+          "source_type",
+          "source_id",
+          "reservation_id",
+          "reason",
+          "created_at"
+        ],
+        "title": "LedgerEntryResponse",
+        "type": "object"
+      },
+      "LedgerPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "LedgerPageResponse",
+        "type": "object"
       },
       "LiveHealthResponse": {
         "description": "Response for process-only liveness.",
@@ -2822,6 +3002,119 @@
           "revision"
         ],
         "title": "RenderTrigger",
+        "type": "string"
+      },
+      "ReservationPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReservationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ReservationPageResponse",
+        "type": "object"
+      },
+      "ReservationResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credits": {
+            "title": "Credits",
+            "type": "integer"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "point_kind": {
+            "title": "Point Kind",
+            "type": "string"
+          },
+          "points_table_version": {
+            "title": "Points Table Version",
+            "type": "integer"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled At"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReservationStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "credits",
+          "points_table_version",
+          "point_kind",
+          "source_type",
+          "source_id",
+          "failure_code",
+          "created_at",
+          "settled_at"
+        ],
+        "title": "ReservationResponse",
+        "type": "object"
+      },
+      "ReservationStatus": {
+        "description": "PRD §12.7's lifecycle, minus the states this slice has no producer for.\n\n`AVAILABLE` and `EXPIRED` are properties of a *window*, not of a reservation, and\n`ROLLED_OVER` needs the billing period Phase 3 brings. What remains is the part §12.8\ndescribes step by step: open a reservation, do the work, consume it or let it go.",
+        "enum": [
+          "reserved",
+          "consumed",
+          "released"
+        ],
+        "title": "ReservationStatus",
         "type": "string"
       },
       "ScenarioCode": {
@@ -6818,6 +7111,542 @@
         "summary": "Request Render",
         "tags": [
           "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/entitlement/balance": {
+      "get": {
+        "description": "Read how much credit this business has left, derived from its ledger",
+        "operationId": "read_balance_v1_businesses__business_id__entitlement_balance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Balance",
+        "tags": [
+          "entitlement"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/entitlement/grants": {
+      "post": {
+        "description": "Add credit to a business by hand. Owner only; the only credit source before Phase 3",
+        "operationId": "create_grant_v1_businesses__business_id__entitlement_grants_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerEntryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Grant",
+        "tags": [
+          "entitlement"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/entitlement/ledger": {
+      "get": {
+        "description": "List this business's credit movements newest first, with an opaque cursor",
+        "operationId": "list_ledger_v1_businesses__business_id__entitlement_ledger_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Ledger",
+        "tags": [
+          "entitlement"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/entitlement/reservations": {
+      "get": {
+        "description": "List this business's usage reservations — what credit is held, and by what",
+        "operationId": "list_reservations_v1_businesses__business_id__entitlement_reservations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ReservationStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Reservations",
+        "tags": [
+          "entitlement"
         ]
       }
     },

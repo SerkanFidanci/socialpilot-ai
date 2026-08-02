@@ -21,6 +21,12 @@ class Permission(StrEnum):
     # do neither. Folding generation into `business.update` would lock editors out; folding it
     # into `media.upload` would make the table lie about what the permission means.
     CONTENT_GENERATE = "content.generate"
+    # Writing credits into a tenant's ledger. Held by the owner alone — not by an admin, who may
+    # otherwise do everything an owner can except end the business. The reason is the same one:
+    # a grant is money, and until Phase 3 connects a store there is no receipt behind it, so the
+    # only hand that should be able to create one is the hand that pays. Spending credits needs
+    # no permission of its own; it happens as a side effect of `content.generate`.
+    ENTITLEMENT_GRANT = "entitlement.grant"
 
 
 ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {

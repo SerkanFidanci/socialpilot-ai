@@ -127,7 +127,7 @@ async def clear() -> None:
                     # prompt version and it is platform configuration, not tenant data. Wiping
                     # it here would leave every script generation in the suite with no active
                     # template to run under.
-                    "TRUNCATE render_qc_reports, provider_usage, voiceover_assets, "
+                    "TRUNCATE credit_ledger, usage_reservations, render_qc_reports, provider_usage, voiceover_assets, "
                     "content_scripts, render_outputs, content_timelines, "
                     "brand_assets, target_audiences, approved_ctas, approved_claims, "
                     "forbidden_claims, campaign_offer_products, campaign_offers, product_prices, "

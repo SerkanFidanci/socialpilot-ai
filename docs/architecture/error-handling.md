@@ -298,6 +298,31 @@ observed this one fail** — that absence is the fact:
 | `SCRIPT_GENERATION_ABANDONED` | A `content_scripts` row stayed `pending` past `LIFECYCLE_PENDING_SWEEP_AGE_SECONDS`. |
 | `VOICEOVER_ABANDONED` | The same for `voiceover_assets`. Any audio the partial run stored is still recorded on the row. |
 
+## Entitlement and the credit ledger (PRD §12.4, §12.7, §12.8 — slice W20)
+
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 402 | `ENTITLEMENT_INSUFFICIENT_CREDITS` | The tenant's derived balance is below what this generation costs, so the work is **not created**. `meta` carries `required_credits`, `available_credits`, `points_table_version` and `point_kind` — the price list in force is part of the answer, because "why did this cost five" has to be answerable after the prices move. Never another tenant's numbers: the balance is read under the authorized tenant. |
+| 409 | `ENTITLEMENT_RESERVATION_CONFLICT` | A settlement was applied to a reservation that had already settled **the other way** — one caller says the work delivered and another says it did not. Applying the *same* outcome twice is a replay and succeeds silently without writing an entry; only the contradiction is an error, because in an append-only ledger a second refund is permanent. |
+| 422 | `ENTITLEMENT_GRANT_INVALID` | A manual grant outside `ENTITLEMENT_MAX_GRANT_CREDITS`. Amounts that are not whole positive numbers are rejected earlier, by the request schema, as `REQUEST_VALIDATION_FAILED` (400) — a JSON float is refused rather than coerced, for the reason `core.money` documents. |
+
+Failure codes recorded on `usage_reservations.failure_code`, which is why a hold was released.
+The code is the project's own failure code when there is one, so the ledger and the project agree
+about the reason without either one restating it:
+
+| Code | Meaning |
+|---|---|
+| A content project's `failure_code` | The project failed and its hold was released in the same transaction. Every `PROJECT_*` code above appears here unchanged. |
+| `ENTITLEMENT_RESERVATION_ABANDONED` | The reconciliation sweep released a hold whose source no longer exists. Distinct from every settled failure for the same reason slice 2E's abandoned-run codes are: **nobody observed this one end**. In a healthy system this code is never written — settlement is atomic with the project's terminal transition — so its presence is a signal, not noise. |
+
+Two constraint violations reach the client as `500 INTERNAL_ERROR` and are listed here because
+they are the last line rather than an expected path. Both mean a code path bypassed the service:
+
+| Constraint | What it refuses |
+|---|---|
+| `trg_credit_ledger_non_negative` | An entry that would take the tenant's balance below zero (PRD §32.4). The mechanism that normally prevents this is the tenant advisory lock; the trigger makes forgetting it fatal rather than expensive. |
+| `trg_credit_ledger_append_only` | Any `UPDATE` or `DELETE` on `credit_ledger`. Corrections are new entries. |
+
 ## Mapping and logging
 
 - Domain/application errors are typed and mapped in one HTTP exception boundary; controllers do not construct ad hoc error payloads.

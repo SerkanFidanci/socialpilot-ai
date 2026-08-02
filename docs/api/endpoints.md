@@ -3,7 +3,7 @@
 <!-- ÜRETİLMİŞ DOSYA — elle düzenlenmez. Kaynak: docs/generated/openapi.json
      Üreten: services/api/scripts/generate_endpoints_doc.py (`make generate-docs`) -->
 
-**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **41 endpoint**
+**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **45 endpoint**
 
 > Bu dosya [`../generated/openapi.json`](../generated/openapi.json) yerine okunur:
 > aynı kontrat, ~%98 daha az token. Şema/alan detayı gerekiyorsa tek endpoint'i
@@ -76,6 +76,15 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 | `GET` | `/v1/businesses/{business_id}/voiceovers` | List this business's voiceovers newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `POST` | `/v1/businesses/{business_id}/voiceovers` | Voice one generated script (PRD §14.8), synchronously, one object per line | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
 | `GET` | `/v1/businesses/{business_id}/voiceovers/{voiceover_id}` | Read one voiceover: its measured segments, its drift, and its provenance | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+
+## entitlement
+
+| Metot | Yol | Amaç | Yetki | Idempotency | Başarı |
+|---|---|---|---|---|---|
+| `GET` | `/v1/businesses/{business_id}/entitlement/balance` | Read how much credit this business has left, derived from its ledger | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/entitlement/grants` | Add credit to a business by hand. Owner only; the only credit source before Phase 3 | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
+| `GET` | `/v1/businesses/{business_id}/entitlement/ledger` | List this business's credit movements newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `GET` | `/v1/businesses/{business_id}/entitlement/reservations` | List this business's usage reservations — what credit is held, and by what | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 
 ## identity — kimlik
 

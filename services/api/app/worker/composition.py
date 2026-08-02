@@ -47,6 +47,7 @@ from app.infrastructure.storage import create_storage
 from app.modules.content.project_service import (
     AbandonedRunSweeper,
     ContentProjectAdvanceService,
+    ContentProjectReservationProbe,
 )
 from app.modules.content.qc import MediaQcProbePort, VisualQcPort
 from app.modules.content.qc_service import ContentQcService
@@ -54,6 +55,7 @@ from app.modules.content.render import RenderPort
 from app.modules.content.render_service import ContentRenderService
 from app.modules.content.script import ScriptGenerationPort
 from app.modules.content.tts import AudioProbePort, TTSPort
+from app.modules.entitlement.service import AbandonedReservationSweeper
 from app.modules.media.ingest import MediaIngestService
 from app.modules.media.scene_speech import SceneSpeechAnalysisService
 from app.modules.media.storage import MultipartStoragePort
@@ -189,6 +191,18 @@ class WorkerContext:
         """Settle `pending` provider runs nobody will ever come back to. No ports at all."""
 
         return AbandonedRunSweeper(session, self.settings)
+
+    def entitlement_sweeper(self, session: AsyncSession) -> AbandonedReservationSweeper:
+        """Release credit holds whose work can no longer settle them.
+
+        The probe is where the module boundary is kept: entitlement never queries
+        `content_projects`, it asks the module that owns them. Wiring the two together is this
+        composition root's job, exactly as it is for every capability port.
+        """
+
+        return AbandonedReservationSweeper(
+            session, self.settings, ContentProjectReservationProbe(session)
+        )
 
     def recovery_service(self, session: AsyncSession) -> JobRecoveryService:
         return JobRecoveryService(session, self.settings)
