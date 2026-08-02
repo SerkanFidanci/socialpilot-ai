@@ -12,7 +12,32 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**2026-08-02 · W20 merge edildi — Phase 2'nin 2A–2E'si tamam. head `0017`, dal koşusu 1325 pytest (PM tam koşusu sürüyor).**
+**2026-08-02 · W21 merge edildi — Phase 2'nin 2A–2F'si tamam. head `0018`, dal koşusu 1375 pytest (PM tam koşusu sürüyor).**
+
+**⚠️ Codex'in W20 turu tetiklendi ama HİÇBİR ÇIKTI BIRAKMADI** — W20 dosyasının "Doğrulama" bölümü hâlâ boş şablon, hiçbir dalda da yok. Yani W20 (kredi defteri) **bağımsız doğrulanmamış** durumda ve para muhasebesi tutan tek modül o. Bir sonraki turda mutlaka koşulmalı.
+
+**W21 (2F onay+revizyon):** politika **projeye** yazılıyor, canlı okunmuyor — gelecek ay gevşetilen bir ayar bugünkü ön izlemede neyin gerektiğini geriye dönük değiştirmemeli. Revizyonun sınıfı ve yeniden başlangıç noktası **iki ayrı** total fonksiyon. Adım idempotency anahtarı revizyonu adlandırıyor (`project:{id}:r{n}:script`) — aksi hâlde ikinci senaryo koşusu ilkini replay eder, yani müşteriye **reddettiği şeyi geri verirdi**. W20'nin iptal açığı kapandı ve `entitlement/service.py` hiç değişmedi (W20'nin `released` yolu tam bunun içindi).
+
+**W21'in yükselttiği üç şey — PM kararları:**
+1. `APPROVED`/`CANCELLED` durumları eklendi; **2G'nin kenarı `APPROVED → SCHEDULED`** (kabul, W22'ye yazıldı).
+2. "Küçük revizyon senaryo yeniden üretmez" ifadem **CTA ve başlık için yanlıştı** (metinler senaryo dokümanında ve seslendirmede). Oturum doğru davrandı: sınıf küçük kaldı, yeniden başlangıç senaryo. **WO hatası bende.**
+3. Onay politikası proje bazında; "işletme başına" katmanı §12.2 ile Phase 3'te.
+
+**Sıradaki üç tetikleme:**
+
+1. **W22 — Phase 2G planlayıcı** ([W22-content-planner.md](W22-content-planner.md), slot `0019`, taban 1375) — **Phase 2'nin son dilimi**:
+```
+docs/handoffs/W22-content-planner.md dosyasındaki iş emrini oku ve uygula. Protokol: docs/handoffs/README.md. Başlamadan önce docs/STATUS.md oku. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w22 ile çalıştır. Migration slotu sende (0019). Sahibi olmadığın dosyaya dokunma. Merge etme, dalda bırak.
+```
+2. **Codex — W20 + W21 birleşik turu** (W20 hiç doğrulanmadı):
+```
+docs/handoffs/W20-entitlement-ledger.md ve docs/handoffs/W21-approval-revision.md dosyalarını oku. Sen test edensin, özellik yazma. İkisi de main'de merge edildi. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-codex ile çalış. ÖNEMLİ: mevcut testleri koşmak doğrulama değildir — kendi girdilerini üret ve bulgularını dosyaların "Doğrulama" bölümüne yaz (geçen tur çıktı bırakılmamıştı). W20 hedefleri: aynı krediyi iki kez harcatmaya çalış (gerçek paralel transaction, advisory lock'u atlatmayı dene), iade edilmiş rezervasyonu tekrar iade ettir, negatif bakiye üret (trigger'ı atlat), başka tenant'ın defterine yaz/oku, saf yeniden render'ı ücretlendirt, puan tablosu sürümünü değiştirip eski satırların kredisini yeniden yorumlat, grant'i owner olmayan rolle kullan. W21 hedefleri: kotayı aşarak revizyon iste, saf yeniden render'ı kotadan düşürt, iptal edilmiş projeyi tekrar iptal et veya ilerlet, editor ile onayla, başka tenant'ın projesini onayla, ret notunu log'a/prompt'a sızdır, büyük revizyonu küçük saydırıp senaryo yeniden üretimini atlat. Araç zinciri sürümlerini yaz.
+```
+
+**Kuyruk:** W22 → **Phase 2 biter** → W06 (PG18+Valkey, D1) → Phase 3 (mağaza/ödeme, K1) → Phase 4 yayınlama (**Meta App Review başvurusunu erken aç** — haftalarla ölçülen dış süreç).
+
+<!-- arşiv -->
+**~~2026-08-02 · W20 merge edildi (1325 pytest, head 0017).~~**
 
 **W20 (kredi defteri):** bakiye `SUM(delta_credits)` — hiçbir yerde saklanmıyor ve entegrasyon testi bunu `information_schema` taramasıyla **zorluyor**. Append-only ve negatif-olamaz **veritabanı trigger'ı** (mekanizma değil yedek; asıl kesinlik tenant advisory lock'unda). Eşzamanlılık gerçek: 3 kredilik bakiyeye 10 paralel `create_project` → tam 3 başarı. Rezervasyon **projeye** bağlı olduğu için **K4 yapısal olarak sağlanıyor** — QC başarısızlığından doğan yeniden render yeni rezervasyon *açamıyor*. Puan tablosu import anında totallik istiyor: fiyatlanmamış bir render profili uygulamayı açtırmıyor ("fiyatlanmamış içerik bedava içeriktir").
 
