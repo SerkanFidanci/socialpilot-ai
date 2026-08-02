@@ -308,7 +308,7 @@ Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
 ## Rapor — takip düzeltmesi 2 · 2026-08-02 · yürüten oturum (Opus 5)
 
 **Dal:** `fix/w17-latin-fold` (`git merge main` ile `02455ef` üzerine güncellendi) ·
-**Commit:** `2ee0f3b` · **Durum:** tamamlandı, dalda bırakıldı
+**Commit:** `9e35a71` · **Durum:** tamamlandı, dalda bırakıldı
 
 ### 1 — Sayı sözcükleri liste, birleşimleri gramer
 
