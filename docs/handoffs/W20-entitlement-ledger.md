@@ -202,28 +202,32 @@ süpürücü girdisi).
 `docs/generated/openapi.json` + `docs/api/endpoints.md` `make generate-docs` ile yeniden üretildi.
 Worktree kökünde gitignore'lu bir `.env` var (yalnızca host port ayrımı) — commit edilmiyor.
 
-### Yol boyunca çıkan ve düzeltilen bir tuzak: TRUNCATE kilit sırası
+### Yanlış teşhis koyup düzelttiğim bir nokta (kayda geçsin)
 
-İlk tam koşu **5 düşen + 2 hata** verdi ve hiçbiri benim testlerimde değildi
-(`test_brand_catalog`, `test_celery_orchestration`). Kök sebep:
-`asyncpg.exceptions.DeadlockDetectedError` — bir teardown `TRUNCATE ... CASCADE`'i. Düşen dosyalar
-tek başlarına **geçiyordu**; birlikte koşunca değil.
+Ara bir tam koşu **5 düşen + 2 hata** verdi ve hiçbiri benim testlerimde değildi
+(`test_brand_catalog`, `test_celery_orchestration`); hata
+`asyncpg.exceptions.DeadlockDetectedError` — bir teardown `TRUNCATE ... CASCADE`'i, ve düşen
+dosyalar tek başlarına geçiyordu. İlk teşhisim şuydu: `businesses` iki yeni bağımlı tablo
+kazandığı için TRUNCATE'in kilit kümesi genişledi ve latent bir yarış görünür oldu. Buna göre
+**16 entegrasyon dosyasının** teardown listesine iki tabloyu başa yazdım ve koşu temiz geldi.
 
-Sebep benim değişikliğim: `businesses` iki yeni bağımlı tablo kazandı (`credit_ledger`,
-`usage_reservations`), dolayısıyla `TRUNCATE businesses CASCADE` artık onları da kilitliyor.
-`credit_ledger` **iki** ebeveyni birden gösterdiği için (`businesses` ve `usage_reservations`),
-bir tarafın satır kilitleriyle TRUNCATE'in tablo kilitleri arasında bir döngü kurulabiliyor.
-Latent olan bir yarış, kilit kümesi genişleyince görünür oldu. Bir teardown deadlock'ta düşünce
-veri sızıyor ve **sonraki dosya** yanlış sayı görüyor (`processed: 2 != 1`) — düşen testlerin
-benim dosyalarımda olmamasının sebebi bu.
+**Teşhis yanlıştı.** `main`'in `2f7cbc4` commit'i aynı arızayı zaten kayda geçmiş: *"earlier 8
+failures were two concurrent pytest processes"*. Bendeki de aynı şeydi — daha önce arka planda
+başlatıp durdurduğum bir koşunun konteyner tarafındaki `pytest`'i hayatta kalmış ve ikinci koşuyla
+aynı PostgreSQL üzerinde eşzamanlı TRUNCATE'ler atmıştı. Bir teardown deadlock'ta düşünce veri
+sızıyor ve sonraki dosya yanlış sayı görüyor (`processed: 2 != 1`) — düşen testlerin benim
+dosyalarımda olmamasının sebebi buydu.
 
-Düzeltme: **her** entegrasyon teardown'ında iki tablo listenin **başına** açıkça yazıldı (16
-dosya). Cascade'in kendi bulacağı sırayı kullanmak yerine adlandırmak, süitteki bütün
-TRUNCATE'lere aynı kilit sırasını verir. Tekrar koşu temiz.
+**Kontrol koşusu:** 16 dosyadaki değişikliği geri aldım, konteynerde başıboş `pytest` olmadığını
+`/proc` taramasıyla doğruladım ve tam süiti yeniden koştum → **1325 passed**. Yani değişiklik
+gereksizdi ve geri alındı. `credit_ledger`/`usage_reservations` yalnızca `test_entitlement.py` ve
+`test_content_lifecycle.py`'nin listelerinde adlandırılmış durumda — cascade zaten ulaşıyor,
+adlandırma o iki dosyanın "test neyden başlıyor" beyanının parçası.
 
-Not: bu, W19'un `test_content_lifecycle.py`'sinde de gerekli olacaktı; deadlock'un ilk turda
-yalnızca iki dosyada görünmesi zamanlamaya bağlıydı. Yeni bir tablo `businesses`'e bağlandığında
-aynı adımı atmak gerekiyor.
+**Ders (operasyonel):** `docker compose exec` ile başlatılan bir koşuyu yerelden durdurmak
+konteyner tarafındaki süreci öldürmüyor. Yeni bir tam koşu başlatmadan önce
+`/proc` taraması ile başıboş `pytest` olmadığı doğrulanmalı; aksi hâlde iki koşu aynı veritabanını
+paylaşıyor ve bu arıza başka bir şey gibi görünüyor.
 
 ### PRD ile ayrışma (metin değiştirilmedi, PM'e bırakıldı)
 
@@ -286,8 +290,7 @@ Alembic 1.18.5 · FastAPI 0.141.1 · Pydantic 2.13.4 · PostgreSQL 16.14 (kontey
 Yeni test: `tests/unit/test_entitlement_unit.py` (54) · `tests/integration/test_entitlement.py`
 (34); ayrıca `test_content_lifecycle.py`'nin iki uçtan uca testine sonuçlandırma ve K4
 doğrulaması eklendi. `tests/unit/test_celery_publisher.py`'nin beat schedule beklentisine yeni
-girdi eklendi; 16 entegrasyon dosyasının teardown listesine iki yeni tablo yazıldı (yukarıdaki
-deadlock notu).
+girdi eklendi. Başka hiçbir mevcut test dosyası değişmedi (yukarıdaki "yanlış teşhis" notu).
 
 ### Açıkça belirtmem gerekenler
 

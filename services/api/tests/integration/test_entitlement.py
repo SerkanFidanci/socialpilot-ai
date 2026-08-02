@@ -66,10 +66,9 @@ requires_postgres = pytest.mark.skipif(
 )
 
 TABLES = (
-    # First, always, and in this order in every integration teardown in the suite. `businesses`
-    # gained two dependent tables in migration 0017, so `TRUNCATE ... CASCADE` reaches them
-    # whether or not they are named; naming them puts every teardown on the same lock order,
-    # which is what keeps two of them from deadlocking against each other.
+    # Named rather than left to the cascade. `TRUNCATE businesses CASCADE` would reach both
+    # anyway, but this list is the file's statement of what a test starts from, and these two
+    # are what this file is about.
     "credit_ledger",
     "usage_reservations",
     "content_project_transitions",

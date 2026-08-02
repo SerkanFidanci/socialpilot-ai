@@ -31,11 +31,7 @@ async def clear() -> None:
     engine = create_async_engine(os.environ["DATABASE_URL"])
     try:
         async with engine.begin() as connection:
-            await connection.execute(
-                text(
-                    "TRUNCATE credit_ledger, usage_reservations, provider_usage, businesses, users CASCADE"
-                )
-            )
+            await connection.execute(text("TRUNCATE provider_usage, businesses, users CASCADE"))
     finally:
         await engine.dispose()
 

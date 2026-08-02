@@ -66,6 +66,9 @@ requires_storage = pytest.mark.skipif(
 requires_ffmpeg = pytest.mark.skipif(not Path(FFMPEG).exists(), reason="requires the ffmpeg binary")
 
 TABLES = (
+    # A project reserves credit from W20 onward, so a test that starts from a clean tenant has
+    # to start from a clean ledger. Reached by the cascade below in any case; named because the
+    # list is what a reader checks against.
     "credit_ledger",
     "usage_reservations",
     "content_project_transitions",

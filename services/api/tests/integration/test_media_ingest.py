@@ -93,7 +93,7 @@ async def clear() -> None:
         async with engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE credit_ledger, usage_reservations, media_malware_scans, media_ingest_inspections, audit_logs, "
+                    "TRUNCATE media_malware_scans, media_ingest_inspections, audit_logs, "
                     "idempotency_keys, job_attempts, jobs, outbox_events, media_upload_sessions, "
                     "media_assets, business_members, businesses, external_identities, users CASCADE"
                 )

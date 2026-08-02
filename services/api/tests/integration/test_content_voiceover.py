@@ -43,12 +43,6 @@ pytestmark = pytest.mark.integration
 
 KEY = "test-local-identity-signing-key-123"
 TABLES = (
-    # First, always: `businesses` gained two dependent tables in migration 0017, so
-    # `TRUNCATE ... CASCADE` now reaches them. Naming them here rather than letting the
-    # cascade find them gives every teardown in the suite the same lock order, which is
-    # what keeps two of them from deadlocking against each other.
-    "credit_ledger",
-    "usage_reservations",
     "voiceover_assets",
     "content_timelines",
     "content_scripts",
