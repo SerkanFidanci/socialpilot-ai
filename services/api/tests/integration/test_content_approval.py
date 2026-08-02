@@ -965,16 +965,23 @@ def test_a_policy_that_asks_for_nobody_records_an_automatic_approval() -> None:
         assert [tuple(row) for row in rows] == [
             ("auto_approved", "campaign_only", None, None, None)
         ]
-        # Terminal: no due time, and the sequencer will not pick it up again.
+        # `approved` stopped being terminal in slice 2G — the planner gives it a publication slot
+        # — so it still carries a due time. What is over is the *decision*: the sequencer has
+        # nothing left to compute here and nothing further may be decided about it.
         assert (
             query(
-                "SELECT next_check_at FROM content_projects WHERE id = CAST(:id AS uuid)",
+                "SELECT next_check_at, scheduled_publish_at FROM content_projects WHERE id ="
+                " CAST(:id AS uuid)",
                 id=project_id,
-            )[0][0]
+            )[0][1]
             is None
         )
-        # And nothing further may be decided about it.
         assert tenant.decide(project_id, approved=True).status_code == 409
+        # And however many times the sequencer looks at it, it stays approved: the edge out of
+        # this state is the planner's.
+        for _ in range(3):
+            advance_once(settings)
+        assert state_of(project_id) == ProjectState.APPROVED.value
 
 
 @requires_postgres

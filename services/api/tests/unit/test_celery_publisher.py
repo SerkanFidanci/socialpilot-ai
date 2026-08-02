@@ -148,6 +148,9 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
             celery_beat_pending_sweep_interval_seconds=55,
             celery_beat_entitlement_sweep_interval_seconds=66,
             celery_beat_project_sweep_interval_seconds=77,
+            celery_beat_planner_plan_interval_seconds=88,
+            celery_beat_planner_dispatch_interval_seconds=99,
+            celery_beat_planner_schedule_interval_seconds=111,
         )
     )
     schedule = application.conf.beat_schedule
@@ -163,6 +166,9 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
         "sweep-abandoned-runs": "content.pending.sweep",
         "sweep-abandoned-projects": "content.project.sweep",
         "sweep-entitlement-reservations": "entitlement.reservation.sweep",
+        "plan-content-obligations": "planner.obligations.plan",
+        "dispatch-content-obligations": "planner.obligations.dispatch",
+        "schedule-approved-projects": "planner.projects.schedule",
         "recover-stale-jobs": "operations.recovery.drain",
     }
     assert schedule["dispatch-outbox"]["schedule"] == 11
@@ -175,6 +181,12 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
     assert schedule["sweep-abandoned-runs"]["schedule"] == 55
     assert schedule["sweep-entitlement-reservations"]["schedule"] == 66
     assert schedule["sweep-abandoned-projects"]["schedule"] == 77
+    # Slice 2G's three planner drains each carry their own interval, and they differ on purpose:
+    # planning waits out a date, conversion and scheduling are the whole latency budget between a
+    # tick and a customer seeing something, so both run far more often.
+    assert schedule["plan-content-obligations"]["schedule"] == 88
+    assert schedule["dispatch-content-obligations"]["schedule"] == 99
+    assert schedule["schedule-approved-projects"]["schedule"] == 111
     assert {
         schedule[name]["schedule"]
         for name in schedule
@@ -186,6 +198,9 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
             "sweep-abandoned-runs",
             "sweep-abandoned-projects",
             "sweep-entitlement-reservations",
+            "plan-content-obligations",
+            "dispatch-content-obligations",
+            "schedule-approved-projects",
         }
     } == {22}
 
@@ -234,3 +249,34 @@ def test_the_abandoned_run_sweep_is_the_one_tick_that_can_have_no_event() -> Non
     }
     assert "content.pending.sweep" in scheduled
     assert "content.pending.sweep" not in set(DRAIN_TASK_BY_EVENT.values())
+
+
+def test_the_planner_drains_run_on_ticks_alone_and_the_first_one_has_to() -> None:
+    """Slice 2G adds three unrouted beat entries. Only one of them is unroutable in principle.
+
+    `planner.obligations.plan` joins the two sweeps above: nothing emits "a new period began",
+    and a tick is the only thing that can observe the arrival of a date. The other two *could*
+    have producers — an obligation being planned could wake the dispatcher, an approval could
+    wake the scheduler — and do not in this slice, because the outbox envelope was not this work
+    order's file to change. That makes their intervals the whole latency budget, which is why
+    both are asserted to be far shorter than the planning tick.
+    """
+
+    application = create_celery_app(settings())
+    schedule = application.conf.beat_schedule
+    routed = set(DRAIN_TASK_BY_EVENT.values())
+    for task in (
+        "planner.obligations.plan",
+        "planner.obligations.dispatch",
+        "planner.projects.schedule",
+    ):
+        assert task in {entry["task"] for entry in schedule.values()}
+        assert task not in routed
+    assert (
+        schedule["dispatch-content-obligations"]["schedule"]
+        < schedule["plan-content-obligations"]["schedule"]
+    )
+    assert (
+        schedule["schedule-approved-projects"]["schedule"]
+        < schedule["plan-content-obligations"]["schedule"]
+    )

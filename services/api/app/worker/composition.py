@@ -68,6 +68,11 @@ from app.modules.media.technical import (
 )
 from app.modules.media.video_understanding_service import VideoUnderstandingService
 from app.modules.operations.service import JobRecoveryService, OutboxDispatchService
+from app.modules.planner.service import (
+    ObligationDispatchService,
+    ObligationPlanningService,
+    ProjectSchedulingService,
+)
 from app.worker.scratch import WorkerScratchGuard
 
 
@@ -201,6 +206,28 @@ class WorkerContext:
         """
 
         return AbandonedProjectSweeper(session, self.settings)
+
+    def planner_planning_service(self, session: AsyncSession) -> ObligationPlanningService:
+        """Materialise §13.1 obligations. No ports, and none of the three services below has one.
+
+        The planner calls no provider and touches no media: it reads a catalogue, a clock and a
+        timezone, and writes rows. The one thing it can *cause* — a generation — happens through
+        `ContentProjectService`, with that service's own authorization and its own reservation.
+        """
+
+        return ObligationPlanningService(session, self.settings)
+
+    def planner_dispatch_service(self, session: AsyncSession) -> ObligationDispatchService:
+        """Convert the highest-ranked obligation into a project. The one step that spends credit —
+        and it spends it by calling the service that already knows how, inside that service's own
+        transaction, so an obligation cannot be converted without a hold behind it."""
+
+        return ObligationDispatchService(session, self.settings)
+
+    def planner_scheduling_service(self, session: AsyncSession) -> ProjectSchedulingService:
+        """Give approved content a slot, and keep the plan honest about projects that ended."""
+
+        return ProjectSchedulingService(session, self.settings)
 
     def entitlement_sweeper(self, session: AsyncSession) -> AbandonedReservationSweeper:
         """Release credit holds whose work can no longer settle them.

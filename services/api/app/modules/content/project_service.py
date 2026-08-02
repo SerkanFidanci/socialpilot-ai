@@ -74,7 +74,7 @@ from app.modules.content.lifecycle import (
     decide_after_render_failure,
     is_terminal,
     require_next_state,
-    waits_for_user,
+    waits_for_handoff,
 )
 from app.modules.content.models import (
     ContentApproval,
@@ -157,6 +157,10 @@ _SOURCE_OUTCOMES: Final[dict[ProjectState, SourceOutcome]] = {
     ProjectState.WAITING_APPROVAL: SourceOutcome.RUNNING,
     ProjectState.REVISION_REQUESTED: SourceOutcome.RUNNING,
     ProjectState.APPROVED: SourceOutcome.DELIVERED,
+    # Slice 2G's terminal state. Reachable only from `approved`, which is reachable only from
+    # `preview_ready`, so the delivered branch answers for it in practice — mapped anyway, for the
+    # reason the two above it are.
+    ProjectState.SCHEDULED: SourceOutcome.DELIVERED,
     ProjectState.FAILED: SourceOutcome.ABANDONED,
     ProjectState.CANCELLED: SourceOutcome.ABANDONED,
 }
@@ -833,10 +837,10 @@ class ContentProjectAdvanceService:
                 revisions_requested=project.revisions_requested,
                 approval_policy=project.approval_policy,
                 requires_human_review=project.requires_human_review,
-                # A project waiting on a person is not a stalled job, so the ceiling that catches
-                # a step nobody will ever finish does not apply to it.
+                # A project whose next move belongs to a person or to the planner is not a stalled
+                # job, so the ceiling that catches a step nobody will ever finish does not apply.
                 expired=(
-                    not waits_for_user(project.state)
+                    not waits_for_handoff(project.state)
                     and age > self._settings.lifecycle_step_timeout_seconds
                 ),
             )
@@ -895,6 +899,12 @@ class ContentProjectAdvanceService:
             # themselves, exactly as `attach_media` does; the abandoned-project sweep is what
             # eventually notices a wait nobody ever ends.
             return _Step()
+        if claimed.state is ProjectState.APPROVED:
+            # Waiting on the planner, which owns `APPROVED --> SCHEDULED` because the publication
+            # slot is a §13 question — a business timezone, a quiet window, a standing demand —
+            # and none of that belongs in the sequencer. Doing nothing here is what keeps the
+            # dependency one-way: `planner` reads this module and this module does not read it.
+            return _Step()
         if claimed.state is ProjectState.RETRYING:
             # A retry keeps the script, the voiceover and the timeline — they are still valid,
             # and regenerating them would spend a provider call to reproduce the same words.
@@ -903,8 +913,8 @@ class ContentProjectAdvanceService:
                 events=(ProjectEvent.RETRY_STARTED,),
                 assignments={"render_id": None, "qc_report_id": None},
             )
-        # `PREVIEW_READY` and `FAILED` are terminal and are never claimed; reaching this line
-        # would mean the claim predicate and `is_terminal` disagreed.
+        # `SCHEDULED`, `FAILED` and `CANCELLED` are terminal and are never claimed; reaching this
+        # line would mean the claim predicate and `is_terminal` disagreed.
         raise LifecycleTransitionError(claimed.state, ProjectEvent.STEP_FAILED)
 
     async def _step_analyzing(self, claimed: _ClaimedProject) -> _Step:
@@ -1345,11 +1355,11 @@ class ContentProjectAdvanceService:
             # Something happened: look again immediately so a whole pipeline can run through in
             # one drain batch instead of one state per beat tick.
             return now
-        if waits_for_user(project.state):
-            # Nothing here will change until a person acts, and when they do they write an
-            # outbox event. Polling a project that is waiting on a customer at the same rate as
-            # one waiting on a render would spend a claim every few seconds, for months, to
-            # discover that the customer still has not uploaded anything.
+        if waits_for_handoff(project.state):
+            # Nothing here will change until a person or the planner acts, and both write an
+            # outbox event when they do. Polling a project that is waiting on a customer at the
+            # same rate as one waiting on a render would spend a claim every few seconds, for
+            # months, to discover that the customer still has not uploaded anything.
             return now + timedelta(seconds=self._settings.lifecycle_lease_seconds)
         if step.step_failed:
             return now + timedelta(

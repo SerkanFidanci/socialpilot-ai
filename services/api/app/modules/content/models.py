@@ -458,7 +458,7 @@ class ContentProject(Base):
             "ix_content_projects_due",
             "next_check_at",
             "id",
-            postgresql_where=text("state NOT IN ('approved', 'failed', 'cancelled')"),
+            postgresql_where=text("state NOT IN ('scheduled', 'failed', 'cancelled')"),
         ),
     )
 
@@ -549,6 +549,18 @@ class ContentProject(Base):
     # failed with `alternative_scene` is a queryable backlog for 2F/2G rather than a lost note.
     recommended_path: Mapped[RemediationPath] = mapped_column(
         _enum(RemediationPath, "qc_remediation_path")
+    )
+
+    # --- scheduling (PRD §13.1, §20, slice 2G) ------------------------------------------------
+    # When this content is meant to go out, in UTC. Written by the planner as the project leaves
+    # `approved`, and `NOT NULL` in `scheduled` by a check constraint — a scheduled project with
+    # no time would be a calendar entry with no date on it.
+    #
+    # It is a plain instant and not a reference to an obligation, which is what keeps this module
+    # independent of `planner`: the sequencer never asks where the time came from, and a project
+    # created by hand carries one just the same. The obligation, when there is one, points *here*.
+    scheduled_publish_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     state_entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

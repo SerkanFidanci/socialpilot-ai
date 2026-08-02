@@ -89,9 +89,203 @@ docs/architecture/ (planlayıcı bölümü — hangi dosyaya yazdığını bildi
 
 Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. ("Planlayıcı talep üretir, içerik üretmez" ayrımı ADR'lık.)
 
-## Rapor
+## Rapor — 2026-08-02 · Opus 5 / high
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/2g-content-planner` · **Commit'ler:** _(aşağıda)_ · **Durum:** tamamlandı, dalda
+
+### Yapılanlar
+
+**Yeni modül `modules/planner/**` (6 dosya + `CLAUDE.md`).** Saf yarı `obligation.py`'de: §13.1'in
+obligation durum makinesi (kapalı ve total), §13.2'nin on önceliği, §13.3'ün karma ölçümü, sessiz
+saat + yerel takvim aritmetiği, `ContentType → (ScenarioCode, RenderProfile)` eşlemesi (import
+anında total). Dünyaya dokunan yarı `service.py`'de, **üç ayrı servis** olarak — PM kararı 2'nin
+sınıf adlarına yazılmış hâli:
+
+1. `ObligationPlanningService` — ayakta duran talepten pencere obligation'ları. Yapıcısında ne
+   `EntitlementService` ne `ContentProjectService` var: planlama **para harcayamaz**.
+2. `ObligationDispatchService` — en yüksek sıradaki obligation → proje, `create_project` üzerinden
+   (yani rezervasyon projeyi yaratan transaction'da, W20'nin yolu). Kredi harcayan tek adım.
+3. `ProjectSchedulingService` — `APPROVED → SCHEDULED` + biten projelerin obligation'larını
+   uzlaştırma + kapanan pencerelerin süresini doldurma.
+
+**`content` tarafında dört dokunuş.** `ProjectState.SCHEDULED` + `ProjectEvent.SCHEDULED` ve
+`APPROVED → SCHEDULED` kenarı; terminal küme `{scheduled, failed, cancelled}` (yani **`approved`
+yeniden açıldı**, 2F'nin `preview_ready`'yi açtığı gibi); `waits_for_user` → `waits_for_handoff`
+(APPROVED da o kümede — planlayıcıyı beklemek durmuş bir iş değil); `content_projects
+.scheduled_publish_at` + `ck_content_project_scheduled_has_time`.
+
+**Migration `0019`.** İki enum swap (`ADD VALUE` kullanılamaz — yeni değeri *kullanan* kısıt ve
+index predicate'i aynı transaction'da), üç yeni tablo, beş yeni enum tipi, bir yeni proje sütunu,
+ve eski terminal kümeyi yazan üç nesnenin (kısmi claim index'i + iki check constraint) bir durum
+ileri taşınması. `approved`'daki mevcut projelere backfill ile due time veriliyor; zamanlama
+drain'i onları alıp slot veriyor. Downgrade `scheduled` durumunda proje varsa **reddediyor**
+(`0011`/`0018`'in cevabı).
+
+**Dokuz uç** (`/v1/businesses/{id}/planner/…`): ayarlar (GET/PUT), ayakta duran talep
+(POST/GET liste/GET tek/POST status), obligation (GET liste/GET tek/POST cancel), **sıralı plan**
+(her adayın on gerekçesiyle) ve **karma raporu**. Obligation *yaratan* veya *dönüştüren* uç
+bilerek yok: ikisi de bir saatin ve bir worker'ın işi, ve aynı etkiye giden ikinci bir yol
+§13.2'nin sırasıyla er ya da geç anlaşmazlığa düşerdi.
+
+**Üç beat girdisi + üç drain task'ı**, worker composition'a bağlı; hiçbiri sağlayıcı portu
+taşımıyor.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **§13.2/4 (geçmiş performans) ve §13.2/10 (özel günler):** alan açıldı, kural yazılmadı.
+  `RankContext.performance_score` ve `special_day_code` taşınıyor, **hiçbir şey okumuyor**, ikisi
+  de sabit katkı veriyor. `UNIMPLEMENTED_PRIORITIES` ikisini adlandırıyor ve iki test bunu
+  zorluyor: değer vermek hiçbir sırayı değiştirmiyor, ve dominance testinin o iki adımı "kuralı
+  yok" dalına düşüyor. Gerekçe WO'nun kendi gerekçesi (Phase 5 verisi / seçilmemiş takvim kaynağı).
+- **Yayınlama:** `SCHEDULED` son durak. `PUBLISHING` Phase 4.
+- **Abonelik kaleminin kendisi:** `planner_subscription_items` §12.2'nin **yer tutucusu**, elle
+  kuruluyor (W20'nin grant deseni). Obligation §13.1'in sütun adını (`subscription_item_id`)
+  koruyor, böylece Phase 3 bir FK'yi yeniden hedefliyor, PRD'nin adlandırdığı alanı yeniden
+  adlandırmıyor.
+- **Ürün/sahne seçimi:** ayakta duran talep ikisini de adlandırıyor. §13.2/6 bu yüzden bir
+  *sıralama cezası*, bir seçim kuralı değil — §13.2 adayları sıralıyor, icat etmiyor.
+- **`docs/index.md` / `docs/adr/README.md`:** WO'nun dediği gibi eklenmedi (aşağıda).
+
+### Doğrulama
+
+Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · alembic 1.18.5 · PostgreSQL 16.14 ·
+FFmpeg 7.1.5 · MinIO RELEASE.2025-04-22. Compose projesi `sp-w22`, **ayrı host portlarıyla** —
+`main`'in konteynerlerine dokunulmadı. Doğrulayan oturum aynısını şöyle kurar (dosya `.gitignore`
+kapsamında, bu yüzden commit'lenmedi):
+
+```
+COMPOSE_PROJECT_NAME=sp-w22
+POSTGRES_HOST_PORT=55532
+REDIS_HOST_PORT=56479
+MINIO_HOST_PORT=59200
+MINIO_CONSOLE_HOST_PORT=59201
+API_HOST_PORT=8100
+S3_PRESIGN_ENDPOINT_URL=http://127.0.0.1:59200
+```
+
+`docker compose --env-file .env.w22 up -d --build`, sonra
+`docker compose --env-file .env.w22 exec -T -e RUN_INTEGRATION_TESTS=1 -e STORAGE_ADAPTER=s3 api
+sh -c "cd /app/services/api && python -m pytest"`.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` + `ruff format --check` (app, tests, migrations, scripts) | ✅ temiz |
+| `mypy .` (strict) | ✅ 219 dosya, hata yok |
+| migration `upgrade head` → `downgrade base` → `upgrade head` | ✅ tek head (`0019_content_planner`) |
+| `pytest` (unit) | ✅ 1162 geçti |
+| `pytest tests/integration/test_content_planner.py` | ✅ 20 geçti (gerçek PostgreSQL + MinIO + FFmpeg) |
+| `pytest` (tam suite, `RUN_INTEGRATION_TESTS=1`, `STORAGE_ADAPTER=s3`) | ✅ **1459 geçti**, 0 başarısız, 0 atlandı (13 dk 54 sn) |
+| `make check-openapi` | ✅ kontrat yeniden üretildi ve commit'li (50 → **61 endpoint**) |
+
+Kabul kriterleri, sırayla:
+
+1. **`0019` up→down→up, tek head.** ✅ Zincir `0001→0019`, `alembic heads` tek satır.
+2. **Uçtan uca.** ✅ `test_a_standing_demand_becomes_a_scheduled_content_project`: seed'lenmiş
+   abonelik kalemi → obligation (§13.1'in dört anı, `generation_deadline_at < planned_publish_at`)
+   → proje (rezervasyon `reserved`, bakiye düştü) → **gerçek FFmpeg render + gerçek ffprobe QC** →
+   `waiting_approval` → onay → `SCHEDULED`. Geçiş tablosunun son satırı `('scheduled','scheduled')`,
+   obligation `fulfilled`.
+3. **İdempotency.** ✅ Üç ayrı test: ardışık ikinci koşu `planned: 0`; **gerçek paralel iki
+   transaction** biri `planned: 1` biri hiç (advisory lock + `SKIP LOCKED`); ve doğal anahtar
+   servisi devre dışı bırakarak doğrudan zorlandı (`uq_content_obligation_period`). Ayrıca
+   dönüşümün tekrarı: obligation `planned`'a geri alınıp yeniden dispatch edildiğinde **tek proje,
+   tek rezervasyon, değişmeyen bakiye**.
+4. **Sıralayıcı saf ve açıklanabilir.** ✅ Birim tarafında: on önceliğin **her ardışık çifti** için
+   dominance (üstteki en iyi + alttakilerin hepsi en kötü, yine kazanıyor), sıra bağımsızlığı,
+   eşitlik bozucular, kova sınırları. Uygulanmayan ikisi ayrı testle "alan var, kural yok".
+   Entegrasyon tarafında: `GET …/planner/plan` on gerekçeyi döndürüyor, kampanyalı aday
+   kullanıcının elle daha yüksek sıraladığı adayı yeniyor, ve **dispatcher planın birincisini
+   dönüştürüyor**.
+5. **Sessiz saat + timezone.** ✅ Pencereye düşen 23:00 → ertesi yerel 08:00 (iptal değil, kaydırma;
+   obligation hâlâ `planned`). Yerel gece yarısı, sarmalı pencerenin iki yarısı, boş pencere,
+   `Europe/Berlin`'de **ilerlemeyen yerel saate** kaydırma ve **ikilenen saatte** kaydırma, ve
+   DST günlerinin 23/25 saatlik uzunluğu birim testte; entegrasyonda gerçek `Europe/Berlin`
+   işletmesi yerel gece yarısı sınırları ve yerel öğlen slotu üretiyor. Kod TR'ye gömülü değil —
+   `resolve_timezone` bilinmeyen dilimi **UTC'ye düşürmüyor**, reddediyor.
+6. **Yetersiz bakiye.** ✅ Obligation `blocked` + `reason_code=ENTITLEMENT_INSUFFICIENT_CREDITS`,
+   `content_projects`/`usage_reservations`/`credit_ledger` **hepsi boş**, durum
+   `GET …/planner/obligations?status=blocked` ile okunuyor. Bakiye yüklenince aynı pencere
+   dönüşüyor (`blocked` bir ölüm değil bir durum).
+7. **Karma ölçülüyor, yargılanmıyor.** ✅ Kampanya payı hedefin çok üstündeyken bile kampanya
+   obligation'ı ilk dönüşen oluyor; sapma `GET …/planner/mix`'te raporlanıyor. Birim tarafında
+   `measure_mix`'in **başarısızlık modu yok**.
+8. **Tenant + roller + idempotency + imzalı URL.** ✅ Başka tenant'ın obligation'ı 404 (gerçek id
+   ile uydurma id aynı cevabı veriyor), cross-tenant cancel de 404. `editor` ve `viewer` planlayıcı
+   ayarlarını ve kalemlerini **yazamıyor** (403), ikisi de okuyabiliyor. Başka tenant'ın ürününü
+   adlandıran kalem yaratılışta reddediliyor. Kalem yaratma `Idempotency-Key` alıyor ve parmak izi
+   kanonik gövdeden; dönüşüm anahtarı obligation'dan türetiliyor. Planlayıcı hiçbir imzalı URL
+   görmüyor — depoya hiç dokunmuyor.
+9. **`make verify` yeşil; test sayısı 1459** (taban 1375'in üstünde); kontrat yeniden üretilip
+   commit'li; `modules/planner/CLAUDE.md` yazıldı.
+10. Rapor + araç zinciri sürümleri yukarıda. **Merge edilmedi, dalda bırakıldı.**
+
+### Açıkça belirtmem gerekenler
+
+**1. İlan dışı iki dosyaya dokundum, ikisi de zorunluydu.**
+
+- `services/api/app/infrastructure/database/metadata.py` — `MODEL_MODULES`'e `planner` eklendi
+  (bir satır). O dosyanın var olma sebebi "hangi giriş noktası olursa olsun her tablo kayıtlı
+  olsun"; planlayıcıyı dışarıda bırakmak, worker'ın `verify_mapping_is_complete`'inin eksik bir
+  metadata üzerinde koşması demekti.
+- `services/api/tests/unit/{test_celery_publisher,test_content_lifecycle_unit,test_entitlement_unit}.py`
+  ve `services/api/tests/integration/test_content_approval.py` — dördü de ilan edilmiş
+  `tests/unit/` + `tests/integration/` altında; kaydediyorum çünkü **başka slice'ların** yazdığı
+  testler ve `approved`'ın terminal olmaktan çıkması dördünün de sabitlediği bir şeyi değiştirdi
+  (terminal küme, `waits_for_handoff` kümesi, `source_outcome`'un DELIVERED kümesi, ve W21'in
+  "otomatik onay sonrası due time yok" iddiası). Değişiklikler mekanik; her birinin gerekçesi
+  testin içinde yazılı. W21'in testinde iddia **zayıflatılmadı, taşındı**: artık "slot yok ve
+  sıralayıcı ne kadar bakarsa baksın `approved`'da kalıyor" diyor, çünkü oradan çıkaran kenar
+  planlayıcının.
+
+**2. ADR yazılmadı, numara ve dosya PM'e bırakıldı.** WO "planlayıcı talep üretir, içerik üretmez"
+ayrımını ADR'lık sayıyor ve haklı — ama `docs/adr/` ilan edilen dosya listesinde yok. Karar
+[`docs/architecture/content-planner.md`](../architecture/content-planner.md) §"Dört karar"da tam
+gerekçesiyle yazılı; ADR'a taşınması bir kopyalama işi. Aynı sebeple `docs/index.md` ve
+`docs/adr/README.md` indekslerine hiçbir şey eklenmedi (WO bunu zaten istiyordu).
+
+**3. Üç drain de yalnızca tick'le uyanıyor, ve bunun yalnızca biri ilkesel.**
+`planner.obligations.plan` için üretici *olamaz* — "yeni bir dönem başladı" diye olay yazan bir şey
+yok, ve bir tarihin gelişini gözleyebilen tek şey bir tick (W19/W21'in iki süpürmesiyle aynı
+gerekçe). `planner.obligations.dispatch` ve `planner.projects.schedule` için **olabilirdi**:
+planlanan bir obligation dispatcher'ı, bir onay zamanlayıcıyı uyandırabilirdi. Yapmadım çünkü
+outbox zarfı `infrastructure/celery_publisher.py`'de ve o dosya ilan listesinde yok. Bedeli
+gecikme, doğruluk değil; iki tick de kısa (60 s / 120 s) ve
+`test_the_planner_drains_run_on_ticks_alone_and_the_first_one_has_to` iddiayı sabitliyor.
+**PM'e:** bu, `celery_publisher.py`'ye iki satır ekleyen küçük bir takip işi.
+
+**4. `approved` terminal olmaktan çıktı — bu 2F'nin `preview_ready`'ye yaptığının aynısı ve
+sonuçları var.** (a) `can_cancel(APPROVED)` artık **true**: onaylanmış ama zamanlanmamış bir proje
+iptal edilebiliyor (§20'nin "terminal olmayan her yerden iptal" kuralının doğru sonucu).
+(b) `source_outcome(SCHEDULED)` = `DELIVERED`; ücretlendirme anı değişmedi (`preview_delivered_at`
+hâlâ `PREVIEW_READY`'de damgalanıyor), sonraki her `settle` `ALREADY_APPLIED`. (c) Migration
+mevcut `approved` projelere due time veriyor ve zamanlama drain'i onlara slot veriyor — planlayıcı
+yokken onaylanmış içeriğin doğru muamelesi.
+
+**5. Elle yaratılmış projeler de planlayıcıdan slot alıyor.** `approved` herkes için terminal
+olmaktan çıktığı için, hiçbir obligation'ın planlamadığı bir proje de zamanlanmak zorunda —
+yoksa hiçbir şeyin çıkmadığı bir durumda otururdu. Slot `PLANNER_MANUAL_PUBLISH_DELAY_SECONDS`
+(varsayılan 15 dk) sonrası, sessiz pencerenin dışına itilerek. Testte pinli.
+
+**6. `in_progress` terminal değil ama due time taşımıyor**, ve kısıt bunu söylüyor
+(`ck_content_obligation_due_matches_status`, claim index'iyle **aynı küme** üzerine yazıldı).
+İlk yazımda kısıt "terminal olanlar" üzerineydi ve entegrasyon testi bunu **gerçek bir hata**
+olarak yakaladı: obligation projeye dönüşünce yoklanmayı bırakıyor, çünkü artık dayanıklı iş
+projenin kendisi.
+
+**7. Bilerek bırakılan üç şey.**
+(a) `PLANNER_MANUAL_PUBLISH_DELAY_SECONDS`, `PLANNER_URGENT_WINDOW_SECONDS`,
+`MIX_TOLERANCE_POINTS` (5 puan) ve `PLANNER_REPETITION_WINDOW_DAYS` (14 gün) **tahmin**; hiçbiri
+ölçülmedi. Karma toleransı ve tekrar penceresi ürün kararı, ilk gerçek tenant'la gözden geçirilmeli.
+(b) `ContentType` bugün altı üye ve **hepsi** `ScenarioCode.PRODUCT_REELS`'e eşleniyor, çünkü §14'ün
+tek açık senaryosu o. §14.2/§14.5 geldiğinde değişecek tek tablo `_SURFACES`.
+(c) Bir standing item pencere başına **bir** obligation üretiyor (doğal anahtar bu). "Günde iki
+Reels" iki kalem demek — bilinçli, çünkü anahtarın üçüncü bir bileşeni (sıra numarası) idempotency
+argümanını zayıflatırdı.
+
+**8. `preference_rank` sınırsız değil ama sıralamada ham sayı.** 0–999 arası ve leksikografik
+anahtarın 9. bileşeni; yani bir tenant `preference_rank`'i 999 yaparak kendi adayını sona atabilir
+ama **1–8 arası önceliklerin hiçbirini** etkileyemez. Bu doğru taraf: §13.2/9 kullanıcı tercihini
+sekiz kuralın *altına* koyuyor.
 
 ## Doğrulama
 

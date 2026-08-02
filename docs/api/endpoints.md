@@ -3,7 +3,7 @@
 <!-- ÜRETİLMİŞ DOSYA — elle düzenlenmez. Kaynak: docs/generated/openapi.json
      Üreten: services/api/scripts/generate_endpoints_doc.py (`make generate-docs`) -->
 
-**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **50 endpoint**
+**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **61 endpoint**
 
 > Bu dosya [`../generated/openapi.json`](../generated/openapi.json) yerine okunur:
 > aynı kontrat, ~%98 daha az token. Şema/alan detayı gerekiyorsa tek endpoint'i
@@ -107,6 +107,22 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 | `POST` | `/v1/businesses/{business_id}/media/uploads/{upload_session_id}/parts` | Parts | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
 | `GET` | `/v1/businesses/{business_id}/media/{asset_id}` | Asset | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `GET` | `/v1/businesses/{business_id}/media/{asset_id}/processing-summary` | Return one tenant-scoped read of the whole analysis pipeline for a client screen | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+
+## planner
+
+| Metot | Yol | Amaç | Yetki | Idempotency | Başarı |
+|---|---|---|---|---|---|
+| `GET` | `/v1/businesses/{business_id}/planner/mix` | §13.3's distribution, measured against the target. A report, never a quota | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `GET` | `/v1/businesses/{business_id}/planner/obligations` | List §13.1's queue — including everything that is blocked, and why | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `GET` | `/v1/businesses/{business_id}/planner/obligations/{obligation_id}` | Read one obligation and the project it became, if it became one | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/planner/obligations/{obligation_id}/cancel` | Withdraw an obligation that has not become a project. Cancel the project otherwise | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
+| `GET` | `/v1/businesses/{business_id}/planner/plan` | §13.2's order over what is convertible now, with every priority's reason attached | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `GET` | `/v1/businesses/{business_id}/planner/settings` | Read this business's effective planning configuration, deployment defaults included | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `PUT` | `/v1/businesses/{business_id}/planner/settings` | Set the quiet window, the §13.3 targets and the planning horizon. Admin and owner only | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
+| `GET` | `/v1/businesses/{business_id}/planner/subscription-items` | List this business's standing demands, newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/planner/subscription-items` | Register a standing demand for content — §13.1's `subscription_item`, in the small | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
+| `GET` | `/v1/businesses/{business_id}/planner/subscription-items/{item_id}` | Read one standing demand | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/planner/subscription-items/{item_id}/status` | Pause or resume a standing demand. Obligations already planned are left alone | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
 
 ## Kapsam notu
 

@@ -361,6 +361,43 @@ they are the last line rather than an expected path. Both mean a code path bypas
 | `trg_credit_ledger_non_negative` | An entry that would take the tenant's balance below zero (PRD §32.4). The mechanism that normally prevents this is the tenant advisory lock; the trigger makes forgetting it fatal rather than expensive. |
 | `trg_credit_ledger_append_only` | Any `UPDATE` or `DELETE` on `credit_ledger`. Corrections are new entries. |
 
+## Content planner (PRD §13 — slice 2G)
+
+Request-time refusals from `/v1/businesses/{id}/planner/…`. Writing here is `business.update` and
+reading is `business.read`, so an editor's attempt to change the schedule lands on
+`INSUFFICIENT_PERMISSION` (403) from the shared boundary rather than on a code of its own.
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `PLANNER_ITEM_NOT_FOUND` | The standing demand does not exist in the authorized tenant. Another tenant's real id answers exactly like a made-up one — the query is tenant-scoped, so the two are indistinguishable by construction. |
+| 404 | `PLANNER_OBLIGATION_NOT_FOUND` | The same, for a `content_obligation`. |
+| 404 | `PLANNER_INPUT_NOT_FOUND` | A standing demand names a product, CTA, campaign or source asset that is not this tenant's. Checked when the item is created rather than on every conversion attempt, where it would produce an obligation that blocks forever. |
+| 409 | `PLANNER_TOO_MANY_ITEMS` | `PLANNER_MAX_ITEMS_PER_BUSINESS` standing demands already exist. `meta.max_items` carries the ceiling. |
+| 409 | `PLANNER_OBLIGATION_TRANSITION_NOT_ALLOWED` | Cancelling an obligation that is finished, or one that has already become a project. The second is the interesting case: the project holds a credit reservation, so withdrawing the queue entry would leave it running with nothing pointing at it. Cancelling the **project** is the way to stop that, with the project's own refund. |
+| 422 | `PLANNER_SETTINGS_INVALID` | A quiet-hour minute outside the day, or a §13.3 distribution that does not cover every category and sum to 100. A distribution with a hole in it would make one category's deviation unmeasurable. |
+| 422 | `PLANNER_ITEM_INVALID` | A publish minute outside the local day, or a negative lead time. |
+| 422 | `PLANNER_TOO_MANY_SOURCE_ASSETS` | More sources than `SCRIPT_GENERATION_MAX_SOURCE_ASSETS`. |
+
+Two codes are raised by the value layer and normally never reach a client, because they describe
+a world that should not exist. Both are refusals rather than fallbacks, and that is the decision:
+
+| Code | Meaning |
+|---|---|
+| `PLANNER_TIMEZONE_UNKNOWN` | The business's IANA timezone did not resolve — the host's tz database is older than the name. There is **no fall back to UTC**: silently defaulting would publish a Turkish café's evening post three hours early and tell nobody. |
+| `PLANNER_QUIET_HOURS_UNRESOLVED` | A publish slot could not be moved out of the quiet window even after the one-hour DST correction, which means the window itself is malformed. Refused rather than searched, so a bad setting cannot become an unbounded loop. |
+
+Codes recorded on `content_obligations.reason_code` — why an obligation is where it is. Never
+prose and never tenant text. Codes from other modules appear here unchanged, which is deliberate:
+a conversion refused for want of credit says exactly what the ledger said.
+
+| Code | Meaning |
+|---|---|
+| `ENTITLEMENT_INSUFFICIENT_CREDITS` | The tenant could not pay for this window. The obligation is `blocked` and **still convertible**: topping the balance up lets the next dispatch pass convert the same window. No project row, no reservation and no ledger entry exist — `create_project` reserves inside the transaction that creates the project, so the `402` took all three with it. |
+| Any other 4xx code from `create_project` | The same shape for a different reason: a product that is no longer this tenant's, a suspended business, a member who lost `content.generate`. |
+| `PLANNER_CONVERSION_ATTEMPTS_EXHAUSTED` | `PLANNER_DISPATCH_MAX_ATTEMPTS` transient failures in a row. The last provider-level code is deliberately not kept — the ceiling is the fact here. |
+| `PLANNER_WINDOW_CLOSED` | §13.1's window ended while the obligation was still waiting to become work. The obligation is `expired`; nothing was refused, the time ran out. |
+| `PLANNER_PROJECT_ENDED` | The project this obligation became failed or was withdrawn. The obligation is `cancelled` rather than left `in_progress`, which would make the planner believe that window is being served. |
+
 ## Mapping and logging
 
 - Domain/application errors are typed and mapped in one HTTP exception boundary; controllers do not construct ad hoc error payloads.
