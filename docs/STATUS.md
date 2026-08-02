@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| `main` | W01→W17 (takip düzeltmesi dahil) merge edildi, yalnız W06 bekliyor. **Senaryo dedektörü hattı kapandı** — 46.918 varyantlık taramada 0 kaçış, jeneratif regresyon testi var. Sırada: **W18 = Phase 2D otomatik QC** (+ paralel Codex teyit turu) |
+| `main` | W01→W17 merge edildi, yalnız W06 bekliyor. **İki sıcak oturum açık:** W18 (2D QC) Celery bağlantısını bekliyor (dalda, 1071 pytest) · W17 takip 2 — Codex yazılı sayı gramerinde 3 açık buldu (`bir buçuk lira`, `yüzbin lira`, `T Lye`) |
 | Alembic head | `0014_voiceover_assets` (tek head; zincir 0001→0014, up/down/up doğrulandı) |
 | Backend doğrulama | **947 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
@@ -134,8 +134,8 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W14](handoffs/W14-verification-followups-2.md) | **Doğrulama bulguları 2. tur** | **kapandı** · Codex turu döndü (2026-08-01): **1 kritik açık** — `extra` alanları redakte edilmiyor → **W16**; ek: `GoogleAccessId` maskelenmiyor (rapor iddiası hatalıydı) | dal silindi | Opus 5 / high | — |
 | [W15](handoffs/W15-tts-voiceover.md) | **Phase 2C** — seslendirme: `TTSPort` (fake), ffprobe ile ölçülmüş segment süreleri, timeline hizalaması | **KAPANDI** · merge · `0014` · **Codex doğrulaması geçti (6/6)** — serbest metin yolu yok, tenant sızıntısı yok, tavan çağrı öncesi duruyor, beyan ölçümü ezemiyor, idempotency kanonik, imza sızmıyor · **açık:** render adapter'ları `voiceover` kaynağını bildirmiyor → 2E | dal + worktree silindi | Opus 5 / high | kullanıldı |
 | [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | **iki tur da merge edildi** (2. tur: Latin dışı alfabe kısıtı `SCRIPT_UNSUPPORTED_CHARACTER`, görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde-kodlu adları görüyor) · **kapanış birleşik Codex turuna bağlı** (W17 sonrası) | `fix/verification-followups-3` (worktree duruyor, birleşik tur bitene kadar) | Opus 5 / high | — |
-| [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin harf katlaması (iki yön) + kalıp grameri** — `turk lirasi`+`ṬL`/`ŦL` tek katlamayla, ayrıştırılamayan Latin genişletmeleri fail-closed (ad-tabanlı), `T.L.`/`T L`, süslü rakamlar | **kapandı** · iki tur da merge edildi · **947 pytest** (PM koşusu) · çekim listesi yerine ek-alfabesi çapası (ekte `o`/`v`/`p` yok → "Eurovision"/"Kebap" güvende); 46.918 varyant / **0 kaçış**, jeneratif regresyon testi · yan kazanç: `yuzlerce lira`/`binlerce dolar` da yakalanıyor · kısa Codex teyidi bekliyor | `fix/w17-latin-fold` (worktree duruyor, teyide kadar) | Opus 5 / high | — |
-| [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4): deterministik ölçümler (açılış/süre/ses/loudness/siyah frame/donuk kare/kadraj/senkron/fiyat-tarih uyumu) + model kontrolleri port&fake · **fail-closed** (`unknown` → `needs_review`) · karar verir, eylem yapmaz (2E) · `forbidden_matcher` birleştirmesi | **şimdi** | `slice/2d-automatic-qc` | Opus 5 / high | **SENDE** (`0015`) |
+| [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin katlaması + kalıp grameri + Türkçe çekim** | iki tur merge edildi (947 pytest) · Codex takip-1 turu: çekim çapası tuttu (161/161 ek, 12/12 yanlış pozitif temiz) ama **yazılı sayı gramerinde 3 açık** → **takip düzeltmesi 2 AÇIK** (talimat WO dosyasında: kesirli/bitişik sayı bileşikleri gramerle, `T Lye` için ek zinciri gerçek Türkçe ek kümesine) | `fix/w17-latin-fold` (sıcak oturum) | Opus 5 / high | — |
+| [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4) · fail-closed · karar verir eylem yapmaz · `forbidden_matcher` birleştirmesi | **tamamlandı, dalda** (`a7951f1`) · **1071 pytest** (+124) · 13 kontrolün tamamı raporda, atlanamıyor; gerçek bozuk medya fixture'ları; karar tablosu permütasyonlarla tüketildi · **takip 1 AÇIK: Celery bağlantısı** (PM'in WO'sunda worker dosyaları listede yoktu — oturum doğru davranıp bildirdi) | `slice/2d-automatic-qc` (sıcak oturum) | Opus 5 / high | kullanıldı (`0015`) |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -143,7 +143,8 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| `modules/content/{qc,qc_service,models,repository,validation}.py`, `infrastructure/render/**`, `infrastructure/ai/fake_visual_qc.py`, `api/routes/content.py`, `core/config.py`, `migrations/0015_*`, `.env.example` | **W18** |
+| `modules/content/**` (QC), `infrastructure/render/**`, `infrastructure/ai/fake_visual_qc.py`, `api/routes/content.py`, `core/config.py`, `migrations/0015_*`, **`worker/**`, `infrastructure/celery_app.py`** | **W18 takip 1** |
+| `modules/content/script.py`, script test dosyaları | **W17 takip 2** |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

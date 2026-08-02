@@ -1,8 +1,20 @@
 # W18 — Phase 2D: Otomatik QC (§19.4)
 
 **Dal:** `slice/2d-automatic-qc` · **Base:** `main` · **Migration slotu: SENDE** (`0015`)
-**Durum:** hazır, tetiklenmedi
+**Durum:** tamamlandı (dalda) · **TAKİP 1 AÇIK — Celery bağlantısı** (aşağıdaki bölüm)
 **Model/effort:** Opus 5 / high
+
+## Takip 1 — Celery bağlantısı (PM, 2026-08-02)
+
+**Bu benim WO hatam, oturumun değil:** kapsam "ölçüm worker'da" diyordu ama dosya listesine worker dosyalarını koymamıştım. Oturum çelişkiyi sessizce çözmek yerine bildirdi — doğru davranış. İzin veriliyor, sıcak oturum aynı dalda (`slice/2d-automatic-qc`) tamamlıyor:
+
+1. **Dosya listesine eklendi:** `services/api/app/worker/composition.py`, `services/api/app/worker/tasks.py`, `services/api/app/infrastructure/celery_app.py` ve bunların testleri.
+2. Raporundaki yamayı uygula: `WorkerContext`'e `qc_probe` + `visual_qc`, `content_qc_service` fabrikası, `content.qc.drain` task'ı, beat girdisi.
+3. **`process_next()`'in kendi kendine tarama davranışı kalsın mı — senin kararın**, ama raporda gerekçelendir: beat tetiklemesi geldikten sonra tarama gereksiz bir tam-tablo taraması mı oluyor, yoksa kaçan render'lar için ikinci ağ mı? Ne seçersen davranış testli olsun.
+4. **Testler:** beat zamanlaması ve task kaydı diğer drain task'larıyla aynı disiplinde doğrulanır (mevcut worker testlerinin desenini izle); QC job'ı gerçekten beat üzerinden akıyor.
+5. `make verify` yeşil; taban **1071**'in altına düşmez; migration yok (`0015` zaten dalda). **Merge etme, dalda bırak.**
+
+Diğer her şey kabul edildi — aşağıdaki rapora ve doğrulama tablosuna dokunma.
 **Plan:** [Phase 2 planı](../plans/active/phase-2-content-generation.md) — slice 2D
 **Neden bu iş:** 2A–2C üretimi kurdu; **güvenilirliği kurmadı.** Bugün render biten her çıktı, gerçekten açılıyor mu, sesi var mı, yazısı kadrajda mı, fiyatı kaynağa uyuyor mu bilinmeden `completed` sayılıyor. QC olmadan preview kullanıcıya gösterilemez — ve gösterilirse hatayı kullanıcı bulur.
 

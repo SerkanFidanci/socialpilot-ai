@@ -1,8 +1,35 @@
 # W17 — Latin harf katlaması (iki yön) + kalıp grameri
 
 **Dal:** `fix/w17-latin-fold` · **Base:** `main` · **Migration slotu: YOK** (migration dosyalarına dokunma)
-**Durum:** merge edildi (`a44ffaf`) · **TAKİP DÜZELTMESİ AÇIK** — aşağıdaki bölüme bak
+**Durum:** iki tur merge edildi · **TAKİP DÜZELTMESİ 2 AÇIK** (aşağıda) — takip 1 kapandı
 **Model/effort:** Opus 5 / high
+
+## Takip düzeltmesi 2 — yazılı sayı grameri (PM, 2026-08-02)
+
+Codex takip-1 turu üç açık buldu (tablo en altta). Çekim çapası tuttu (161/161 ek zinciri, 12/12 yanlış pozitif temiz); delinen yer **yazılı sayı grameri**:
+
+1. **`bir buçuk lira`, `beş buçuk lira`** — kesirli tutar (kritik, kalıcı dokümana ulaşıyor).
+2. **`yüzbin lira`, `onbir lira`, `yüz ellibeş lira`, `beşerlira`** — bitişik yazılan sayı bileşikleri (yüksek).
+3. **`165 T Lye`** — boşluklu kısaltmanın işaretsiz ek biçimi (orta); `T.L.ye`, `TLye`, `T L'ye` dahil diğer 15 biçim yakalanıyor.
+
+### PM kararları
+
+1. **Sayı sözcükleri kümesi meşru bir enumerasyondur; birleşme kuralı değildir.** Türkçenin sayı sözcükleri **kapalı ve sonlu** (bir…dokuz, on, yirmi…doksan, yüz, bin, milyon, milyar + `buçuk`, `yarım`, `çeyrek`, dağıtım eki `-er/-ar`) — bu listeyi yazmak, confusable/çekim listelerinden farklı olarak güvenlidir çünkü dil yeni sayı sözcüğü üretmiyor. **Ama bu sözcüklerin birleşimi kombinatoryaldır ve gramerle ifade edilmelidir:** ardışık sayı sözcükleri — **boşluklu, tireli veya bitişik** — tek bir sayı ifadesi sayılır. Tek tek bileşik yazmak (`yüzbin`, `onbir`, …) yine enumerasyon olur ve yine delinir.
+2. **Bitişik çözümleme tam kelimeyi kaplamalıdır.** `onbir` = `on`+`bir`, artık harf yok → sayı. `birey` = `bir`+`ey`, `ey` sayı sözcüğü değil → **sayı değil**. Kalıntı bırakan hiçbir bölümleme kabul edilmez; `Birey 2 kez geldi` pini korunur.
+3. **`T Lye` için ek zinciri gerçek Türkçe eklerin gramerine daraltılsın.** Bugünkü "ek alfabesi" yaklaşımı `T L`+`ye`yi ayıramıyor çünkü `ezzetli` de aynı alfabeden. Ek zinciri **kapalı ek kümesinin dizisi** olarak yazılırsa (`-ye/-ya`, `-de/-da`, `-den/-dan`, `-in/-ın/-nin`, `-le/-la/-yle/-yla`, `-ler/-lar`, `-lik/-lık`, …) `Lye` bir ek, `Lezzetli` değildir. **`Şef T. Lezzetli 5 tarif` pini korunmak zorunda** — koruyamıyorsan `T L` istisnasını daralt ve raporda söyle; yanlış pozitif, yanlış negatiften pahalıdır burada (metin insan onayına gidiyor).
+4. Kapsam bu üç sınıf; **yeni kural sınıfı ekleme**, hata kodu ekleme, migration yok.
+
+### Kabul kriterleri
+
+1. Reddedilir: `bir buçuk lira` · `beş buçuk lira` · `yarım milyon dolar` · `çeyrek milyon lira` · `yüzbin lira` · `onbir lira` · `yüz ellibeş lira` · `beşerlira` · `beşer lira` · `165 T Lye` — birim **ve** HTTP (`document IS NULL`).
+2. Korunur (yanlış pozitif pinleri): `Birey 2 kez geldi` · `Şef T. Lezzetli 5 tarif` · `Bu yüzden 3 kişi` · `Eurovision 2026` · `Euro Kebap 5 yıldır` · `Lira adlı kedi` · üç tarif metni · mevcut 25 girdilik sıradan-kopya kümesi.
+3. **Jeneratif tarama genişletilir:** mevcut 46.918 varyantlık taramaya sayı sözcüğü birleşimleri eklenir (2–4 sözcüklük diziler × boşluklu/bitişik/tireli × para kökleri × çekim). **0 kaçış**; sınırlı hâli teste alınır.
+4. `make verify` yeşil; taban **947**'nin altına düşmez (W18 merge olursa yükselir — gördüğün sayıyı yaz); kontrat farksız; migration yok.
+5. Rapor "Rapor — takip düzeltmesi 2" başlığıyla; araç zinciri. **Merge etme, dalda bırak.**
+
+### Kapsam dışı
+
+Redaksiyon · timeline `forbidden_matcher` (W18'de yapıldı) · katlama mekanizması (161/161 tuttu) · ay adlarının sıradan isim olması ve iki politika pini (bilinçli) · yasak terimlerde çekim (PM kararı: yapılmayacak).
 
 ## Takip düzeltmesi 1 — Türkçe çekim sınıfı (PM, 2026-08-02)
 

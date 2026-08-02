@@ -12,7 +12,23 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**W17 takip düzeltmesi MERGE EDİLDİ (2026-08-02, PM koşusu 947 pytest). Senaryo dedektörü hattı kapandı.** Çözüm: çekim listesi kaldırıldı, kalıplar kök + `_SUFFIX` (Türkçe ek alfabesi — `o`/`ö` yok çünkü ünlü uyumu ekte üretmez, `b/f/h/j/p/v` yok çünkü ek ünsüzü değil; "Eurovision"/"Europa"/"Kebap" bu yüzden güvende). Tarih/oran kökleri de kapandı, `yuzde(?!n)` ile "bu yüzden" korundu, sol taraftaki yazılı sayı çekimi de kapandı (yan kazanç: `yuzlerce lira`, `binlerce dolar`). **46.918 varyant / 0 kaçış** (düzeltme öncesi 612) ve taramanın sınırlı hâli jeneratif test olarak eklendi. Ay adları sıradan isim olduğu için `3 martı`/`2 ocakta` reddediliyor — mevcut bilinçli sınırın içinde, ürün tarafı bilsin.
+**ŞU AN İKİ SICAK OTURUM AÇIK (2026-08-02). `main` = `947 pytest`, head `0014`; ikisi de dalda, merge edilmedi.**
+
+1. **W18 (2D QC) — takip 1: Celery bağlantısı.** İş kabul edildi (dalda **1071 pytest**, +124): 13 kontrolün tamamı raporda ve atlanması *ifade edilemiyor*, gerçek bozuk medya fixture'ları (siyah/sessiz/donuk/bozuk konteyner), karar tablosu tüm çift permütasyonlar + 3.000 rastgele atamayla tüketildi, fail-closed üç yoldan kanıtlandı, `forbidden_matcher` birleştirildi. **Tek eksik benim WO hatam:** kapsam "ölçüm worker'da" diyordu ama dosya listesine worker dosyalarını koymamıştım; oturum çelişkiyi sessizce çözmek yerine bildirdi (doğru davranış). Talimat W18 dosyasının "Takip 1" bölümünde. Prompt:
+```
+docs/handoffs/W18-automatic-qc.md dosyasındaki "Takip 1 — Celery bağlantısı" bölümünü oku ve uygula. Aynı dalda (slice/2d-automatic-qc) devam et. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w18 ile çalıştır. Merge etme, dalda bırak.
+```
+2. **W17 — takip düzeltmesi 2: yazılı sayı grameri.** Codex takip-1 turu çekim çapasını kıramadı (161/161 ek zinciri, 12/12 yanlış pozitif temiz) ama **yazılı sayı gramerinde 3 açık** buldu: `bir buçuk lira` (kritik), `yüzbin lira`/`onbir lira`/`beşerlira` (yüksek), `165 T Lye` (orta). Talimat W17 dosyasının "Takip düzeltmesi 2" bölümünde. Prompt:
+```
+docs/handoffs/W17-latin-fold-pattern-grammar.md dosyasındaki "Takip düzeltmesi 2" bölümünü oku ve uygula. Aynı dalda (fix/w17-latin-fold) devam et; önce git merge main ile dalını güncelle. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w17 ile çalıştır. Migration yok. Merge etme, dalda bırak.
+```
+
+**Merge sırası:** W18 önce (daha büyük ve `validation.py`'ye dokunuyor), sonra W17 takip 2 (`script.py`) — dosya-ayrık oldukları için ters sıra da olur. Her merge sonrası tam doğrulama, STATUS güncelleme, push. Sonra Codex turu (W18 için ilk kez; W17 için üçüncü).
+
+**Enumerasyon dersinin inceltilmiş hâli (W17 takip 2'de yazılı):** her elle sayılmış küme kötü değil — **kapalı ve dil/standart tarafından sonlu olan** kümeler (Türkçe sayı sözcükleri, Türkçe çekim ekleri) yazılabilir; **açık uçlu** olanlar (confusable çiftleri, görünmez kod noktaları, çekim *biçimleri*, bileşik yazımlar) yazılamaz — onlar kategori kuralı, üretilmiş veri veya gramer ister. Ayrım: "dil yarın buna yenisini ekler mi?"
+
+<!-- arşiv -->
+**~~W17 takip düzeltmesi MERGE EDİLDİ (2026-08-02, PM koşusu 947 pytest).~~** Çözüm: çekim listesi kaldırıldı, kalıplar kök + `_SUFFIX` (Türkçe ek alfabesi — `o`/`ö` yok çünkü ünlü uyumu ekte üretmez, `b/f/h/j/p/v` yok çünkü ek ünsüzü değil; "Eurovision"/"Europa"/"Kebap" bu yüzden güvende). Tarih/oran kökleri de kapandı, `yuzde(?!n)` ile "bu yüzden" korundu, sol taraftaki yazılı sayı çekimi de kapandı (yan kazanç: `yuzlerce lira`, `binlerce dolar`). **46.918 varyant / 0 kaçış** (düzeltme öncesi 612) ve taramanın sınırlı hâli jeneratif test olarak eklendi. Ay adları sıradan isim olduğu için `3 martı`/`2 ocakta` reddediliyor — mevcut bilinçli sınırın içinde, ürün tarafı bilsin.
 
 **PM kararı (W17'nin sorusu):** yasak terimlerde **çekim eşleşmesi yapılmayacak** — `şeker` yasakken `şekerli` serbest. Liste markanın, kalıp bizim; kök eşleşmesi `az` yasakken `azalttık`ı da yasaklardı. Ürün tarafı markaya "yasaklamak istediğin biçimleri yaz" der. W18'e yazıldı.
 
