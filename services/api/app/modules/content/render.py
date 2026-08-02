@@ -219,9 +219,34 @@ class PlannedCaption:
 
 
 @dataclass(frozen=True, slots=True)
+class PlannedVoiceover:
+    """Synthesized speech, already materialized as local files, in the order it is spoken.
+
+    One path per script line, because slice 2C stores one object per line. The adapter joins
+    them; the plan does not, because joining is an encode and encodes live below this boundary.
+    """
+
+    segment_paths: tuple[Path, ...]
+    gain_db: int
+
+
+@dataclass(frozen=True, slots=True)
 class PlannedAudio:
+    """The bed, and the voice laid over it.
+
+    `source` names the bed — the footage's own sound today; music needs a licence record and is
+    not a supported source yet. `voiceover` is `None` for a timeline that places no speech, which
+    is what keeps every render that existed before slice 2E byte-identical.
+
+    `duck_under_voice` is the timeline's own per-track flag, read from the bed. PRD §18.2 shows it
+    on a music track; it means "hold this down while the voice speaks", and with music
+    unsupported the footage is the track that has to give way.
+    """
+
     source: AudioTrackKind
     gain_db: int
+    voiceover: PlannedVoiceover | None = None
+    duck_under_voice: bool = False
 
 
 @dataclass(frozen=True, slots=True)

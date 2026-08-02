@@ -89,9 +89,173 @@ docs/architecture/content-render.md · background-jobs.md · error-handling.md �
 
 Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir. (Durum makinesinin kapalılığı ve "proje sıralayıcıdır, sahip değildir" duruşu ADR'lık olabilir.)
 
-## Rapor
+## Rapor — 2026-08-02 · Opus 5 / high
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+**Dal:** `slice/2e-content-lifecycle` (base `main` = `1e28746`) · **Commit:** `3378b98`
+**Durum:** tamamlandı, **merge edilmedi** (iş emri gereği dalda bırakıldı)
+
+### Yapılanlar
+
+**Durum makinesi (`lifecycle.py`, saf).** `ProjectState` 11 durum, `ProjectEvent` 15 olay.
+`next_state` `(durum, olay)` **çarpımının tamamı** için cevap veriyor; §20'nin çizmediği çift
+`None`, `require_next_state` onu `PROJECT_TRANSITION_NOT_ALLOWED` hatasına çeviriyor. Permütasyon
+testi tanımlı kenar kümesini PRD §20'nin diyagramıyla **birebir** karşılaştırıyor (diyagram testin
+içine sabit olarak yazıldı, iki dosya açmadan karşılaştırılabilsin diye).
+
+**Tek ekleme `STEP_FAILED`** ve PM'e bildiriyorum: §20 `FAILED`'a yalnızca `QUALITY_CHECK` ve
+`PUBLISHING`'den geliyor. Senaryo üretimi düşen bir projenin gidecek yeri yok. Ekleme her çalışan
+durumdan `FAILED`'a, başka hiçbir yere; test bunu küme eşitliğiyle sabitliyor. Alternatif
+`QC_FAILED`'ı iki ayrı anlama genişletmekti — daha kötü.
+
+**Geçiş kaydı.** `content_project_transitions`: proje başına `sequence` (unique), `from_state`
+yalnızca §20'nin giriş okunda NULL (check constraint), `reason` kod, `actor_user_id` yalnızca
+insanın sebep olduğu geçişlerde dolu. Audit log'a değil kendi tablosuna — cevaplaması gereken
+soru tek bir projenin geçmişi üzerinde yürümek.
+
+**Proje satırı dayanıklı job'dır, ayrı `jobs` satırı yok.** Gerekçe: sıralayıcının durumu zaten
+sonucudur; ikisini iki tabloya yazmak çökme sonrası iki cevap üretir. AGENTS.md'nin job
+gereklilikleri satırın üstünde: durum (`state`), timeout (`state_entered_at` ×
+`LIFECYCLE_STEP_TIMEOUT_SECONDS`), sayaçlar, correlation, dead-letter (`FAILED`).
+`next_check_at` hem sıralama anahtarı hem lease.
+
+**QC kararı eyleme döndü, sınırlı.** `decide_after_qc` saf ve total (3 karar × 6 öneri × sayaç);
+`passed`→preview, `needs_review`→preview + `requires_human_review`, `failed`+`retry_render`+deneme
+kalmışsa §20'nin kendi yolundan (`FAILED`→`RETRYING`) sınırlı yeniden render, aksi halde `FAILED`
++ insan incelemesi. `alternative_scene`/`alternative_provider`/`request_new_media` **kaydediliyor,
+uygulanmıyor**. Döngü sınırı: `LIFECYCLE_MAX_RENDER_ATTEMPTS` (varsayılan 2, alanın kendisi 10'da
+tavanlı), render **istenmeden önce** okunuyor ve `decide_after_qc` tavanda hiçbir girdi için
+"retry" dönmüyor — sınırsız döngü ifade edilemiyor.
+
+**Timeline otomatik kuruluyor** (`compose_timeline`, saf). Senaryonun segmentleri sırayla,
+her biri `required_scene_tags`'iyle kesişen ilk kullanılmamış sahneyi alıyor. Seslendirme
+kesitten uzunsa son klip uzatılıyor → sahne ekleniyor → yetmezse **reddediliyor**
+(`PROJECT_TIMELINE_TOO_SHORT_FOR_VOICEOVER`). Bindirme yok, altyazı kapalı — gerekçe kodda ve
+`content-render.md`'de: bindirme metni K4'ün düzenleme yüzeyi (2F), transcript altyazısı ise
+seslendirmenin *altındaki* sesi altyazılardı.
+
+**Üç devralınan borç kapandı.**
+
+1. **Voiceover miksajı (W15'in açığı).** Her iki adapter `audio_sources={original, voiceover}`
+   bildiriyor. Satır başına WAV'lar `aformat`+`concat` ile tek track'e birleşiyor (demuxer değil:
+   sağlayıcının aynı akış parametrelerini döndürme yükümlülüğü yok), sonra `filter_complex`
+   içinde miksleniyor; `duck_under_voice` varsa `sidechaincompress`, ardından
+   `amix(normalize=0)` + `alimiter`. `duration=first` → mix uzunluğu görüntünün.
+   **Seslendirmesiz timeline eski yolu birebir koruyor** (`0:a`, boş graf, `-af` gain) ve bu
+   testli. `music` bilinçli olarak hâlâ bildirilmiyor (lisans kaydı ister, §18.3).
+2. **QC kuyruk olayı (W18'in ölçümü).** `render_service._succeed` `content.qc.requested` yazıyor;
+   tick `sweep-content-qc`'ye (900 s) düştü. **Ve sorgu yeniden şekillendirildi** — W18'in asıl
+   sonucu buydu: `render_outputs.qc_claimed_at` (raporla aynı transaction'da damgalanır, hiç
+   temizlenmez) + kısmi index `WHERE status='succeeded' AND qc_claimed_at IS NULL`. Migration
+   `0016` mevcut raporlu render'lar için backfill yapıyor. Ölçüm tekrarlandı, tabloda.
+3. **`pending` süpürücü (W13/W15 borcu).** `content.pending.sweep` + `AbandonedRunSweeper`.
+   Yaş eşiği `Settings` doğrulamasında iki kabiliyetin en uzun dürüst koşusundan büyük olmaya
+   **zorlanıyor** — sadece yavaş olan bir koşuyu terk edilmiş ilan etmemek bu süpürmenin
+   yapmaması gereken tek şey, ve bu bir yorum değil bir kural.
+
+**Uçlar:** `POST/GET /content/projects`, `GET /content/projects/{id}`,
+`POST /content/projects/{id}/media`, `GET /content/projects/{id}/transitions`. Yazma
+`content.generate`, okuma `business.read` — proje sıraladığı yazmalardan başka bir şey
+üretmediği için kendi izniyle değil onların çizgisiyle.
+
+### Ölçüm — QC claim'i (kabul kriteri 6)
+
+Aynı 200 bin render'lık fixture, `EXPLAIN (ANALYZE, BUFFERS)`, PostgreSQL 16.14, tek sunucu:
+
+| Claim şekli | Plan | Süre |
+|---|---|---|
+| W18: anti-join, render satırında yordam yok | merge anti-join; 200 bin satırlık index scan + raporların **external merge sort**'u (disk 6,2 MB) | **199 ms** (soğuk 354 ms) |
+| W19: `qc_claimed_at IS NULL`, bir render bekliyor | **`ix_render_outputs_awaiting_qc` index scan** + nested-loop anti-join | **3,6 ms** |
+| W19: durağan durum, bekleyen yok | aynı index scan; anti-join **hiç çalıştırılmadı** | **0,05 ms** |
+
+**Plan gerçekten değişti** — W18'in açık sorusu buydu ("index tek başına çözmüyor, sorgunun
+korelasyonu ifade etmesi gerek"). Kalan 3,6 ms, anti-join'in `ix_render_qc_reports_business_render`'ı
+yalnız `render_id` ile taraması; `render_qc_reports(render_id)` index'i onu da kaldırırdı ve
+**bilinçli olarak eklenmedi**: o maliyet yalnızca zaten koca bir QC job'ı başlatacak tick'te
+ödeniyor, yazma maliyeti ise her raporda. Anti-join yerinde kaldı, "render başına bir koşu"nun
+bağımsız ikinci ifadesi olarak.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- **Entitlement/kota** — W20, iş emri gereği. Ama bir kancayı düzelttim: `request_render` artık
+  isteğe bağlı `trigger` alıyor ve sıralayıcı yeniden render'ları `REVISION` olarak damgalıyor.
+  Gerekçe yeni bir karar değil, faz planı §2'nin zaten yazdığı kural ("saf yeniden render yeni
+  hak tüketmez"); aksi halde W20 yanlış bir sütun okuyacaktı. Varsayılan davranış (revizyondan
+  çıkarım) değişmedi.
+- **Onay/revizyon (2F), planlayıcı (2G), gerçek sağlayıcılar (W08 sonrası)** — dokunulmadı.
+- **`alternative_scene` / `alternative_provider` / `request_new_media`** — kaydediliyor,
+  uygulanmıyor; her biri olmayan bir kabiliyet gerektiriyor.
+- **`docs/index.md` ve `docs/adr/README.md`'ye ekleme yapılmadı** (iş emri gereği). **ADR
+  yazılmadı:** iki duruş ADR'lık olabilir ("durum makinesi kapalıdır", "proje sıralayıcıdır,
+  sahip değildir") ama ikisi de iş emrinin verdiği kararın uygulanması; numarayı PM verirse
+  gerekçe `lifecycle.py`/`project_service.py` docstring'lerinde ve `content-render.md`'de hazır.
+- **`docs/plans/active/` altına ayrı plan dosyası açılmadı** — W18'in gerekçesiyle aynı: bu
+  slice'ın planı iş emrinin kendisi ve dosya listesinde `docs/plans/` yok.
+
+### Doğrulama
+
+Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · PostgreSQL 16.14 · FFmpeg 7.1.5 ·
+`COMPOSE_PROJECT_NAME=sp-w19` (izole portlarla; başka worktree'nin konteynerine dokunulmadı).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` · `ruff format --check` · `mypy` | ✅ temiz (205 dosya biçimli, 193 kaynak) |
+| `pytest` (RUN_INTEGRATION_TESTS=1, gerçek PostgreSQL + MinIO + FFmpeg) | ✅ **1204 geçti**, taban 1151'in üstünde |
+| 1 · migration `0016` up → down → up, tek head | ✅ `0016_content_projects (head)`; suite bu döngüden sonra yeniden koşuldu |
+| 2 · uçtan uca `PLANNED` → `PREVIEW_READY` | ✅ `test_a_project_walks_from_planned_to_preview_ready...` — senaryo, seslendirme, timeline, render, QC sırayla; geçiş listesi ve `from_state` zinciri doğrulandı; çıktı `aac` sesli gerçek dosya |
+| 3 · voiceover fiilen çalışıyor + ducking | ✅ `test_speech_reaches_the_output_and_ducking_changes_what_it_sounds_like` — aynı kesitin üç render'ı (altlık / +ses / +ducking) **çözülmüş PCM hash'iyle** karşılaştırıldı; ses var, ses mikse girdi, ducking mikse etki etti |
+| 4 · döngü sınırı | ✅ `test_a_render_that_never_passes_quality_control_stops_at_the_configured_ceiling` — QC her turda `failed`+`retry_render`, proje tam 2 render'da duruyor, `render_attempts == 2`, `requires_human_review`, `RETRY_REQUESTED` tam bir kez |
+| 5 · geçiş tablosu total, kaçak geçiş reddediliyor | ✅ permütasyon (11×15) + §20 kenar kümesi birebir + 9 kaçak geçiş parametrik olarak reddediliyor (`RENDERING`→`PREVIEW_READY` dahil) |
+| 6 · QC olayı + tarama seyrekleşti + ölçüm tekrarı | ✅ yukarıdaki tablo; olay uçtan uca testte `outbox_events`'te doğrulanıyor, `qc_claimed_at IS NULL` kalan `succeeded` render yok |
+| 7 · `pending` süpürücü | ✅ `test_a_stale_pending_run_is_settled_and_a_healthy_one_is_left_alone` — bayat satır `failed`, **sağlıklı satıra dokunulmuyor**, ikinci geçiş `None` (drain dönüyor, dönmüyor) |
+| 8 · tenant izolasyonu / roller / idempotency / imzalı URL | ✅ dört ayrı test: başka tenant'ın projesi okunamıyor, ilerletilemiyor, listede görünmüyor; editor yazabiliyor, viewer okuyor yazamıyor, approver hiçbiri; aynı anahtar + aynı gövde replay, farklı gövde `409`; proje gövdesinde `X-Amz-Signature` ve `object_key` yok |
+| 9 · kontrat yeniden üretildi ve commit'li | ✅ `generate_openapi.py`; 41 endpoint · modül `CLAUDE.md`'leri güncel |
+
+### Açıkça belirtmem gerekenler
+
+1. **İlan edilen dosya listesinin dışına iki dosyada çıktım.** Hiçbiri `STATUS.md`'nin sahiplik
+   tablosunda başka bir WO'ya ait değil ve şu an uçuşta başka WO yok; yine de kayda geçiyorum:
+   - **`app/infrastructure/celery_publisher.py`** — `DRAIN_TASK_BY_EVENT`'e iki satır
+     (`content.qc.requested`, `content.project.advance.requested`). **Kaçınılmazdı:** kabul
+     kriteri 6 QC olayını şart koşuyor, ve haritada karşılığı olmayan bir outbox olayı
+     `OUTBOX_EVENT_TYPE_UNSUPPORTED` ile dead-letter'a gider — yani olay yazmak tek başına
+     kriteri karşılamıyor, zararlı oluyordu.
+   - **`app/modules/content/service.py`** — `request_render`'a isteğe bağlı `trigger` (yukarıda
+     gerekçelendirildi) ve W15'in zaten dokunduğu dosya.
+   Ayrıca `tests/` altında altı mevcut test dosyası güncellendi; hepsi ilan edilmiş kapsamda ve
+   hepsi bu slice'ın bilinçli olarak değiştirdiği bir davranışı sabitliyordu (voiceover
+   kabiliyeti, beat girdileri, izin matrisi, normalizer çağıran listesi).
+2. **`text_normalization` üçüncü bir çağıran kazandı: `lifecycle.py`.** Modül `CLAUDE.md`'sinin
+   "üçüncü bir çağıran testle yasaktır" değişmezi bilinçli olarak genişletildi ve testin
+   docstring'ine gerekçe yazıldı. Çağrı `normalize_encoding` (saklama katlaması), **eşleştirme
+   katlaması değil** — sahne etiketi 2B'nin sakladığı değerle karşılaştırılıyor, `ürün`ü `urun`
+   yapmak eşitliğin bir tarafını bozardı. Repository bu modülü hiç import etmiyor;
+   `lifecycle.normalize_scene_tag`'i çağırıyor, yani "sahne etiketi nasıl yazılır" tek yerde.
+3. **Türkçe `I` bulgusu — küçük ama gerçek.** `normalize_encoding` Türkçe küçük harf uyguluyor,
+   yani `PREPARATION` → `preparatıon`. Sağlayıcı etiketini büyük harfle, senaryo etiketini küçük
+   harfle yazdığında **hiç eşleşmiyorlardı** ve belirti sessizdi: sahne seçimi sessizce
+   "sıradaki kullanılmamış çekim"e düşüyordu. Yalnızca karşılaştırmada bir `_match_key`
+   (noktasız/noktalı `ı`/`i` katlaması) eklendi; saklanan hiçbir değer değişmedi ve
+   `normalize_scene_tag` `script._scene_tags` ile birebir aynı kaldı. Bunu bir *ürün* hatası
+   olarak bildiriyorum, güvenlik değil.
+4. **`POST /projects/{id}/media` idempotency anahtarı taşımıyor** ve endpoint envanteri bunu
+   "değerlendirilmeli" diye işaretliyor. Değerlendirdim: bu bir create değil, durum makinesinin
+   koruduğu bir geçiş — tekrarlanan teslimat projeyi `WAITING_MEDIA`'nın ötesinde bulup
+   `PROJECT_TRANSITION_NOT_ALLOWED` ile reddediliyor, yani iki kez uygulanamıyor. Gerekçe route
+   docstring'inde. PM aksini isterse anahtar eklemek tek satır.
+5. **`decide_after_qc`'nin `needs_review` → `PREVIEW_READY` kararı bugün *tek* gerçek yol.**
+   Gerçek VLM sağlayıcısı bağlanana kadar (W08 sonrası) fail-closed kural her render'ı
+   `needs_review` yapıyor. Ürün tarafına söylediği: her içerik insan incelemesi işaretiyle
+   geliyor ve bu doğru sonuç, eksiklik değil.
+6. **Sıralayıcı senaryo/seslendirmeyi dayanıklı bir job'a taşımadı.** W15'in 4. maddesi bunu
+   2E'ye önermişti; iş emri "proje sıralayıcıdır, mevcut servisler değişmez" dediği için
+   servislerin şekli korundu. Bunun yerine (a) terk edilmiş `pending` satırlar süpürülüyor,
+   (b) her adım deterministik idempotency anahtarıyla çağrılıyor, yani lease dolup adım baştan
+   koştuğunda ikinci kez ödeme yapılmıyor. Gerçek sağlayıcı bağlanınca senkron uçların dayanıklı
+   job'a taşınması hâlâ açık bir iş — PM'e bırakıyorum.
+7. **Sıralayıcı yoklama (poll) yapıyor.** Render ve QC kendi job'ları; proje onların bitmesini
+   `LIFECYCLE_POLL_SECONDS` (15 s) aralığıyla kontrol ediyor. Alternatif, QC/render servislerine
+   proje bilgisi koymaktı — "proje sıralayıcıdır, sahip değildir" duruşunu tersine çevirirdi.
+   Bedeli tek sunucuda ihmal edilebilir (canlı proje başına 4 sorgu/dakika, kısmi index üzerinden).
 
 ## Doğrulama
 

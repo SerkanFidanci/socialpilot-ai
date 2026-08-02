@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     celery_beat_outbox_interval_seconds: int = Field(default=10, ge=1, le=3_600)
     celery_beat_media_drain_interval_seconds: int = Field(default=30, ge=1, le=3_600)
     celery_beat_recovery_interval_seconds: int = Field(default=60, ge=1, le=3_600)
+    # Automatic QC is woken by `content.qc.requested` the moment a render succeeds, so the tick
+    # is no longer the trigger — it is the net under a broker that dropped the message or a
+    # worker that was down when one arrived. Fifteen minutes, not thirty seconds: slice 2D
+    # measured the old always-on scan at 134 ms per tick over 200k renders, and a rare sweep over
+    # a reshaped claim is what that measurement asked for.
+    celery_beat_qc_sweep_interval_seconds: int = Field(default=900, ge=1, le=86_400)
+    # How often abandoned `pending` provider runs are settled. Nothing waits on this interval —
+    # the rows have been dead for `LIFECYCLE_PENDING_SWEEP_AGE_SECONDS` by the time it matters.
+    celery_beat_pending_sweep_interval_seconds: int = Field(default=600, ge=1, le=86_400)
     # Bounded page size for the aggregate processing summary until cursor pagination lands.
     processing_summary_max_items: int = Field(default=500, ge=1, le=2_000)
     media_max_bytes: int = Field(default=104_857_600, gt=0, le=2_147_483_647)
@@ -243,6 +252,31 @@ class Settings(BaseSettings):
     qc_frame_sample_count: int = Field(default=5, ge=1, le=40)
     qc_frame_max_width: int = Field(default=640, ge=64, le=4_096)
     qc_frame_max_bytes: int = Field(default=1_048_576, ge=1_024, le=16_777_216)
+    # --- content project lifecycle (PRD §20, slice 2E) ---------------------------------------
+    # The bound on the automatic render loop. Two is one retry: enough for a transient encode
+    # fault, few enough that a systematically failing check costs one extra render rather than a
+    # queue. The ceiling on the field is itself part of the guarantee — a deployment cannot
+    # configure its way to an unbounded loop, and `decide_after_qc` never returns "retry" once
+    # the counter reaches it.
+    lifecycle_max_render_attempts: int = Field(default=2, ge=1, le=10)
+    # How many times one step may fail transiently before the project is failed outright.
+    lifecycle_max_step_attempts: int = Field(default=5, ge=1, le=20)
+    # How long a project may sit in one working state. States that wait on a person
+    # (`WAITING_MEDIA`) are exempt; everything else is a job, and a job that never finishes has
+    # to become visible. Comfortably above a render plus a QC run.
+    lifecycle_step_timeout_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    # The claim lease. A worker that dies mid-step releases the project after this long, and the
+    # step runs again from the top — safe because every sub-call carries a deterministic
+    # idempotency key.
+    lifecycle_lease_seconds: int = Field(default=300, ge=10, le=3_600)
+    # How soon to look again at a project that is waiting on a render or a QC run.
+    lifecycle_poll_seconds: int = Field(default=15, ge=1, le=3_600)
+    # How old an unsettled `pending` script or voiceover must be before it is declared abandoned.
+    # Validated below against the longest honest run of either capability: a threshold under that
+    # would start failing runs that were merely slow, which is the one thing this sweep must not
+    # do.
+    lifecycle_pending_sweep_age_seconds: int = Field(default=1_800, ge=60, le=86_400)
+    lifecycle_sweep_batch_size: int = Field(default=50, ge=1, le=500)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.
@@ -488,6 +522,29 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "QC_UNUSABLE_SOURCE_RATIO cannot be below the black or static frame limits"
+            )
+        # The sweep must never be able to fail a run that is merely slow. The longest honest life
+        # of an unsettled row is one script generation or one whole voiceover run, so the age
+        # threshold has to clear both — stated here rather than in a comment, because a
+        # deployment that lowered it would start declaring live provider calls abandoned.
+        longest_honest_pending_run = max(
+            self.script_generation_timeout_seconds, self.tts_total_timeout_seconds
+        )
+        if self.lifecycle_pending_sweep_age_seconds <= longest_honest_pending_run:
+            raise ValueError(
+                "LIFECYCLE_PENDING_SWEEP_AGE_SECONDS must exceed the longest script or voiceover run"
+            )
+        # A lease shorter than the step it covers would let a second worker claim a project while
+        # the first is still inside a provider call.
+        if self.lifecycle_lease_seconds <= self.lifecycle_poll_seconds:
+            raise ValueError("LIFECYCLE_LEASE_SECONDS must exceed LIFECYCLE_POLL_SECONDS")
+        # A project has to be able to sit through the two jobs it waits on without the step
+        # timeout firing underneath them.
+        if self.lifecycle_step_timeout_seconds < (
+            self.render_job_timeout_seconds + self.qc_job_timeout_seconds
+        ):
+            raise ValueError(
+                "LIFECYCLE_STEP_TIMEOUT_SECONDS cannot be below one render plus one QC run"
             )
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,

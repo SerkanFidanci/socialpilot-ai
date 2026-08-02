@@ -36,6 +36,8 @@ class ContentAction(StrEnum):
     SCRIPT_GENERATE = "content.script.generate"
     VOICEOVER_READ = "content.voiceover.read"
     VOICEOVER_GENERATE = "content.voiceover.generate"
+    PROJECT_READ = "content.project.read"
+    PROJECT_WRITE = "content.project.write"
 
 
 ACTION_PERMISSIONS: dict[ContentAction, Permission] = {
@@ -49,6 +51,11 @@ ACTION_PERMISSIONS: dict[ContentAction, Permission] = {
     # of this table draws, and the same one PRD §4 draws when it gives an editor "içerik üretir".
     ContentAction.VOICEOVER_READ: Permission.BUSINESS_READ,
     ContentAction.VOICEOVER_GENERATE: Permission.CONTENT_GENERATE,
+    # A project orders the writes above and produces nothing the individual actions do not. It
+    # therefore sits on the same line rather than earning a permission of its own: an editor who
+    # may write a script, lay a timeline and ask for a render may also ask for all three at once.
+    ContentAction.PROJECT_READ: Permission.BUSINESS_READ,
+    ContentAction.PROJECT_WRITE: Permission.CONTENT_GENERATE,
 }
 
 

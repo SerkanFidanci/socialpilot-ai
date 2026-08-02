@@ -116,14 +116,41 @@ def drain_content_render() -> dict[str, object]:
 def drain_content_qc() -> dict[str, object]:
     """Drain automatic QC (PRD §19.4).
 
-    Unlike every other drain here, this one is woken **only** by the beat tick: there is no
-    `content.qc.requested` outbox event, because the QC claim looks for a succeeded render that
-    has no report rather than for a queue entry. `needs_workdir` keeps the materialized output,
-    the metadata dumps and the sampled frames inside the guarded scratch root.
+    Slice 2D had no producer for this drain and the beat tick was its whole trigger; slice 2E
+    gives it `content.qc.requested`, written by the render path in the transaction that makes a
+    render succeed. The claim still finds a succeeded render that no report has opened over, so
+    a render that finished while this worker was down is picked up by the sweep — the event
+    makes that the exception rather than the mechanism. `needs_workdir` keeps the materialized
+    output, the metadata dumps and the sampled frames inside the guarded scratch root.
     """
 
     context = get_worker_context()
     return context.run(_drain(context, context.content_qc_service, needs_workdir=True))
+
+
+@celery_app.task(name="content.project.drain")
+def drain_content_projects() -> dict[str, object]:
+    """Advance content projects one step each (PRD §20).
+
+    No workdir: the sequencer touches no media. Its steps call services that do, and each of
+    those keeps its own scratch inside the guarded root.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.content_project_service, needs_workdir=False))
+
+
+@celery_app.task(name="content.pending.sweep")
+def sweep_abandoned_runs() -> dict[str, object]:
+    """Settle script and voiceover runs that opened, were possibly billed, and never returned.
+
+    The one drain here with no producer at all — by design. There is no event for "a process
+    died", which is exactly the condition this exists to notice; the tick is the only thing that
+    can observe an absence.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.abandoned_run_sweeper, needs_workdir=False))
 
 
 @celery_app.task(name="operations.recovery.drain")

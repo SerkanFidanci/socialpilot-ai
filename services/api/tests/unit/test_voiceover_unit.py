@@ -474,12 +474,14 @@ def test_a_media_asset_id_does_not_resolve_as_a_voiceover() -> None:
     assert check(document) == ("TIMELINE_VOICEOVER_NOT_ACCESSIBLE",)
 
 
-def test_the_duration_rule_holds_even_where_no_adapter_can_mix_speech_yet() -> None:
-    """Both statements are true at once, and both are reported.
+def test_the_duration_rule_is_the_only_thing_left_refusing_speech_that_does_not_fit() -> None:
+    """Slice 2C wrote this rule where no adapter could mix speech; slice 2E built the mixer.
 
-    No shipped render adapter declares `voiceover` audio (that filter is slice 2E's work), so a
-    timeline carrying one is refused on capability grounds too. The duration rule still runs:
-    otherwise it would be a rule that only starts existing the day some adapter grows a feature.
+    The point W15 made was that the rule must not be one that "starts existing the day some
+    adapter grows a feature" — so it was written and tested against a capability set that refused
+    the track outright, and both codes came back. Now the adapters declare `voiceover`, the
+    capability complaint is gone, and the duration rule is the only thing standing between speech
+    and a video whose last sentence is cut off. That it still fires alone is the whole assertion.
     """
 
     codes = validate_timeline(
@@ -494,10 +496,7 @@ def test_the_duration_rule_holds_even_where_no_adapter_can_mix_speech_yet() -> N
         min_resolution_ratio=0.5,
     ).codes
 
-    assert set(codes) == {
-        "TIMELINE_UNSUPPORTED_AUDIO_SOURCE",
-        "TIMELINE_VOICEOVER_DURATION_OVERFLOW",
-    }
+    assert set(codes) == {"TIMELINE_VOICEOVER_DURATION_OVERFLOW"}
 
 
 def test_a_voiceover_is_not_a_source_the_worker_would_try_to_materialize() -> None:

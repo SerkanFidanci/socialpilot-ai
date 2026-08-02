@@ -17,6 +17,13 @@ values that were true when it was drawn.
 **Nothing in this file calls a model.** The captions come from transcript rows that already
 exist, the text comes from tenant records, and the cuts come from the timeline. That is what
 makes this slice's render cost exactly zero in provider spend.
+
+Slice 2E adds two things. Speech is materialized alongside the footage — the same one download
+path, per-line objects into their own directories — so a timeline carrying a `voiceover` track
+finally renders instead of being refused by a capability nobody had implemented. And a successful
+render now writes `content.qc.requested`, which is what turns automatic QC from a table scan on a
+30-second tick into an event: slice 2D measured that scan at 134 ms per tick over 200k renders and
+handed the fix here, because this is the file that knows a render just finished.
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +45,7 @@ from app.modules.content.render import (
     PlannedLogo,
     PlannedSegment,
     PlannedText,
+    PlannedVoiceover,
     RenderPermanentError,
     RenderPlan,
     RenderPort,
@@ -46,7 +54,11 @@ from app.modules.content.render import (
     RenderResult,
     RenderTransientError,
 )
-from app.modules.content.repository import ContentFactsReader, ContentRepository
+from app.modules.content.repository import (
+    RENDER_RESOURCE_TYPE,
+    ContentFactsReader,
+    ContentRepository,
+)
 from app.modules.content.service import (
     MAX_CAPTIONS,
     ContentTimelineService,
@@ -74,8 +86,16 @@ from app.modules.operations.models import (
     JobAttempt,
     JobAttemptStatus,
     JobStatus,
+    OutboxEvent,
+    OutboxStatus,
 )
 from app.modules.operations.repository import OperationsRepository
+
+# The event that wakes automatic QC. Slice 2D had no producer for it and claimed by scanning for
+# succeeded renders without a report; that scan stays as a rare sweep, and this is now the
+# primary trigger. The envelope carries no measurement and the Celery message carries no
+# arguments — the QC worker re-reads everything under its own tenant-scoped claim.
+QC_REQUESTED_EVENT = "content.qc.requested"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +114,9 @@ class _ClaimedRender:
     outcome: ValidationOutcome
     facts: dict[UUID, AssetFacts]
     captions: tuple[PlannedCaption, ...]
+    # Object keys per voiceover, in line order. Read inside the claim like everything else, so
+    # the encode below touches no session.
+    voiceover_keys: dict[UUID, tuple[str, ...]]
 
 
 class ContentRenderService:
@@ -232,6 +255,9 @@ class ContentRenderService:
                 outcome=outcome,
                 facts=await self._facts.asset_facts(business_id, timeline.asset_ids),
                 captions=await self._captions(business_id, timeline),
+                voiceover_keys=await self._facts.voiceover_object_keys(
+                    business_id, timeline.voiceover_ids
+                ),
             )
 
     async def _execute(
@@ -240,7 +266,8 @@ class ContentRenderService:
         """Materialize, render, upload. No database session is touched in here."""
 
         sources = await self._materialize(claimed.timeline, claimed.facts, workdir)
-        plan = self._build_plan(claimed, sources)
+        speech = await self._materialize_speech(claimed, workdir)
+        plan = self._build_plan(claimed, sources, speech)
         result = await self._render.render(
             request=RenderRequest(
                 plan=plan,
@@ -285,6 +312,24 @@ class ContentRenderService:
                 render.provenance_state = result.provenance
                 render.failure_code = None
                 render.completed_at = datetime.now(UTC)
+                # Written in the transaction that makes the render succeed, so an output that
+                # exists and an ask for it to be checked become durable together. A crash before
+                # the outbox is dispatched costs one sweep interval, never a render nobody
+                # checked — which is the property slice 2D's scan was buying at 134 ms a tick.
+                self._operations.add(
+                    OutboxEvent(
+                        id=uuid4(),
+                        business_id=business_id,
+                        event_type=QC_REQUESTED_EVENT,
+                        aggregate_type=RENDER_RESOURCE_TYPE,
+                        aggregate_id=render.id,
+                        payload={"render_id": str(render.id)},
+                        correlation_id=claimed.correlation_id,
+                        status=OutboxStatus.PENDING,
+                        max_attempts=job.max_attempts,
+                        next_attempt_at=datetime.now(UTC),
+                    )
+                )
             attempt.status = JobAttemptStatus.SUCCEEDED
             attempt.finished_at = datetime.now(UTC)
             attempt.error_code = None
@@ -358,7 +403,33 @@ class ContentRenderService:
             )
         return sources
 
-    def _build_plan(self, claimed: _ClaimedRender, sources: dict[UUID, Path]) -> RenderPlan:
+    async def _materialize_speech(self, claimed: _ClaimedRender, workdir: Path) -> tuple[Path, ...]:
+        """Stream the timeline's voiceover lines down, in order, one directory each.
+
+        The same reasoning as the video sources: the materializer names files from the object
+        key's extension, so two `.wav` lines sharing a directory would collide. A track that
+        names a voiceover with no usable audio is a permanent failure here rather than a silent
+        render — validation already refused that case, and reaching it means the row changed
+        between validation and the encode.
+        """
+
+        paths: list[Path] = []
+        for index, voiceover_id in enumerate(claimed.timeline.voiceover_ids):
+            keys = claimed.voiceover_keys.get(voiceover_id)
+            if not keys:
+                raise RenderPermanentError("RENDER_VOICEOVER_UNAVAILABLE")
+            for line, object_key in enumerate(keys):
+                paths.append(
+                    await self._materializer.materialize(
+                        object_key=object_key,
+                        workdir=workdir / f"voice-{index:03d}-{line:03d}",
+                    )
+                )
+        return tuple(paths)
+
+    def _build_plan(
+        self, claimed: _ClaimedRender, sources: dict[UUID, Path], speech: tuple[Path, ...]
+    ) -> RenderPlan:
         """Turn the claimed facts into a provider-neutral plan. Pure — no I/O."""
 
         timeline, facts = claimed.timeline, claimed.facts
@@ -406,6 +477,10 @@ class ContentRenderService:
             (track for track in timeline.audio_tracks if track.kind is AudioTrackKind.ORIGINAL),
             None,
         )
+        voice = next(
+            (track for track in timeline.audio_tracks if track.kind is AudioTrackKind.VOICEOVER),
+            None,
+        )
         return RenderPlan(
             profile=claimed.profile,
             canvas=timeline.canvas,
@@ -415,7 +490,17 @@ class ContentRenderService:
             captions=claimed.captions,
             caption_style=TEXT_STYLES[timeline.captions.style_id],
             audio=PlannedAudio(
-                source=AudioTrackKind.ORIGINAL, gain_db=audio.gain_db if audio else 0
+                source=AudioTrackKind.ORIGINAL,
+                gain_db=audio.gain_db if audio else 0,
+                voiceover=(
+                    PlannedVoiceover(segment_paths=speech, gain_db=voice.gain_db if voice else 0)
+                    if speech
+                    else None
+                ),
+                # Read from the bed's own flag, not assumed: a timeline that places speech over
+                # untouched footage is a legitimate document, and the renderer must not decide
+                # otherwise on its behalf.
+                duck_under_voice=bool(audio and audio.duck_under_voice and speech),
             ),
             ai_disclosure=current_disclosure_state(),
         )

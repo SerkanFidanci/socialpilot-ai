@@ -763,7 +763,9 @@ def test_the_beat_entry_drives_a_real_qc_run_through_the_registered_task(tmp_pat
     # this, and a beat entry naming a task nobody imported is a tick that logs an error forever.
     import app.worker.tasks  # noqa: F401
 
-    task_name = celery_app.conf.beat_schedule["drain-content-qc"]["task"]
+    # Renamed by slice 2E: the tick is a sweep now that `content.qc.requested` triggers the drain.
+    # The chain being asserted is unchanged — beat entry, registered task, real report.
+    task_name = celery_app.conf.beat_schedule["sweep-content-qc"]["task"]
     assert task_name in celery_app.tasks
 
     composition.start_worker_process()

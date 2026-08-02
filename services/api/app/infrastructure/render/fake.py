@@ -44,7 +44,10 @@ class FakeRenderAdapter(RenderPort):
             profiles=frozenset(RenderProfile),
             crop_modes=frozenset(CropMode),
             transitions=frozenset({TransitionKind.CUT}),
-            audio_sources=frozenset({AudioTrackKind.ORIGINAL}),
+            # `voiceover` joins `original` in slice 2E, matching the FFmpeg adapter exactly. The
+            # point of this fake is that a timeline it accepts is one the real adapter accepts;
+            # a capability set that drifted would make every test here a test of nothing.
+            audio_sources=frozenset({AudioTrackKind.ORIGINAL, AudioTrackKind.VOICEOVER}),
             caption_sources=frozenset({CaptionSource.TRANSCRIPT}),
             max_duration_ms=_MAX_DURATION_MS,
             max_video_tracks=1,

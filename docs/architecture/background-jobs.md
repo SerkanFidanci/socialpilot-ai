@@ -121,6 +121,8 @@ bounded retry, and any other handoff failure is permanent and is not retried.
 | `media.scene_speech.requested` | wake `media.scene_speech_analysis.drain` |
 | `media.video_understanding.requested` | wake `media.video_understanding.drain` |
 | `content.render.requested` | wake `content.render.drain` |
+| `content.qc.requested` | wake `content.qc.drain` |
+| `content.project.advance.requested` | wake `content.project.drain` |
 | `media.technical_analysis.completed` | notification only; no message |
 | `media.scene_speech.completed` | notification only; no message |
 | `media.video_understanding.completed` | notification only; no message |
@@ -146,25 +148,71 @@ never depends on it, because every task re-derives its work from PostgreSQL.
 | `drain-scene-speech` | `media.scene_speech_analysis.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
 | `drain-video-understanding` | `media.video_understanding.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
 | `drain-content-render` | `content.render.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
-| `drain-content-qc` | `content.qc.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `drain-content-projects` | `content.project.drain` | `CELERY_BEAT_MEDIA_DRAIN_INTERVAL_SECONDS` |
+| `sweep-content-qc` | `content.qc.drain` | `CELERY_BEAT_QC_SWEEP_INTERVAL_SECONDS` |
+| `sweep-abandoned-runs` | `content.pending.sweep` | `CELERY_BEAT_PENDING_SWEEP_INTERVAL_SECONDS` |
 | `recover-stale-jobs` | `operations.recovery.drain` | `CELERY_BEAT_RECOVERY_INTERVAL_SECONDS` |
 
-**`content.qc.drain` is the one entry that is not a safety net — it is the trigger** (W18).
-Every other drain is woken twice: by the event its producer wrote and by the tick that sweeps up
-what the broker lost. Automatic QC (§19.4) has no producer, because nothing in the render path
-writes a `content.qc.requested` event, so its claim asks the database directly: *which succeeded
-render carries no QC report?* Two tests hold that shape in place — one asserts the beat entry
-exists while the outbox route does not, the other drives a real report through the task the
-schedule names.
+**Automatic QC got its producer in slice 2E, and the measurement W18 left behind is settled.**
+W18 shipped `content.qc.drain` as the one entry that was the trigger rather than a safety net:
+nothing in the render path wrote an event, so the claim asked the database directly — *which
+succeeded render carries no QC report?* — as a hash anti-join over two scans, measured at
+**~134 ms per tick at 200k renders**. W18 also measured that an index alone does not help: the
+planner will not pick the nested loop, because nothing tells it that unchecked renders are always
+the newest ones. The conclusion it recorded was that **the query had to express that
+correlation**, and it handed the decision to the slice that owns `render_service.py`.
 
-The trade is measured rather than assumed. That claim is a hash anti-join over two sequential
-scans, so it costs **~134 ms per tick at 200k renders** (measured, PostgreSQL 17, single
-server); the same query as a nested-loop anti-join over a partial index would cost **0.14 ms**,
-but the planner will not choose it, because it cannot know that unchecked renders are always the
-newest ones. Indexes alone therefore do not fix it — the claim has to express that correlation.
-The natural moment for both is slice 2E, which owns `render_service.py` and can enqueue on
-completion; the scan then drops to a slow sweep and the cost question disappears. Until then the
-figure is affordable and known.
+Slice 2E did both halves:
+
+1. `render_service._succeed` writes `content.qc.requested` in the transaction that makes a render
+   succeed, so QC is now event-driven and the tick drops to a rare sweep
+   (`CELERY_BEAT_QC_SWEEP_INTERVAL_SECONDS`, default 900 s) that catches a render finished while
+   the worker was down.
+2. The claim's predicate moved onto the render row. `render_outputs.qc_claimed_at` is stamped in
+   the same transaction that writes the `pending` report, and `ix_render_outputs_awaiting_qc` is a
+   partial index over `status = 'succeeded' AND qc_claimed_at IS NULL` — a set that is **empty in
+   steady state**. Migration `0016` backfills the column for every render that already carries a
+   report, so the change does not offer the whole history back to QC.
+
+Re-measured on the same 200k-render fixture (PostgreSQL 17, single server, `EXPLAIN ANALYZE`):
+
+| Claim shape | Plan | Time |
+| --- | --- | --- |
+| W18: anti-join, no predicate on the render row | merge anti-join over a 200k index scan + an external-merge sort of every report | **199 ms** (354 ms cold) |
+| W19: `qc_claimed_at IS NULL`, one render awaiting | **index scan on `ix_render_outputs_awaiting_qc`** + nested-loop anti-join | **3.6 ms** |
+| W19: steady state, nothing awaiting | same index scan, anti-join never executed | **0.05 ms** |
+
+The plan genuinely changed — that was W18's actual open question, and the index is now the one
+the planner picks rather than one it ignores. The residual 3.6 ms when work *does* exist is the
+anti-join probing `ix_render_qc_reports_business_render` by `render_id` alone; a dedicated index
+on `render_qc_reports(render_id)` would remove it, and it is deliberately not added, because that
+cost is paid only on a tick that is about to run a whole QC job and the write cost would be paid
+by every report. The anti-join itself stays as a second, independent statement of "one run per
+render": the column and the report are written together and can only diverge through a defect.
+
+**`content.pending.sweep` is now the one entry that cannot have a producer.** It settles script
+and voiceover rows that opened before a provider call and never came back, and nothing emits an
+event for a process dying mid-call — an absence is only observable on a tick. Its age threshold
+(`LIFECYCLE_PENDING_SWEEP_AGE_SECONDS`) is validated at startup to exceed the longest honest run
+of either capability, so a slow run cannot be declared abandoned.
+
+## Content projects (PRD §20, slice 2E)
+
+`content_projects` is a durable job without a `jobs` row, and that is deliberate: a sequencer's
+state *is* its result, so keeping the same fact in two tables would give a crashed worker two
+answers to "where is this project". Every property this document requires of background work is
+on the project itself — a status (`state`), a timeout (`state_entered_at` against
+`LIFECYCLE_STEP_TIMEOUT_SECONDS`), attempt counters (`render_attempts`, `step_attempts`), a
+correlation id, and `FAILED` as the dead letter. `next_check_at` is both the due time the claim
+orders by and the lease: the claim pushes it out by `LIFECYCLE_LEASE_SECONDS`, so a worker that
+dies mid-step releases the project instead of holding it, and the step then runs again from the
+top — safe because every sub-call carries a deterministic idempotency key.
+
+Two bounds are load-bearing. `LIFECYCLE_MAX_RENDER_ATTEMPTS` (default 2, capped at 10 by the
+field itself) is read *before* a render is requested, and `lifecycle.decide_after_qc` returns no
+"retry" outcome at or above it — an unbounded re-render loop is not expressible rather than
+merely unlikely. `LIFECYCLE_MAX_STEP_ATTEMPTS` bounds transient step failures; a 4xx from a
+sub-service ends the project immediately, a 5xx buys another attempt.
 
 Beat runs as a separate read-only `celery-beat` Compose service rather than a
 worker `-B` flag, so scheduling never shares a process with media execution and

@@ -345,12 +345,15 @@ def test_logo_must_be_a_registered_brand_logo() -> None:
 def test_capabilities_gate_unsupported_features_before_any_render() -> None:
     faded = document(video_tracks=[{"track": 1, "clips": [clip(transition_out="fade")]}])
     assert "TIMELINE_UNSUPPORTED_TRANSITION" in check(faded)
-    voiced = document(
+    # `music` took `voiceover`'s place here when slice 2E implemented speech. It is still the
+    # honest example: nothing may lay a music bed until a licence record exists (§18.3), so no
+    # adapter declares the source and the gate refuses it before a render starts.
+    scored = document(
         audio_tracks=[
-            {"type": "voiceover", "asset_id": str(ASSET), "gain_db": 0, "duck_under_voice": False}
+            {"type": "music", "asset_id": str(ASSET), "gain_db": -18, "duck_under_voice": True}
         ]
     )
-    assert "TIMELINE_UNSUPPORTED_AUDIO_SOURCE" in check(voiced)
+    assert "TIMELINE_UNSUPPORTED_AUDIO_SOURCE" in check(scored)
 
 
 def test_every_failure_is_reported_not_just_the_first() -> None:

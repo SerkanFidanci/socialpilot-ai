@@ -3,7 +3,7 @@
 **Kapsam:** senaryo üretimi (`script_generation` portu), seslendirme (`tts` portu), timeline
 dokümanı, render öncesi doğrulama, parametrik düzenleme ve `RenderPort` arkasındaki render hattı.
 Slice 2A (W11) render yolunu, slice 2B (W13) senaryo yolunu, slice 2C (W15) seslendirmeyi,
-slice 2D (W18) otomatik QC'yi getirdi.
+slice 2D (W18) otomatik QC'yi, slice 2E (W19) içerik projesi yaşam döngüsünü getirdi.
 **İlgili:** PRD §17, §18, §19 → [35](../product/requirements/35-ai-routing-cost.md) ·
 [40a](../product/requirements/40a-content-planning-scenarios.md) ·
 [40b](../product/requirements/40b-scenario-render-lifecycle.md) ·
@@ -158,15 +158,35 @@ bir `voiceover_assets` satırını gösterir, yüklenmiş bir medya asset'ini de
 tablo, iki farklı tenant-kapsamlı sorgu. `Timeline.asset_ids` bu yüzden voiceover kimliğini
 **içermez** (worker onu kaynak video sanıp indirmeye çalışırdı); `Timeline.voiceover_ids` ayrı.
 §18.3'ün "seslendirme süresi" kontrolü artık gerçeğe bağlı: seslendirme süresi canvas süresini
-aşamaz (`TIMELINE_VOICEOVER_DURATION_OVERFLOW`). Bu slice **yeni ses işleme yazmaz** — müzik
-ducking (`duck_under_voice`) 2A şemasında zaten var, miksaj filtresi yok.
+aşamaz (`TIMELINE_VOICEOVER_DURATION_OVERFLOW`).
 
-> **Açık, PM'e:** hiçbir render adapter'ı `voiceover` ses kaynağını kabiliyetinde bildirmiyor
-> (`audio_sources = {original}`), çünkü ses miksajı bu iş emrinin kapsamı dışında. Doğrulama
-> bunu temiz biçimde `TIMELINE_UNSUPPORTED_AUDIO_SOURCE` ile reddediyor, yani seslendirmeli bir
-> timeline bugün **kaydedilemiyor**. Süre kuralı yine de koşuyor ve iki bulgu birlikte
-> dönüyor — kural "bir gün bir adapter özellik kazanınca var olmaya başlayan" bir şey olmasın
-> diye. FFmpeg adapter'ına voiceover miksajı eklemek ayrı bir slice (2E).
+**Miksaj slice 2E'de yazıldı (W15'in açığı kapandı).** `FFmpegRenderAdapter` ve fake adapter
+artık `audio_sources = {original, voiceover}` bildiriyor. Satır başına üretilen WAV'lar tek bir
+`aformat` + `concat` adımıyla birleştirilir (demuxer değil: sağlayıcının aynı akış
+parametrelerini döndürme yükümlülüğü yok), sonra `filter_complex` içinde altlıkla mikslenir:
+
+```
+[0:a]aformat=...,volume=<bed>dB[bed]
+[N:a]aformat=...,volume=<voice>dB[voice]
+duck ise: [voice]asplit=2[voicemix][voicekey]
+          [bed][voicekey]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=350[bedducked]
+          [bedducked][voicemix]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]
+```
+
+Üç karar: (1) miksaj `-af` değil `filter_complex` içinde, çünkü sidechain kompresörünün iki
+sinyali de aynı grafta olmalı; (2) `normalize=0`, çünkü timeline'ın desibelleri bir şey ifade
+etmeli — bunun bedeli tavanı aşabilen bir toplam, o yüzden `alimiter`; (3) `duration=first`,
+yani mix uzunluğu **görüntünün**: sesten kısa video olmaz, sesten uzun video sonda sessizlik
+bırakır. **Seslendirme taşımayan timeline eskisiyle birebir aynı yolu izler** (`0:a`, boş graf).
+
+`duck_under_voice` PRD §18.2'de müzik track'inde gösteriliyor; track başına bir bayrak ve
+anlamı "ses konuşurken bu altlığı geri çek". Müzik henüz desteklenmiyor (lisans kaydı ister,
+§18.3), bu yüzden bugün geri çekilen track **orijinal ses**. `music` kabiliyet kümesinde
+bilinçli olarak yok: kabiliyeti bildirmek, eksik lisans kaydını yarım kalan bir render'a
+çevirirdi.
+
+Doğrulama tarafında bunun sonucu: `TIMELINE_UNSUPPORTED_AUDIO_SOURCE` artık yalnızca `music`
+için düşüyor, ve seslendirme süresi kuralı seslendirmeyi reddeden tek kural olarak kaldı.
 
 ## Render akışı
 
@@ -307,8 +327,8 @@ gerçekten açılıyor mu, sesi var mı, yazısı kadrajda mı, fiyatı hâlâ k
 `succeeded` sayılıyordu.
 
 ```
-Celery beat ──content.qc.drain──► ContentQcService     (beat girdisi: drain-content-qc)
-                                   │ claim: QC raporu OLMAYAN `succeeded` render (SKIP LOCKED)
+render başarısı ──content.qc.requested──► ContentQcService   (beat: sweep-content-qc, seyrek)
+                                   │ claim: QC açılmamış `succeeded` render (SKIP LOCKED)
                                    ├─ T1 COMMIT: render_qc_reports(pending,
                                    │             verdict=needs_review, path=human_review)
                                    │             + jobs(content.qc) + attempt + route snapshot
@@ -332,7 +352,14 @@ ifade edilemiyor.** Gerekçe: ölçmediğini onaylayan bir QC, QC'siz olmaktan k
 `alternative_scene` · `alternative_provider` · `human_review` · `request_new_media`). Yeniden
 render tetiklemez, sağlayıcı değiştirmez, deneme saymaz — sınırsız render döngüsünün sınırı
 yaşam döngüsünündür (2E). `ContentQcService` yapıcısında **render portu yoktur**; bir test
-imzayı zorluyor.
+imzayı zorluyor. Öneriyi eyleme çeviren tablo 2E'de: aşağıdaki "İçerik projesi yaşam döngüsü".
+
+**Tetikleyici 2E'de olaya döndü.** W18 claim'i "raporu olmayan `succeeded` render" taramasıydı
+ve tek uyandırıcısı beat tick'iydi; ölçüm 200 bin render'da tick başına ~134 ms ve "index tek
+başına çözmüyor" idi. `render_service._succeed` artık `content.qc.requested` yazıyor,
+`render_outputs.qc_claimed_at` claim'i kendi satırına taşıyor ve kısmi index (`status='succeeded'
+AND qc_claimed_at IS NULL`) durağan durumda **boş küme** tutuyor. Yeniden ölçüm ve plan
+karşılaştırması: [background-jobs.md](background-jobs.md).
 
 **Kontrol kümesi bizim değil, gereksinimin.** `QcCheck`'in her üyesi §19.4'ün bir satırı, aynı
 sırayla. Bu hattın dört turluk dersi (elle sayılmış her küme delindi) burada "daha uzun liste"
@@ -408,33 +435,100 @@ reddediyor — aynı iki fonksiyon, ikinci bir uygulama değil. **Çekim eşleş
 `şeker` yasakken `şekerli` serbest, `az` yasakken `lezzetli` serbest. Liste markanın, kalıp
 bizim; kök eşleşmesi markanın kastetmediğini yasaklardı.
 
-**Tetikleyici beat tick'idir, olay değil** (takip 1). `content.qc.drain` bu sistemdeki tek
-**olayı olmayan** drain: diğerleri hem üreticisinin yazdığı outbox olayıyla hem de broker'ın
-kaybettiğini süpüren tick ile uyandırılır; QC'nin üreticisi yok, çünkü render yolunda
-`content.qc.requested` yazan bir yer yok. Claim doğrudan veritabanına soruyor: *hangi
-`succeeded` render'ın raporu yok?* Bunun bedeli tahmin değil **ölçüm**: hash anti-join iki
-sequential scan üzerinden, 200 bin render'da tick başına **~134 ms**. Aynı sorgu kısmi index
-üzerinde nested-loop anti-join olarak **0,14 ms** sürüyor — ama planlayıcı bunu seçmiyor, çünkü
-"raporsuz render'lar hep en yenilerdir" korelasyonunu bilemez. Yani index tek başına çözmüyor;
-sorgunun bu korelasyonu ifade etmesi gerek. İkisinin de doğru yeri, `render_service.py`'ye sahip
-olan ve tamamlanınca kuyruğa yazabilecek olan **2E**: olay geldiğinde tarama yavaş bir süpürmeye
-düşer ve maliyet sorusu ortadan kalkar. O zamana kadar rakam hem karşılanabilir hem **biliniyor**.
+**Tetikleyici 2E'de tick'ten olaya geçti.** W18 bunu "olayı olmayan tek drain" olarak
+bırakmıştı: claim doğrudan veritabanına soruyordu (*hangi `succeeded` render'ın raporu yok?*) ve
+bedeli ölçülmüştü — hash anti-join, 200 bin render'da tick başına ~134 ms; index tek başına plan
+değiştirmiyor, çünkü planlayıcı "raporsuz render'lar hep en yenilerdir" korelasyonunu bilemez.
+W18'in bıraktığı sonuç **sorgunun bu korelasyonu ifade etmesi gerektiği** idi ve karar
+`render_service.py`'ye sahip olan slice'a bırakıldı. 2E ikisini de yaptı: olay (`content.qc.requested`,
+render'ı başarılı yapan transaction'da) ve `render_outputs.qc_claimed_at` üzerinde kısmi index.
+Yeniden ölçüm, plan karşılaştırması ve kalan 3,6 ms'in gerekçesi
+[background-jobs.md](background-jobs.md)'de.
 
-Taramanın satın aldığı şey, kaybedilemeyecek bir özellik: **worker düşükken biten render bir
-sonraki tick'te bulunuyor** — kuyruk kaydı olmadan, kaybolmuş mesaj olmadan. Bir olay eklendikten
-sonra bile tarama ikinci ağ olarak kalmalı; testi (`test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up`)
-tam olarak bunu sabitliyor.
+Taramanın satın aldığı şey korunuyor: **worker düşükken biten render bulunuyor** — artık
+30 saniyelik tick'le değil, seyrek bir süpürmeyle (`CELERY_BEAT_QC_SWEEP_INTERVAL_SECONDS`,
+varsayılan 900 s). Testi (`test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up`)
+yerinde duruyor.
 
-## Bu üç slice'ın taşımadıkları
+## İçerik projesi yaşam döngüsü (slice 2E)
 
-Yaşam döngüsü ve entitlement tüketimi (2E), onay/revizyon akışı (2F),
-planlayıcı (2G). Yayınlama Phase 4. Gerçek C2PA manifest yazımı ayrı iş. `fade` geçişi ve
-voiceover/music ses kaynakları adapter kabiliyetinde **bildirilmiyor**, dolayısıyla doğrulama
-onları temiz biçimde reddediyor — seslendirmeli timeline'ın bugün kaydedilememesinin sebebi bu
-(yukarıdaki açık).
+2A–2D beş yetenek üretti ve **hiçbiri diğerini tanımıyordu**. `content_projects` PRD §20'nin
+durum makinesi; proje bu yeteneklerin **sahibi değil sıralayıcısıdır** — her adım o işi zaten
+yapan servisi çağırır, kendi yetkisi, kendi idempotency'si ve kendi sağlayıcı muhasebesiyle.
 
-Senaryo ve seslendirme tarafında ayrıca: **gerçek AI sağlayıcısı yok** (W08 benchmark'ı + route
-politikası ADR'ından sonra), senaryodan timeline **otomatik kurulmuyor** (senaryo
-`required_scene_tags` ve seslendirme segment süreleri taşır ama sahne ataması yapmaz — 2E), ve
-ikisi de **dayanıklı bir job değil**: istek-yanıt döngüsünde, sınırlı timeout ile koşuyorlar.
-`pending`'de takılı kalan satırları süpüren bir kurtarma taraması 2E'nin işi.
+```
+PLANNED ──► WAITING_MEDIA ──► ANALYZING ──► SCRIPTING ──► VOICE_GENERATION
+   └──────────────────────────────►┘                            │
+                                                                ▼
+        PREVIEW_READY ◄── QUALITY_CHECK ◄── RENDERING ◄── TIMELINE_BUILDING
+              ▲                │
+              │                └──► FAILED ──► RETRYING ──► ANALYZING
+        (needs_review de buraya gelir, requires_human_review bayrağıyla)
+```
+
+**Geçiş tablosu kapalı ve total.** `next_state(durum, olay)` çarpımın tamamı için cevap verir;
+PRD §20'nin çizmediği çift `None` döner — `KeyError` değil, sessiz başarı hiç değil. Permütasyon
+testi tabloyu §20'nin kenarlarıyla **birebir** karşılaştırıyor. Tek ekleme `STEP_FAILED`:
+diyagram `FAILED`'a yalnızca `QUALITY_CHECK` ve `PUBLISHING`'den geliyor, oysa senaryo üretimi
+düşen bir projenin gidecek yeri yok. Ekleme her çalışan durumdan `FAILED`'a ve başka hiçbir yere.
+
+**Her geçiş transactional kaydedilir** (§20'nin son cümlesi) — `content_project_transitions`:
+kim, ne zaman, hangi kodla. Audit log'a değil kendi tablosuna, çünkü cevaplaması gereken soru
+("bu proje nerede takıldı?") tek bir projenin geçmişi üzerinde yürümek. `reason` bir koddur;
+tenant metni oraya yazılmaz.
+
+**Proje satırının kendisi dayanıklı job'dır** — ayrı `jobs` satırı yok. Gerekçe ve lease/timeout
+mekaniği: [background-jobs.md](background-jobs.md).
+
+**QC kararı burada eyleme dönüyor, sınırlı olarak** (`lifecycle.decide_after_qc`, saf ve total):
+
+| Karar | Öneri | Sonuç |
+|---|---|---|
+| `passed` | — | `PREVIEW_READY` |
+| `needs_review` | herhangi | `PREVIEW_READY` + `requires_human_review` |
+| `failed` | `retry_render`, deneme kalmışsa | `FAILED` → `RETRYING` (§20'nin kendi yolu) |
+| `failed` | `retry_render`, deneme bittiyse | `FAILED` + `human_review` + `PROJECT_RENDER_ATTEMPTS_EXHAUSTED` |
+| `failed` | `alternative_scene` / `alternative_provider` / `request_new_media` | `FAILED` + öneri **kaydedilir, uygulanmaz** |
+
+`needs_review`'un `PREVIEW_READY`'ye gitmesi bilinçli: gerçek VLM sağlayıcısı bağlanana kadar
+fail-closed kural gereği **her** render `needs_review`, ve bunu `FAILED` saymak ürünü durdurur.
+Uygulanmayan üç öneri, olmayan bir kabiliyeti gerektiriyor; yapılmamış bir şeyi yapılmış gibi
+kaydetmemek 2F/2G'ye dürüst bir kuyruk bırakıyor.
+
+**Döngü sınırı ifade edilebilir değil, ifade edilemez.** `LIFECYCLE_MAX_RENDER_ATTEMPTS`
+(varsayılan 2, alanın kendisi 10'da tavanlı) render **istenmeden önce** okunur ve
+`decide_after_qc` tavana ulaşınca hiçbir girdi kombinasyonu için "retry" dönmez. Permütasyon
+testi 3 karar × 6 öneri × 4 sayaç değerini tüketiyor.
+
+**Timeline otomatik kuruluyor** (`lifecycle.compose_timeline`, saf): senaryonun segmentleri
+sırayla dolaşılır, her biri `required_scene_tags`'iyle kesişen ilk kullanılmamış sahneyi alır,
+kesişme yoksa sıradakini. Seslendirme kesitten uzunsa son klip uzatılır, yetmezse sahne
+eklenir, o da yetmezse **reddedilir** (`PROJECT_TIMELINE_TOO_SHORT_FOR_VOICEOVER`) — ses yazılıp
+onaylanmış olandır, eksik olan görüntüdür. Bindirme yok ve altyazı kapalı: bindirme metni K4'ün
+düzenleme yüzeyi (2F), transcript altyazısı ise seslendirmenin *altındaki* sesi altyazılardı.
+
+**Seçim iki tarafı da aynı yazımla karşılaştırır.** Video-understanding etiketleri
+`lifecycle.normalize_scene_tag` ile 2B'nin `required_scene_tags`'i yazdığı biçime indirgenir
+(`normalize_encoding` + boşluk/tire → alt çizgi; **eşleştirme katlaması değil** — `ürün`ü `urun`
+yapmak eşitliğin bir tarafını bozardı). Bir ek adım yalnızca karşılaştırmada var: Türkçe küçük
+harf `I`'yi `ı` yapar, dolayısıyla `PREPARATION` yazan bir sağlayıcı ile `preparation` isteyen bir
+senaryo asla buluşamazdı; `_match_key` noktasız/noktalı çiftini katlar. Saklanan hiçbir değer
+değişmez.
+
+**`pending` süpürücü** (W13/W15 borcu): sağlayıcı çağrısı ortasında düşen senaryo/seslendirme
+satırları artık `content.pending.sweep` ile yaş eşiğine göre `failed`e düşüyor
+(`SCRIPT_GENERATION_ABANDONED` / `VOICEOVER_ABANDONED`). Eşik, `Settings` doğrulamasında iki
+kabiliyetin en uzun dürüst koşusundan büyük olmaya zorlanıyor — sadece *yavaş* olan bir koşuyu
+terk edilmiş ilan etmek bu süpürmenin yapmaması gereken tek şey.
+
+## Bu dört slice'ın taşımadıkları
+
+Entitlement/kota tüketimi (W20), onay/revizyon akışı (2F), planlayıcı (2G). Yayınlama Phase 4.
+Gerçek C2PA manifest yazımı ayrı iş. `fade` geçişi ve `music` ses kaynağı adapter kabiliyetinde
+**bildirilmiyor** (müzik lisans kaydı ister, §18.3), dolayısıyla doğrulama onları temiz biçimde
+reddediyor.
+
+Ayrıca: **gerçek AI sağlayıcısı yok** (W08 benchmark'ı + route politikası ADR'ından sonra),
+senaryo üretimi ve seslendirme hâlâ **dayanıklı bir job değil** — istek-yanıt döngüsünde, sınırlı
+timeout ile koşuyorlar; 2E onları bir job'a taşımadı, yalnızca terk edilmiş satırlarını süpürdü
+ve bir sıralayıcının arkasına koydu.

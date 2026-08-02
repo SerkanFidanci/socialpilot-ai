@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | W01→W18 merge edildi (2A–2D bitti), yalnız W06 bekliyor. **Phase 2'nin ilk dört dilimi kapandı**; sırada 2E (yaşam döngüsü + entitlement). W18 için ilk Codex turu bekliyor |
-| Alembic head | `0015_render_qc_reports` (tek head; zincir 0001→0015, up/down/up doğrulandı) |
-| Backend doğrulama | **1151 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | W01→W18 merge edildi (2A–2D bitti), yalnız W06 bekliyor. **Phase 2'nin ilk dört dilimi kapandı**; 2E'nin birinci yarısı (W19) dalda tamam. W18 ve W19 için Codex turu bekliyor |
+| Alembic head | `0016_content_projects` (W19 dalında; tek head; zincir 0001→0016, up/down/up doğrulandı). `main`'de hâlâ `0015_render_qc_reports` |
+| Backend doğrulama | **1151 pytest** `main`'de (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · W19 dalında **1204** · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -35,24 +35,36 @@
 
 ### Sırada
 
-**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.** 2A/2B/2C kapandı; **2D dalda tamamlandı** (W18, merge bekliyor); sırada **2E (yaşam döngüsü + entitlement)**.
+**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.** 2A/2B/2C kapandı; **2D ve 2E'nin birinci yarısı dalda tamamlandı** (W18, W19 — merge bekliyor); sırada **W20 (entitlement/kota tüketimi)** ve **2F (onay + revizyon)**.
+
+> **2E birinci yarı tamam (dalda, W19):** artık bir "içerik projesi" var. `PLANNED`'dan
+> `PREVIEW_READY`'ye giden yol uçtan uca çalışıyor — senaryo, seslendirme, timeline, render, QC
+> sırayla ve her geçiş kaydedilerek. Üç devralınan borç kapandı (voiceover miksajı, QC kuyruk
+> olayı + sorgu yeniden şekillendirmesi, `pending` süpürücü). **Hak tüketimi bu slice'ta yok**;
+> W20 tüketim noktalarını buraya takacak.
 
 > **2D tamam (dalda):** takip 1 ile Celery bağlantısı da yapıldı — `content.qc.drain`, beat
 > girdisi `drain-content-qc`, worker composition. QC artık uçtan uca akıyor.
 >
-> **2E'ye devredilen ölçüm:** QC claim'i "raporu olmayan `succeeded` render" taramasıdır ve
-> tetikleyicisi yalnızca beat tick'idir (olayı yazacak `render_service.py` W18'in listesinde
-> değildi). Ölçüldü: 200 bin render'da tick başına **134 ms** (hash anti-join, iki seq scan);
-> aynı sorgu nested-loop + kısmi index ile **0,14 ms**, ama planlayıcı o planı seçmiyor çünkü
-> "raporsuz render'lar hep en yeniler" korelasyonunu bilemiyor. Yani **index tek başına
-> çözmüyor**; sorgunun yeniden şekillenmesi gerek. 2E olayı eklerken bu kararı da alsın —
-> ayrıntı W18 takip raporunda ve [background-jobs.md](architecture/background-jobs.md)'de.
+> **2E'ye devredilen ölçüm — KAPANDI (W19).** W18 QC claim'ini "raporu olmayan `succeeded`
+> render" taraması olarak bırakmıştı (200 bin render'da tick başına 134 ms) ve sonucu **"index
+> tek başına çözmüyor, sorgunun korelasyonu ifade etmesi gerek"** idi. W19 ikisini de yaptı:
+> render'ı başarılı yapan transaction'da `content.qc.requested` yazılıyor, ve claim'in yordamı
+> `render_outputs.qc_claimed_at` ile kendi satırına taşındı (kısmi index; durağan durumda **boş
+> küme**). Yeniden ölçüm: **199 ms → 3,6 ms**, bekleyen yokken **0,05 ms**, ve plan gerçekten
+> `ix_render_outputs_awaiting_qc` index scan'ine döndü. Beat tick'i 30 s'den 900 s'lik seyrek
+> süpürmeye indi. Ayrıntı: [background-jobs.md](architecture/background-jobs.md).
 >
 > **2D'nin ürün tarafına söylediği:** gerçek VLM sağlayıcısı bağlanana kadar (W08 sonrası) hiçbir
 > render otomatik `passed` olmuyor. Model kontrolleri `unknown`, karar `needs_review`. Bu
 > fail-closed kuralının doğru sonucu, eksiklik değil.
 
-> **2E'ye taşınan açık (W15):** hiçbir render adapter'ı `voiceover` ses kaynağını kabiliyetinde bildirmiyor, çünkü ses miksajı W15'in kapsamı dışındaydı. Seslendirme üretiliyor ve ffprobe ile ölçülüyor, ama `voiceover` track'i taşıyan timeline bugün `TIMELINE_UNSUPPORTED_AUDIO_SOURCE` ile reddediliyor. FFmpeg adapter'ına voiceover + ducking miksajı eklemek ayrı bir dilim.
+> ~~**2E'ye taşınan açık (W15):**~~ **KAPANDI (W19).** Her iki render adapter'ı artık `voiceover`
+> ses kaynağını bildiriyor; satır başına WAV'lar tek track'e birleşiyor ve altlıkla mikseniyor,
+> `duck_under_voice` varsa sidechain kompresörüyle. Uçtan uca kanıt: aynı kesitin üç render'ı
+> (altlık / +ses / +ducking) **çözülmüş PCM hash'iyle** karşılaştırıldı ve üçü de farklı.
+> `TIMELINE_UNSUPPORTED_AUDIO_SOURCE` artık yalnızca `music` için düşüyor — müzik lisans kaydı
+> ister (§18.3) ve kabiliyeti bildirmek eksik kaydı yarım kalan bir render'a çevirirdi.
 
 ### Başlamadı
 
@@ -151,7 +163,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | **iki tur da merge edildi** (2. tur: Latin dışı alfabe kısıtı `SCRIPT_UNSUPPORTED_CHARACTER`, görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde-kodlu adları görüyor) · **kapanış birleşik Codex turuna bağlı** (W17 sonrası) | `fix/verification-followups-3` (worktree duruyor, birleşik tur bitene kadar) | Opus 5 / high | — |
 | [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin katlaması + kalıp grameri + Türkçe çekim + yazılı sayı grameri** | **kapandı** · üç tur merge edildi · sayı sözcükleri liste ama **birleşimleri gramer** (bitişik/tireli dahil), `T Lye` kapalı Türkçe ek kümesiyle, `Şef T. Lezzetli` pini korundu · **111.129 varyant / 0 kaçış**, jeneratif regresyon testi · son Codex teyidi bekliyor | `fix/w17-latin-fold` (worktree duruyor) | Opus 5 / high | — |
 | [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4) · fail-closed · karar verir eylem yapmaz · `forbidden_matcher` birleştirmesi | **kapandı** · merge · `0015` · 13 kontrol raporda ve atlanması ifade edilemiyor; gerçek bozuk medya fixture'ları; karar tablosu permütasyonlarla tüketildi; `content.qc.drain` + beat bağlantısı yapıldı · **Codex turu bekliyor** | `slice/2d-automatic-qc` (worktree duruyor) | Opus 5 / high | kullanıldı |
-| [W19](handoffs/W19-content-lifecycle.md) | **Phase 2E (birinci yarı) — içerik projesi yaşam döngüsü** (§20): kapalı durum makinesi + geçiş kaydı, QC kararının sınırlı eyleme dönmesi (deneme sınırı zorunlu), üç devralınan borç (voiceover miksajı, QC kuyruk olayı, `pending` süpürücü) | **şimdi** | `slice/2e-content-lifecycle` | Opus 5 / high | **SENDE** (`0016`) |
+| [W19](handoffs/W19-content-lifecycle.md) | **Phase 2E (birinci yarı) — içerik projesi yaşam döngüsü** (§20): kapalı durum makinesi + geçiş kaydı, QC kararının sınırlı eyleme dönmesi (deneme sınırı zorunlu), üç devralınan borç (voiceover miksajı, QC kuyruk olayı, `pending` süpürücü) | **tamamlandı, dalda** · `0016` · uçtan uca `PLANNED`→`PREVIEW_READY` gerçek PostgreSQL/MinIO/FFmpeg üzerinde; voiceover miksajı + ducking PCM hash'iyle kanıtlandı; döngü tam 2 render'da duruyor; QC claim'i 199 ms → 3,6 ms (durağan durumda 0,05 ms), plan gerçekten değişti · **Codex turu bekliyor** | `slice/2e-content-lifecycle` (worktree duruyor) | Opus 5 / high | kullanıldı |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -159,7 +171,7 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| `modules/content/**` (lifecycle/project/render_service/tts_service/script_service), `infrastructure/render/**`, `worker/**`, `infrastructure/celery_app.py`, `api/routes/content.py`, `core/config.py`, `migrations/0016_*` | **W19** |
+| `modules/content/**` (lifecycle/project/render_service/tts_service/script_service), `infrastructure/render/**`, `worker/**`, `infrastructure/celery_app.py`, `api/routes/content.py`, `core/config.py`, `migrations/0016_*` | **W19** (dalda tamam; ayrıca `infrastructure/celery_publisher.py` ve `modules/content/service.py`'ye ilan dışı iki dokunuş — gerekçe W19 raporunda) |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

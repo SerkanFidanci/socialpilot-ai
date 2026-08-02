@@ -52,12 +52,23 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "content.render.drain",
                 "schedule": settings.celery_beat_media_drain_interval_seconds,
             },
-            # The one drain with no outbox event behind it. Automatic QC (§19.4) claims a
-            # succeeded render that carries no report, so the beat tick is the whole trigger
-            # rather than a wake-up for work an event already announced.
-            "drain-content-qc": {
+            # Automatic QC (§19.4) is woken by `content.qc.requested` the moment a render
+            # succeeds, so this tick is the net rather than the trigger: it catches a render
+            # that finished while the worker was down, or an event the broker lost. Slice 2D
+            # measured the always-on scan this replaces at 134 ms per tick over 200k renders.
+            "sweep-content-qc": {
                 "task": "content.qc.drain",
+                "schedule": settings.celery_beat_qc_sweep_interval_seconds,
+            },
+            "drain-content-projects": {
+                "task": "content.project.drain",
                 "schedule": settings.celery_beat_media_drain_interval_seconds,
+            },
+            # The one entry here with no event behind it, and it cannot have one: nothing emits
+            # "a process died mid-call", which is the condition this sweep exists to notice.
+            "sweep-abandoned-runs": {
+                "task": "content.pending.sweep",
+                "schedule": settings.celery_beat_pending_sweep_interval_seconds,
             },
             "recover-stale-jobs": {
                 "task": "operations.recovery.drain",

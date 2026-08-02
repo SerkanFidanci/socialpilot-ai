@@ -268,7 +268,18 @@ class ContentTimelineService:
         profile: RenderProfile,
         idempotency_key: str | None,
         correlation_id: str,
+        trigger: RenderTrigger | None = None,
     ) -> RenderOutput:
+        """Validate and enqueue a render.
+
+        `trigger` is the entitlement fact (PRD §12.8) and defaults to being inferred from the
+        timeline's revision, which is right for a caller holding a document: revision 1 is the
+        generation, everything after it is an edit. A caller that knows better may state it —
+        slice 2E's sequencer does, because its second attempt at the *same* revision is a
+        re-render after a failed check and plan §2 already ruled that a re-render consumes no
+        fresh right. Nothing here reads a ledger; the column is the record W20 will read.
+        """
+
         async with self._session.begin():
             await self._authorize(user_id, business_id, ContentAction.RENDER_REQUEST)
             await self._require_active_business(business_id)
@@ -290,7 +301,9 @@ class ContentTimelineService:
             timeline = self._parse(record.document)
             await self._require_valid(business_id, timeline, profile)
 
-            trigger = RenderTrigger.INITIAL if record.revision == 1 else RenderTrigger.REVISION
+            resolved_trigger = trigger or (
+                RenderTrigger.INITIAL if record.revision == 1 else RenderTrigger.REVISION
+            )
             render = RenderOutput(
                 id=uuid4(),
                 business_id=business_id,
@@ -298,11 +311,11 @@ class ContentTimelineService:
                 job_id=None,
                 profile=profile,
                 status=RenderStatus.PENDING,
-                trigger=trigger,
+                trigger=resolved_trigger,
                 # A pure re-render of an edited document generates nothing new and calls no
                 # provider, so it draws on the revision quota rather than a generation right
-                # (plan §2, PRD §12.8). Slice 2E reads this column; nothing else decides it.
-                consumes_entitlement=trigger is RenderTrigger.INITIAL,
+                # (plan §2, PRD §12.8). Slice W20 reads this column; nothing else decides it.
+                consumes_entitlement=resolved_trigger is RenderTrigger.INITIAL,
                 ai_disclosure_state=current_disclosure_state(),
                 provenance_state=ProvenanceState.ABSENT,
                 correlation_id=correlation_id,
@@ -323,7 +336,7 @@ class ContentTimelineService:
                 correlation_id=correlation_id,
                 details={
                     "profile": profile.value,
-                    "trigger": trigger.value,
+                    "trigger": resolved_trigger.value,
                     "consumes_entitlement": render.consumes_entitlement,
                 },
             )

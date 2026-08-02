@@ -1133,13 +1133,21 @@ def test_the_suffix_alphabet_is_the_language_rather_than_a_word_list() -> None:
 
 
 def test_the_shared_normalizer_has_exactly_the_callers_it_is_meant_to_have() -> None:
-    """W16 left one caller and named the second in advance; slice 2D added it and no more.
+    """W16 left one caller and named the second in advance; 2D and 2E added one each, no more.
 
     The list is asserted whole rather than as a membership test, because the risk this pin
-    guards against is a *third* copy of the fold appearing somewhere — a rule that matches
+    guards against is a *fourth* copy of the fold appearing somewhere — a rule that matches
     characters without normalizing them first is how every bypass in this pipeline's history got
-    in. `validation.py` is the timeline's forbidden-term gate, which now folds through exactly
-    the same functions the script side does instead of its own `re.IGNORECASE` matcher.
+    in. `validation.py` is the timeline's forbidden-term gate, which folds through exactly the
+    same functions the script side does instead of its own `re.IGNORECASE` matcher.
+
+    `lifecycle.py` (slice 2E) is the third and it is a *matching* caller of a different kind: it
+    spells a video-understanding label the way slice 2B spelled a script's `required_scene_tags`,
+    so scene selection compares two values normalized identically. It uses `normalize_encoding`,
+    not the matching fold, for the reason `_scene_tags` states — folding `ürün` to `urun` on one
+    side of an equality is a product bug dressed as a security fix. The repository does not
+    import this module at all; it calls `lifecycle.normalize_scene_tag`, so the definition of "a
+    scene tag" stays in one place.
     """
 
     importers = sorted(
@@ -1148,7 +1156,11 @@ def test_the_shared_normalizer_has_exactly_the_callers_it_is_meant_to_have() -> 
         if "content.text_normalization import" in path.read_text(encoding="utf-8")
     )
 
-    assert importers == ["modules/content/script.py", "modules/content/validation.py"]
+    assert importers == [
+        "modules/content/lifecycle.py",
+        "modules/content/script.py",
+        "modules/content/validation.py",
+    ]
 
 
 def test_an_invented_price_in_a_generation_is_rejected_with_a_pointer() -> None:
@@ -1541,12 +1553,16 @@ def test_every_content_write_answers_the_same_way_for_the_same_role() -> None:
         ContentAction.SCRIPT_GENERATE,
         # W15: producing a voiceover is producing content, so it answers the same way.
         ContentAction.VOICEOVER_GENERATE,
+        # W19: a project orders exactly these writes and adds none, so it cannot answer
+        # differently from the things it sequences.
+        ContentAction.PROJECT_WRITE,
     )
     reads = (
         ContentAction.TIMELINE_READ,
         ContentAction.RENDER_READ,
         ContentAction.SCRIPT_READ,
         ContentAction.VOICEOVER_READ,
+        ContentAction.PROJECT_READ,
     )
 
     assert {required_permission(action) for action in writes} == {Permission.CONTENT_GENERATE}

@@ -18,7 +18,12 @@ from app.core.telemetry import (
     instrument_database,
     setup_worker_telemetry,
 )
-from app.infrastructure.ai import create_visual_qc
+from app.infrastructure.ai import (
+    create_audio_probe,
+    create_script_generator,
+    create_tts,
+    create_visual_qc,
+)
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.celery_publisher import CeleryOutboxPublisher
 from app.infrastructure.database.metadata import verify_mapping_is_complete
@@ -39,10 +44,16 @@ from app.infrastructure.media.fake_video_understanding import (
 )
 from app.infrastructure.render import create_qc_probe, create_render
 from app.infrastructure.storage import create_storage
+from app.modules.content.project_service import (
+    AbandonedRunSweeper,
+    ContentProjectAdvanceService,
+)
 from app.modules.content.qc import MediaQcProbePort, VisualQcPort
 from app.modules.content.qc_service import ContentQcService
 from app.modules.content.render import RenderPort
 from app.modules.content.render_service import ContentRenderService
+from app.modules.content.script import ScriptGenerationPort
+from app.modules.content.tts import AudioProbePort, TTSPort
 from app.modules.media.ingest import MediaIngestService
 from app.modules.media.scene_speech import SceneSpeechAnalysisService
 from app.modules.media.storage import MultipartStoragePort
@@ -74,6 +85,13 @@ class WorkerContext:
     # customer's video.
     qc_probe: MediaQcProbePort
     visual_qc: VisualQcPort
+    # The sequencer calls the script and speech services, so the worker process needs the same
+    # two capability ports the API has. They follow the same rule: `disabled` in production until
+    # a real provider is connected, which makes a project stop at `SCRIPTING` with a documented
+    # code rather than produce fixture prose somebody could publish.
+    script_generator: ScriptGenerationPort
+    tts: TTSPort
+    audio_probe: AudioProbePort
     content_inspector: FakeContentInspector
     malware_scanner: FakeMalwareScanner
     scene_detector: FakeSceneDetector
@@ -149,6 +167,29 @@ class WorkerContext:
             session, self.settings, self.materializer, self.qc_probe, self.visual_qc
         )
 
+    def content_project_service(self, session: AsyncSession) -> ContentProjectAdvanceService:
+        """Build the sequencer. Every capability arrives as the service that owns it.
+
+        There is no provider port on this object that the individual services do not already
+        hold — the sequencer orders them and owns none of them, which is the constructor saying
+        the same thing slice 2E's work order does.
+        """
+
+        return ContentProjectAdvanceService(
+            session,
+            self.settings,
+            render=self.render,
+            script_generator=self.script_generator,
+            tts=self.tts,
+            audio_probe=self.audio_probe,
+            storage=self.storage,
+        )
+
+    def abandoned_run_sweeper(self, session: AsyncSession) -> AbandonedRunSweeper:
+        """Settle `pending` provider runs nobody will ever come back to. No ports at all."""
+
+        return AbandonedRunSweeper(session, self.settings)
+
     def recovery_service(self, session: AsyncSession) -> JobRecoveryService:
         return JobRecoveryService(session, self.settings)
 
@@ -188,6 +229,9 @@ def build_worker_context(settings: Settings) -> WorkerContext:
         render=create_render(settings),
         qc_probe=create_qc_probe(settings),
         visual_qc=create_visual_qc(settings),
+        script_generator=create_script_generator(settings),
+        tts=create_tts(settings),
+        audio_probe=create_audio_probe(settings),
         content_inspector=FakeContentInspector(),
         malware_scanner=FakeMalwareScanner(),
         scene_detector=FakeSceneDetector(),

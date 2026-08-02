@@ -123,6 +123,9 @@ why an encode stopped without the worker inventing an API error.
 | `RENDER_TIMELINE_INVALID` | the stored document no longer parses under §18.2 |
 | `RENDER_TIMELINE_VALIDATION_FAILED` | §18.3 re-run immediately before rendering now refuses. Not redundant with the API check: a campaign can expire or a price row can be superseded between request and render |
 | `RENDER_SOURCE_UNAVAILABLE` | a source object could not be materialized for the encode |
+| `RENDER_VOICEOVER_UNAVAILABLE` | the timeline names a voiceover with no usable stored audio. Validation already refuses that document, so reaching this means the row changed between validation and the encode |
+| `RENDER_VOICEOVER_UNSUPPORTED` | the voiceover carries more lines than the adapter will join. A bound the adapter states for itself rather than trusting the domain to have applied |
+| `RENDER_VOICEOVER_FAILED` | joining the speech lines into one track failed |
 | `RENDER_STORAGE_UNAVAILABLE` / `RENDER_STORAGE_METADATA_INVALID` | the output could not be stored, or what storage holds does not match what was written |
 
 ## Script generation (PRD §17.5, §18.1 — slice 2B)
@@ -257,6 +260,43 @@ Run-level failure codes on `render_qc_reports.failure_code` (`status = failed`) 
 could not finish — `QC_PROBE_TIMEOUT`, `QC_PROBE_UNAVAILABLE`,
 `QC_PROBE_DIAGNOSTIC_LIMIT_EXCEEDED`. A run that failed is not the same fact as a `failed`
 verdict; the row carries both columns so an infrastructure outage can never read as a bad video.
+
+## Content project lifecycle (PRD §20 — slice 2E)
+
+Request-level:
+
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 404 | `PROJECT_NOT_FOUND` | The project does not exist in the authorized tenant. Another tenant's real id answers exactly like a made-up one — the query is tenant-scoped, so the two are indistinguishable by construction. |
+| 404 | `PROJECT_INPUT_NOT_FOUND` | A named product, CTA, campaign or source asset is not this tenant's. Checked when the project is opened rather than four steps later in a worker, where it would surface as a script-generation code. |
+| 409 | `PROJECT_TRANSITION_NOT_ALLOWED` | The request names a transition PRD §20 does not draw from the project's current state — attaching media to a project that is already scripting, for instance. `meta.state` names where it actually is. |
+| 422 | `PROJECT_SOURCES_REQUIRED` | Attaching media with an empty list. |
+| 422 | `PROJECT_TOO_MANY_SOURCE_ASSETS` | More sources than `SCRIPT_GENERATION_MAX_SOURCE_ASSETS`. |
+
+Failure codes on `content_projects.failure_code`, which is why a project stopped rather than an
+HTTP answer. None of them carries tenant content:
+
+| Code | Meaning |
+|---|---|
+| `PROJECT_SOURCE_NOT_ANALYZED` | Recorded as a transition *reason* while waiting, not a failure: analysis is a job of its own and may still be queued. It becomes `PROJECT_STATE_TIMEOUT` if it never completes. |
+| `PROJECT_STATE_TIMEOUT` | The project sat in one working state longer than `LIFECYCLE_STEP_TIMEOUT_SECONDS`. States that wait on a person (`WAITING_MEDIA`) are exempt — a customer who has not uploaded is not a stalled job. |
+| `PROJECT_SCRIPT_FAILED` / `PROJECT_VOICEOVER_FAILED` | The step's own row settled `failed`; that row carries the provider-level reason. |
+| `PROJECT_NO_USABLE_SCENE` | No detected scene long enough to become a clip. |
+| `PROJECT_TIMELINE_TOO_SHORT_FOR_VOICEOVER` | The speech outlasts every frame available. Refused rather than trimmed: the audio is what was written and approved. |
+| `PROJECT_TIMELINE_TOO_LONG` | The composed cut exceeds `RENDER_MAX_DURATION_MS`. |
+| `PROJECT_TIMELINE_REJECTED` | A produced artefact the next step needs is missing or no longer readable. |
+| `PROJECT_RENDER_FAILED` | QC failed with a suggestion this slice does not execute (`alternative_scene`, `alternative_provider`, `request_new_media`). Recorded on the project as `recommended_path` so 2F/2G inherit a queryable backlog. |
+| `PROJECT_RENDER_ATTEMPTS_EXHAUSTED` | `LIFECYCLE_MAX_RENDER_ATTEMPTS` reached. The project is failed and `requires_human_review` is set; nothing renders again. |
+| A sub-service's own 4xx code | A step that can never succeed as stated ends the project immediately and keeps the code that said so. A 5xx buys another attempt until `LIFECYCLE_MAX_STEP_ATTEMPTS`. |
+
+Abandoned-run codes, written by `content.pending.sweep` on rows that opened before a provider
+call and never came back. They are distinct from every settled failure above because **nobody
+observed this one fail** — that absence is the fact:
+
+| Code | Meaning |
+|---|---|
+| `SCRIPT_GENERATION_ABANDONED` | A `content_scripts` row stayed `pending` past `LIFECYCLE_PENDING_SWEEP_AGE_SECONDS`. |
+| `VOICEOVER_ABANDONED` | The same for `voiceover_assets`. Any audio the partial run stored is still recorded on the row. |
 
 ## Mapping and logging
 
