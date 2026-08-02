@@ -6,7 +6,7 @@
 |---|---|
 | `main` | W01→W18 merge edildi (2A–2D bitti), yalnız W06 bekliyor. **Phase 2'nin ilk dört dilimi kapandı**; sırada 2E (yaşam döngüsü + entitlement). W18 için ilk Codex turu bekliyor |
 | Alembic head | `0015_render_qc_reports` (tek head; zincir 0001→0015, up/down/up doğrulandı) |
-| Backend doğrulama | **NNN pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **1151 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -151,6 +151,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W16](handoffs/W16-verification-followups-3.md) | **Doğrulama bulguları 3. tur** — log `extra` yüzeyi + `GoogleAccessId`, dedektör normalizasyonu | **iki tur da merge edildi** (2. tur: Latin dışı alfabe kısıtı `SCRIPT_UNSUPPORTED_CHARACTER`, görünmezler `Cf`/`Cn`/`Co`/`Cs` kategorisiyle, redaksiyon yüzde-kodlu adları görüyor) · **kapanış birleşik Codex turuna bağlı** (W17 sonrası) | `fix/verification-followups-3` (worktree duruyor, birleşik tur bitene kadar) | Opus 5 / high | — |
 | [W17](handoffs/W17-latin-fold-pattern-grammar.md) | **Latin katlaması + kalıp grameri + Türkçe çekim + yazılı sayı grameri** | **kapandı** · üç tur merge edildi · sayı sözcükleri liste ama **birleşimleri gramer** (bitişik/tireli dahil), `T Lye` kapalı Türkçe ek kümesiyle, `Şef T. Lezzetli` pini korundu · **111.129 varyant / 0 kaçış**, jeneratif regresyon testi · son Codex teyidi bekliyor | `fix/w17-latin-fold` (worktree duruyor) | Opus 5 / high | — |
 | [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4) · fail-closed · karar verir eylem yapmaz · `forbidden_matcher` birleştirmesi | **kapandı** · merge · `0015` · 13 kontrol raporda ve atlanması ifade edilemiyor; gerçek bozuk medya fixture'ları; karar tablosu permütasyonlarla tüketildi; `content.qc.drain` + beat bağlantısı yapıldı · **Codex turu bekliyor** | `slice/2d-automatic-qc` (worktree duruyor) | Opus 5 / high | kullanıldı |
+| [W19](handoffs/W19-content-lifecycle.md) | **Phase 2E (birinci yarı) — içerik projesi yaşam döngüsü** (§20): kapalı durum makinesi + geçiş kaydı, QC kararının sınırlı eyleme dönmesi (deneme sınırı zorunlu), üç devralınan borç (voiceover miksajı, QC kuyruk olayı, `pending` süpürücü) | **şimdi** | `slice/2e-content-lifecycle` | Opus 5 / high | **SENDE** (`0016`) |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -158,7 +159,7 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| *(uçuşta WO yok — sıradaki WO tetiklenince tablo doldurulur)* | — |
+| `modules/content/**` (lifecycle/project/render_service/tts_service/script_service), `infrastructure/render/**`, `worker/**`, `infrastructure/celery_app.py`, `api/routes/content.py`, `core/config.py`, `migrations/0016_*` | **W19** |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

@@ -12,7 +12,28 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**ŞU AN İKİ SICAK OTURUM AÇIK (2026-08-02). `main` = `947 pytest`, head `0014`; ikisi de dalda, merge edilmedi.**
+**2026-08-02 · W17 ve W18 KAPANDI, merge edildi, PM koşusu `1151 pytest` yeşil, head `0015`. Phase 2'nin ilk dört dilimi (2A–2D) bitti.**
+
+- **W18 (2D QC):** 13 kontrol raporda ve *atlanması ifade edilemiyor* (`build_results` tamamıyla `unknown` başlar, `decide` eksik kümeyi reddeder, DB check constraint aynı kuralı tekrarlar). Gerçek bozuk medya fixture'ları, karar tablosu tüm çift permütasyonlar + 3.000 rastgele atamayla tüketildi. Celery bağlantısı takip 1'de yapıldı. **Oturum index eklemeyi ölçüp reddetti:** 200 bin render'da claim 134 ms; index eklense de planlayıcı hash anti-join'i seçiyor (korelasyonu bilemiyor), zorlanan plan 0,14 ms — yani sorgunun yeniden şekillenmesi gerek, index kozmetik olurdu. Ölçüm W19'a devredildi.
+- **W17:** üç tur sonunda kapandı. Son turda sayı sözcükleri liste ama **birleşimleri gramer** (bitişik/tireli dahil), `T Lye` kapalı Türkçe ek kümesiyle çözüldü ve `Şef T. Lezzetli` pini korundu. **111.129 varyant / 0 kaçış.**
+
+**Sıradaki iki tetikleme (paralel, dosya-ayrık):**
+
+1. **Codex turu (W18 ilk kez + W17 son teyit):**
+```
+docs/handoffs/W18-automatic-qc.md ve docs/handoffs/W17-latin-fold-pattern-grammar.md dosyalarını oku. Sen test edensin, özellik yazma. İkisi de main'de merge edildi (1151 pytest). Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-codex ile çalış. Hedefler: (1) QC'yi kandırmaya çalış — bozuk/siyah/sessiz/donuk medyayı passed yaptırmaya, bir kontrolü rapordan düşürmeye, ölçüm hatasını sessiz geçirmeye, karar tablosunda tanımsız kombinasyon bulmaya, başka tenant'ın raporunu okumaya, imzalı URL'yi rapora/log'a sızdırmaya; timeline metninde senaryo tarafında kapalı bir atlatmanın açık kalıp kalmadığını dene; (2) yazılı sayı gramerini atlatmaya çalış — yeni birleşim biçimleri, kesirler, dağıtım ekleri, kısaltma kuyrukları, katlama+birleşim bileşimleri; yanlış pozitifleri de ölç. Bulgularını ilgili dosyaların "Doğrulama" bölümlerine tabloyla yaz; araç zinciri sürümlerini yaz.
+```
+2. **W19 — Phase 2E birinci yarı** ([W19-content-lifecycle.md](W19-content-lifecycle.md), slot `0016`, taban 1151):
+```
+docs/handoffs/W19-content-lifecycle.md dosyasındaki iş emrini oku ve uygula. Protokol: docs/handoffs/README.md. Başlamadan önce docs/STATUS.md oku. Worktree kökünden ve COMPOSE_PROJECT_NAME=sp-w19 ile çalıştır. Migration slotu sende (0016). Sahibi olmadığın dosyaya dokunma. Merge etme, dalda bırak.
+```
+
+**2E bölündü (PM kararı):** W19 = yaşam döngüsü (§20 durum makinesi + QC kararının sınırlı eyleme dönmesi + üç devralınan borç: voiceover miksajı, QC kuyruk olayı, `pending` süpürücü). **W20 = entitlement/kota**, ayrı — çünkü hak tüketimi K1'e (para modeli, kullanıcı kararı) bağlı ve tek WO'ya sığdırmak slotu ve dosya sahipliğini şişirirdi.
+
+**Kuyruk:** W19 → W20 (entitlement) → 2F onay/revizyon → 2G planlayıcı → W06. Sonra Phase 3.
+
+<!-- arşiv -->
+**~~ŞU AN İKİ SICAK OTURUM AÇIK (2026-08-02).~~**
 
 1. **W18 (2D QC) — takip 1: Celery bağlantısı.** İş kabul edildi (dalda **1071 pytest**, +124): 13 kontrolün tamamı raporda ve atlanması *ifade edilemiyor*, gerçek bozuk medya fixture'ları (siyah/sessiz/donuk/bozuk konteyner), karar tablosu tüm çift permütasyonlar + 3.000 rastgele atamayla tüketildi, fail-closed üç yoldan kanıtlandı, `forbidden_matcher` birleştirildi. **Tek eksik benim WO hatam:** kapsam "ölçüm worker'da" diyordu ama dosya listesine worker dosyalarını koymamıştım; oturum çelişkiyi sessizce çözmek yerine bildirdi (doğru davranış). Talimat W18 dosyasının "Takip 1" bölümünde. Prompt:
 ```
