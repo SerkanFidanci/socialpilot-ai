@@ -153,6 +153,20 @@ def sweep_abandoned_runs() -> dict[str, object]:
     return context.run(_drain(context, context.abandoned_run_sweeper, needs_workdir=False))
 
 
+@celery_app.task(name="entitlement.reservation.sweep")
+def sweep_abandoned_reservations() -> dict[str, object]:
+    """Release credit holds whose work can no longer settle them (PRD §12.7).
+
+    In a healthy system this finds nothing, because a reservation is settled by the transaction
+    that makes its project terminal. It is here for the case that atomicity cannot cover — a
+    source row that went away — and because a hold nobody will ever close is a customer's credit
+    held forever, which is the failure this whole slice exists to make impossible.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.entitlement_sweeper, needs_workdir=False))
+
+
 @celery_app.task(name="operations.recovery.drain")
 def recover_stale_jobs() -> dict[str, object]:
     context = get_worker_context()

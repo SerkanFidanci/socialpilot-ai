@@ -146,6 +146,7 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
             celery_beat_recovery_interval_seconds=33,
             celery_beat_qc_sweep_interval_seconds=44,
             celery_beat_pending_sweep_interval_seconds=55,
+            celery_beat_entitlement_sweep_interval_seconds=66,
         )
     )
     schedule = application.conf.beat_schedule
@@ -159,14 +160,17 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
         "sweep-content-qc": "content.qc.drain",
         "drain-content-projects": "content.project.drain",
         "sweep-abandoned-runs": "content.pending.sweep",
+        "sweep-entitlement-reservations": "entitlement.reservation.sweep",
         "recover-stale-jobs": "operations.recovery.drain",
     }
     assert schedule["dispatch-outbox"]["schedule"] == 11
     assert schedule["recover-stale-jobs"]["schedule"] == 33
-    # The two sweeps run on their own, much longer intervals. That separation is the point of
-    # slice 2E's change: QC is now event-driven, so its tick is a net rather than a trigger.
+    # The three sweeps run on their own, much longer intervals. That separation is the point of
+    # slice 2E's change: QC is now event-driven, so its tick is a net rather than a trigger, and
+    # W20's reservation sweep reconciles a settlement that is already atomic.
     assert schedule["sweep-content-qc"]["schedule"] == 44
     assert schedule["sweep-abandoned-runs"]["schedule"] == 55
+    assert schedule["sweep-entitlement-reservations"]["schedule"] == 66
     assert {
         schedule[name]["schedule"]
         for name in schedule
@@ -176,6 +180,7 @@ def test_beat_schedule_covers_dispatch_every_drain_and_recovery() -> None:
             "recover-stale-jobs",
             "sweep-content-qc",
             "sweep-abandoned-runs",
+            "sweep-entitlement-reservations",
         }
     } == {22}
 

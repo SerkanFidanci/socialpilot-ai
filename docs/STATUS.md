@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | W01→W19 + düzeltme turu 4 merge edildi. **Codex W19 turu temiz döndü** (bulgu yok). Sırada: **W20 (kredi defteri + hak tüketimi)** ve 2F onay/revizyon |
-| Alembic head | `0016_content_projects` (tek head; zincir 0001→0016, up/down/up doğrulandı) |
-| Backend doğrulama | **1237 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu, temiz ortamda teyit edildi) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | W01→W20 merge edildi — **Phase 2'nin 2A–2E'si tamam**. Sırada 2F (onay + revizyon), 2G (planlayıcı). W20 için Codex turu bekliyor |
+| Alembic head | `0017_entitlement_ledger` (tek head; zincir 0001→0017, up/down/up doğrulandı) |
+| Backend doğrulama | **NNN pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -42,6 +42,19 @@
 > sırayla ve her geçiş kaydedilerek. Üç devralınan borç kapandı (voiceover miksajı, QC kuyruk
 > olayı + sorgu yeniden şekillendirmesi, `pending` süpürücü). **Hak tüketimi bu slice'ta yok**;
 > W20 tüketim noktalarını buraya takacak.
+>
+> **2E ikinci yarı tamam (dalda, W20):** artık **sayıyor**. Proje açılışı hakkı aynı
+> transaction'da rezerve ediyor (yetersizse `402` ve proje hiç oluşmuyor), projeyi terminal yapan
+> transaction hakkı sonuçlandırıyor ya da iade ediyor. Bakiye hiçbir yerde saklanmıyor —
+> append-only defterin toplamı, ve hem "append-only" hem "negatif olamaz" **veritabanı
+> trigger'ı**. Puan tablosu (§12.4) sürümlü ve her tahsilat sürümünü taşıyor.
+> **Ödeme/mağaza yok** (K1, Phase 3): tek kredi kaynağı `owner`'ın manuel grant'i.
+> Ayrıntı: [entitlement.md](architecture/entitlement.md), ADR-017.
+>
+> **W20'nin açık bıraktıkları (2F/Phase 3):** proje iptali yok, yani `WAITING_MEDIA`'da park eden
+> proje kredisini süresiz tutuyor (2F); tekil uçlar (proje bağlamı olmayan senaryo/seslendirme/
+> timeline/render) bilinçli olarak **ücretsiz** (Phase 3); §12.7'nin `CONSUMED → REFUNDED` yolu
+> destek yüzeyi istiyor (Phase 3); §12.6/§12.9'un hak penceresi ve devir kuralları yok.
 
 > **2D tamam (dalda):** takip 1 ile Celery bağlantısı da yapıldı — `content.qc.drain`, beat
 > girdisi `drain-content-qc`, worker composition. QC artık uçtan uca akıyor.
@@ -165,7 +178,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W18](handoffs/W18-automatic-qc.md) | **Phase 2D — otomatik QC** (§19.4) · fail-closed · karar verir eylem yapmaz · `forbidden_matcher` birleştirmesi | **kapandı** · merge · `0015` · 13 kontrol raporda ve atlanması ifade edilemiyor; gerçek bozuk medya fixture'ları; karar tablosu permütasyonlarla tüketildi; `content.qc.drain` + beat bağlantısı yapıldı · **takip 2 (yinelenen sonuç birleştirmesi) `fix/verification-followups-4` dalında uygulandı** — birleştirme kommutatif, en kötü kazanır, merge bekliyor | `slice/2d-automatic-qc` (merge edildi) · takip 2: `fix/verification-followups-4` | Opus 5 / high | kullanıldı |
 | [W19](handoffs/W19-content-lifecycle.md) | **Phase 2E (birinci yarı) — içerik projesi yaşam döngüsü** (§20): kapalı durum makinesi + geçiş kaydı, QC kararının sınırlı eyleme dönmesi (deneme sınırı zorunlu), üç devralınan borç (voiceover miksajı, QC kuyruk olayı, `pending` süpürücü) | **tamamlandı, dalda** · `0016` · uçtan uca `PLANNED`→`PREVIEW_READY` gerçek PostgreSQL/MinIO/FFmpeg üzerinde; voiceover miksajı + ducking PCM hash'iyle kanıtlandı; döngü tam 2 render'da duruyor; QC claim'i 199 ms → 3,6 ms (durağan durumda 0,05 ms), plan gerçekten değişti · **Codex turu TEMİZ döndü** (kaçak geçiş, sayaç taşması, tenant, idempotency, ses-QC, olay kaybı — bulgu yok) | dal silinebilir | Opus 5 / high | kullanıldı |
 | düzeltme turu 4 | **QC birleştirmesi + ondalık kesirler** — `merge_check_results` (failed>unknown>passed, tam sıralama → byte-özdeş rapor), `_FRACTION_CONNECTIVE` (`tam`/`onda`/`binde`/`yuzde`, tutar başlatamaz) | **kapandı** · merge · 2.000 küme × 4 karıştırma kommutatif; `bir tam onda bes lira` 0/81, `iki tam yuzde yirmi bes lira` 0/243 (Codex'te 45/81 ve 75/243 kaçıyordu) | `fix/verification-followups-4` (silinebilir) | Opus 5 / high | — |
-| [W20](handoffs/W20-entitlement-ledger.md) | **Phase 2E (ikinci yarı) — kredi defteri ve hak tüketimi**: append-only ledger, rezervasyon→sonuçlandırma/iade, sürümlü puan tablosu (§12.4), proje başlatmada kontrol · **ödeme/mağaza YOK** (K1, Phase 3) | **şimdi** | `slice/2e-entitlement` | Opus 5 / high | **SENDE** (`0017`) |
+| [W20](handoffs/W20-entitlement-ledger.md) | **Phase 2E (ikinci yarı) — kredi defteri ve hak tüketimi**: append-only ledger, rezervasyon→sonuçlandırma/iade, sürümlü puan tablosu (§12.4), proje başlatmada kontrol · **ödeme/mağaza YOK** (K1, Phase 3) | **tamamlandı, dalda** · `0017` · yeni modül `modules/entitlement/**` · bakiye `SUM(delta_credits)`, hiçbir yerde saklanmıyor (şema taramasıyla testli) · append-only ve negatif bakiye **trigger'la** zorlanıyor · yarış gerçek paralel transaction'la kanıtlandı (son kredi: 2→1, 3 kredilik bakiye: 10→3) · K4 uçtan uca kanıtlı (2 render, 1 `consume`) · **ADR-017 yazıldı, numara PM teyidi bekliyor** · merge edilmedi | `slice/2e-entitlement` | Opus 5 / high | kullanıldı |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -173,7 +186,7 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| `modules/content/**` (lifecycle/project/render_service/tts_service/script_service), `infrastructure/render/**`, `worker/**`, `infrastructure/celery_app.py`, `api/routes/content.py`, `core/config.py`, `migrations/0016_*` | **W19** (dalda tamam; ayrıca `infrastructure/celery_publisher.py` ve `modules/content/service.py`'ye ilan dışı iki dokunuş — gerekçe W19 raporunda) |
+| `modules/entitlement/**`, `api/routes/entitlement.py`, `migrations/0017_*` | **W20** (dalda tamam; ayrıca `modules/businesses/policy.py`, `infrastructure/database/metadata.py`, `infrastructure/celery_app.py` ve `modules/content/CLAUDE.md`'ye ilan dışı dört dokunuş — gerekçe W20 raporunda) |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

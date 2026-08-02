@@ -33,9 +33,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -84,6 +85,9 @@ from app.modules.content.service import ContentTimelineService
 from app.modules.content.timeline import serialize_timeline
 from app.modules.content.tts import AudioProbePort, TTSPort, VoiceoverStatus
 from app.modules.content.tts_service import VoiceoverRequest, VoiceoverService
+from app.modules.entitlement.ledger import SourceOutcome
+from app.modules.entitlement.models import SOURCE_CONTENT_PROJECT
+from app.modules.entitlement.service import EntitlementService
 from app.modules.media.storage import MultipartStoragePort
 from app.modules.operations.models import AuditLog, OutboxEvent, OutboxStatus
 from app.modules.operations.repository import OperationsRepository
@@ -99,6 +103,39 @@ PROJECT_ADVANCE_EVENT = "content.project.advance.requested"
 # small enough that a tenant with a long library cannot turn selection into an unbounded read.
 MAX_SCENE_CANDIDATES = 200
 
+# What each state of PRD §20's machine means to the credit ledger. Three answers, not eleven:
+# entitlement does not know this state machine and must not, because publishing and advertising
+# will consume credits under machines of their own.
+#
+# The table is written out rather than derived from `is_terminal` so that adding a state is a
+# decision here about what it costs. The import-time check below makes a forgotten state a
+# start-up failure, which is the only moment at which "we never decided" is cheap.
+_SOURCE_OUTCOMES: Final[dict[ProjectState, SourceOutcome]] = {
+    ProjectState.PLANNED: SourceOutcome.RUNNING,
+    ProjectState.WAITING_MEDIA: SourceOutcome.RUNNING,
+    ProjectState.ANALYZING: SourceOutcome.RUNNING,
+    ProjectState.SCRIPTING: SourceOutcome.RUNNING,
+    ProjectState.VOICE_GENERATION: SourceOutcome.RUNNING,
+    ProjectState.TIMELINE_BUILDING: SourceOutcome.RUNNING,
+    ProjectState.RENDERING: SourceOutcome.RUNNING,
+    ProjectState.QUALITY_CHECK: SourceOutcome.RUNNING,
+    ProjectState.RETRYING: SourceOutcome.RUNNING,
+    # PRD §12.7 draws `RESERVED --> CONSUMED` from "ön izleme başarıyla hazır". This is that
+    # state, and it is the only one that charges.
+    ProjectState.PREVIEW_READY: SourceOutcome.DELIVERED,
+    ProjectState.FAILED: SourceOutcome.ABANDONED,
+}
+
+_UNMAPPED_STATES = tuple(state.value for state in ProjectState if state not in _SOURCE_OUTCOMES)
+if _UNMAPPED_STATES:  # pragma: no cover - a start-up failure, asserted by the unit suite
+    raise RuntimeError(f"project states with no entitlement outcome: {_UNMAPPED_STATES}")
+
+
+def source_outcome(state: ProjectState) -> SourceOutcome:
+    """Total over `ProjectState`. What the ledger needs to know about where a project got to."""
+
+    return _SOURCE_OUTCOMES[state]
+
 
 class ContentProjectService:
     """The API side: open a project, attach media to one, read where one got to."""
@@ -109,6 +146,7 @@ class ContentProjectService:
         self._repository = ContentRepository(session)
         self._facts = ScriptFactsReader(session)
         self._businesses = BusinessRepository(session)
+        self._entitlement = EntitlementService(session, settings)
 
     async def create_project(
         self,
@@ -129,6 +167,13 @@ class ContentProjectService:
         The verified references are checked here, against this tenant, before anything is
         scheduled. A project that names another business's product would otherwise fail four
         steps later, in a worker, with a code about script generation.
+
+        This is also where the generation is paid for. The reservation is opened in *this*
+        transaction, so there is no instant at which a project exists without a hold behind it —
+        which is what makes two requests aiming at the same last credit resolve to one project
+        and one `402` rather than to two projects. PRD §12.8's unit is the content, not the step:
+        script generation, speech and every render this project asks for sit inside the one hold,
+        and an automatic re-render after a failed check buys nothing further (K4).
         """
 
         async with self._session.begin():
@@ -187,6 +232,21 @@ class ContentProjectService:
             )
             self._repository.add(project)
             await self._session.flush()
+            # Insufficient credit raises `402` from here, and the whole transaction — project
+            # row, idempotency record and all — goes with it. A refused generation leaves nothing
+            # behind to explain later.
+            await self._entitlement.reserve(
+                business_id=business_id,
+                user_id=user_id,
+                scenario_code=scenario_code,
+                profile=profile,
+                source_type=SOURCE_CONTENT_PROJECT,
+                source_id=project.id,
+                # Derived from the project rather than taken from the request: the reservation
+                # must deduplicate on the work, not on whichever header the caller sent.
+                idempotency_key=_reservation_key(project.id),
+                correlation_id=correlation_id,
+            )
             self._record_transition(
                 project,
                 from_state=None,
@@ -565,6 +625,10 @@ class ContentProjectAdvanceService:
         self._timelines = ContentTimelineService(session, settings, render)
         self._scripts = ScriptGenerationService(session, settings, script_generator)
         self._voiceovers = VoiceoverService(session, settings, tts, audio_probe, storage)
+        # Not a capability port: nothing is produced here and no provider is called. The ledger
+        # is settled by the same transaction that makes the project terminal, which is the reason
+        # this service holds it rather than a separate job doing it afterwards.
+        self._entitlement = EntitlementService(session, settings)
 
     async def process_next(self) -> ContentProject | None:
         claimed = await self._claim()
@@ -998,6 +1062,18 @@ class ContentProjectAdvanceService:
                 project.step_attempts = claimed.step_attempts + 1
             project.updated_at = now
             project.next_check_at = self._due_after(project, step, now)
+            # The hold is closed by the transaction that ends the project, not by a job that runs
+            # afterwards. There is therefore no window in which a finished project still holds
+            # credit, and no way for a crash to leave one: either both facts committed or
+            # neither did. `settle` is a no-op on a project that has not finished.
+            await self._entitlement.settle(
+                business_id=project.business_id,
+                source_type=SOURCE_CONTENT_PROJECT,
+                source_id=project.id,
+                outcome=source_outcome(project.state),
+                failure_code=project.failure_code,
+                correlation_id=project.correlation_id,
+            )
             return project
 
     def _due_after(self, project: ContentProject, step: _Step, now: datetime) -> datetime | None:
@@ -1089,6 +1165,42 @@ def _composer_segments(document: Any) -> tuple[ComposerSegment, ...]:
             )
         )
     return tuple(segments)
+
+
+def _reservation_key(project_id: UUID) -> str:
+    """The idempotency key of a project's one generation hold. One project, one charge."""
+
+    return f"project:{project_id}:generation"
+
+
+class ContentProjectReservationProbe:
+    """Tells the entitlement sweep which projects can no longer settle their own hold.
+
+    It lives here, in the module that owns `content_projects`, because the dependency has to run
+    one way: content already calls entitlement, so a query from entitlement into this table would
+    close the loop and make either module unusable without the other.
+
+    The query is deliberately not a method on `ContentRepository`. That class's contract is that
+    every statement is tenant-scoped, and this one is not: a maintenance sweep runs in a worker
+    with no user and no business behind it, and scoping it to a tenant would mean it could only
+    ever reconcile a tenant somebody named.
+
+    A project id that returns no row counts as closed. That is the case the sweep exists for: the
+    work is gone, so nothing will ever settle the hold it left.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def closed_sources(self, source_ids: tuple[UUID, ...]) -> frozenset[UUID]:
+        if not source_ids:
+            return frozenset()
+        statement = select(ContentProject.id).where(
+            ContentProject.id.in_(source_ids),
+            ContentProject.state.notin_([ProjectState.PREVIEW_READY, ProjectState.FAILED]),
+        )
+        live = set(await self._session.scalars(statement))
+        return frozenset(source_id for source_id in source_ids if source_id not in live)
 
 
 def _step_key(project_id: UUID, step: str) -> str:
@@ -1210,6 +1322,8 @@ __all__ = [
     "VOICEOVER_ABANDONED",
     "AbandonedRunSweeper",
     "ContentProjectAdvanceService",
+    "ContentProjectReservationProbe",
     "ContentProjectService",
     "project_summary",
+    "source_outcome",
 ]

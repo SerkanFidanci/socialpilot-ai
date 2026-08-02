@@ -70,6 +70,14 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "content.pending.sweep",
                 "schedule": settings.celery_beat_pending_sweep_interval_seconds,
             },
+            # Reconciliation over a settlement that is already atomic: the transaction that ends
+            # a project also closes its credit hold, so this tick exists for the one case that
+            # cannot cover — a source row that is gone. Hourly, because in a healthy system it
+            # finds nothing.
+            "sweep-entitlement-reservations": {
+                "task": "entitlement.reservation.sweep",
+                "schedule": settings.celery_beat_entitlement_sweep_interval_seconds,
+            },
             "recover-stale-jobs": {
                 "task": "operations.recovery.drain",
                 "schedule": settings.celery_beat_recovery_interval_seconds,

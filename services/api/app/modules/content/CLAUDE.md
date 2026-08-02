@@ -186,6 +186,23 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - **`voiceover` ses track'i `voiceover_assets`'i gösterir**, `media_assets`'i değil. Bu yüzden
   `Timeline.asset_ids` voiceover kimliğini içermez (`voiceover_ids` ayrı): worker onu kaynak
   video sanıp materialize etmeye çalışırdı.
+- **Hak, projeyi yaratan transaction'da rezerve edilir; projeyi bitiren transaction'da
+  sonuçlanır** (W20). `create_project` `EntitlementService.reserve`'ü kendi `begin()`'i içinde
+  çağırır — yetersiz bakiye `402` fırlatır ve proje satırı dahil her şey geri alınır, yani
+  "hakkı olmayan proje" ifade edilemez. `_settle` terminal duruma geçtiği transaction'da
+  `settle`'ı çağırır; ayrı bir job olsaydı bitmiş projenin açık hak tuttuğu bir pencere olurdu.
+- **Tüketim birimi projedir, adım değil** (PM kararı, W20). Tek rezervasyon senaryoyu,
+  seslendirmeyi, timeline'ı ve **tüm render denemelerini** kapsar. K4 ("saf yeniden render yeni
+  hak tüketmez") böylece yapısal olarak sağlanır: rezervasyon render'a değil projeye bağlı, bu
+  yüzden QC başarısızlığından doğan yeniden render yeni rezervasyon **açamaz**.
+  `render_outputs.consumes_entitlement` bu kararın kaydıdır, girdisi değil.
+- **`source_outcome` §20'nin durum makinesini üç cevaba indirir** ve tablo import anında
+  totallik kontrolünden geçer. `entitlement` bu durum makinesini bilmez ve bilmemeli: defter
+  yayınlama ve reklam tüketimini de fiyatlayacak, her birinin kendi makinesi olacak.
+- **`ContentProjectReservationProbe` bağımlılığı tek yönlü tutar.** `entitlement` bir projenin
+  bitip bitmediğini sorar ama `content_projects`'e **sorgu atmaz**; protokolü burası uygular.
+  Sorgu tenant-kapsamlı değildir (bakım süpürmesi, arkasında kullanıcı yok), bu yüzden
+  `ContentRepository`'ye değil probe'a aittir.
 
 ## Dosyalar
 
@@ -196,7 +213,7 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | `qc.py` | §19.4 kontrol kümesi (`QcCheck`), `CHECK_POLICIES`, saf karar tablosu (`decide`), `build_results` bütünlük garantisi, `QcThresholds` anlık görüntüsü, deterministik değerlendiriciler, doğrulanmış kayıt denetimi (`audit_verified_sources`), `MediaQcProbePort` + `QcMeasurement`, `VisualQcPort` + `VisualQcDisabledError` |
 | `qc_service.py` | `ContentQcService` — QC açılmamış `succeeded` render'ı claim, dayanıklı job (durum/timeout/deneme/correlation/dead-letter), materialize + ölçüm + VLM çağrısı, `provider_usage`, iki transaction · `ContentQcReportService` — yalnızca okuma (yetki + rapor), ölçüm portu taşımaz |
 | `lifecycle.py` | §20'nin **saf** yarısı: `ProjectState`/`ProjectEvent`, kapalı ve total geçiş tablosu (`next_state`, `require_next_state`), `decide_after_qc`/`decide_after_render_failure` karar tablosu ve döngü sınırı, `compose_timeline` (senaryo + sahneler → §18.2 dokümanı), `normalize_scene_tag`, dokümante hata kodları. Session/saat/sağlayıcı yok |
-| `project_service.py` | `ContentProjectService` — proje açma, medya bağlama, okuma (yetki, idempotency, audit, outbox uyandırma) · `ContentProjectAdvanceService` — claim + adım + settle; her adım alt servisi çağırır, sağlayıcı portu taşımaz · `AbandonedRunSweeper` — `pending`de kalmış senaryo/seslendirme satırlarını yaş eşiğine göre `failed`e düşürür |
+| `project_service.py` | `ContentProjectService` — proje açma (hak rezervasyonu dahil), medya bağlama, okuma (yetki, idempotency, audit, outbox uyandırma) · `ContentProjectAdvanceService` — claim + adım + settle; terminal geçişte hakkı sonuçlandırır, sağlayıcı portu taşımaz · `AbandonedRunSweeper` — `pending`de kalmış senaryo/seslendirme satırlarını yaş eşiğine göre `failed`e düşürür · `source_outcome` (§20 durumu → `SourceOutcome`, total) · `ContentProjectReservationProbe` — entitlement süpürmesinin `ReservationSourceProbe` uygulaması |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
 | `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |
@@ -220,7 +237,9 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - [ADR-004](../../../../../docs/adr/ADR-004-provider-adapter-pattern.md) · [ADR-007](../../../../../docs/adr/ADR-007-media-analysis-provider-routing.md) ·
   [ADR-013](../../../../../docs/adr/ADR-013-single-server-deployment-topology.md) ·
   [ADR-015](../../../../../docs/adr/ADR-015-parametric-editing-model.md) · `ADR-016-render-port.md`
+- `ADR-017-entitlement-ledger.md` (hak rezervasyonu ve sonuçlandırma; tüketim noktası)
 - Mimari: [content-render.md](../../../../../docs/architecture/content-render.md) ·
+  [entitlement.md](../../../../../docs/architecture/entitlement.md) ·
   [error-handling.md](../../../../../docs/architecture/error-handling.md) (SCRIPT_* / TTS_* /
   VOICEOVER_* katalogları) ·
   [Phase 2 planı](../../../../../docs/plans/active/phase-2-content-generation.md) §2

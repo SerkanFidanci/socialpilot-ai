@@ -277,6 +277,25 @@ class Settings(BaseSettings):
     # do.
     lifecycle_pending_sweep_age_seconds: int = Field(default=1_800, ge=60, le=86_400)
     lifecycle_sweep_batch_size: int = Field(default=50, ge=1, le=500)
+    # --- entitlement ledger (PRD §12.4, §12.8, slice W20) --------------------------------------
+    # Which version of the content point table prices new work. Pinned rather than "whatever is
+    # newest": a price change has to be a deliberate, deployed decision, and the version a charge
+    # was computed under is written onto the ledger entry so it stays answerable afterwards. The
+    # registry of tables lives in `modules/entitlement/points.py` — `core` cannot import it to
+    # validate this number, so a pin at an unregistered version fails loudly on the first
+    # reservation rather than silently pricing at something else.
+    entitlement_points_version: int = Field(default=1, ge=1, le=1_000)
+    # The ceiling on a single manual grant. Not a business limit — a typo guard, for the one
+    # credit source that exists before store verification arrives in Phase 3.
+    entitlement_max_grant_credits: int = Field(default=100_000, ge=1, le=10_000_000)
+    # How old an open reservation must be before the reconciliation sweep will look at it. The
+    # sweep never guesses — it releases a hold only when the module owning the work says the work
+    # is over — so this is a margin against examining a step that is still in flight, and it is
+    # validated below to clear one whole step.
+    entitlement_reservation_sweep_age_seconds: int = Field(default=21_600, ge=60, le=604_800)
+    entitlement_sweep_batch_size: int = Field(default=200, ge=1, le=500)
+    # The sweep is a safety net over a settlement that is already atomic, so it runs rarely.
+    celery_beat_entitlement_sweep_interval_seconds: int = Field(default=3_600, ge=1, le=86_400)
     # iOS produces HEIC/HEIF photos and QuickTime/HEVC video by default, so a
     # mobile-first product must admit them at the upload boundary. Admission is not
     # analysis: only video/mp4 currently enters the technical pipeline.
@@ -545,6 +564,14 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "LIFECYCLE_STEP_TIMEOUT_SECONDS cannot be below one render plus one QC run"
+            )
+        # A hold must never be examined while the step it belongs to is still running. The sweep
+        # only releases holds whose work is already over, so this is the second lock on that door
+        # rather than the first — but a threshold under one step would make the sweep's safety
+        # depend entirely on the probe being right.
+        if self.entitlement_reservation_sweep_age_seconds <= self.lifecycle_step_timeout_seconds:
+            raise ValueError(
+                "ENTITLEMENT_RESERVATION_SWEEP_AGE_SECONDS must exceed one lifecycle step timeout"
             )
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,
