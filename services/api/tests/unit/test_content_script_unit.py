@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import tokenize
 import unicodedata
 from datetime import UTC, datetime
@@ -34,6 +35,8 @@ from app.modules.businesses.policy import Permission
 from app.modules.content.policy import ContentAction, permits_action, required_permission
 from app.modules.content.script import (
     _SUFFIX,
+    _SUFFIX_SEQUENCE,
+    _WRITTEN_NUMBER,
     SCRIPT_OUTPUT_SCHEMA,
     BrandBrief,
     ScenarioCode,
@@ -972,6 +975,147 @@ def test_no_money_or_date_word_escapes_through_spelling_or_inflection() -> None:
             for spelling in variants(month + suffix):
                 if find_fabrication(f"1 {spelling}") is None:
                     escapes.append(f"1 {spelling}")
+
+    assert escapes == []
+
+
+# --- the written-number grammar (W17 follow-up 2) ---------------------------------------------
+#
+# The inflection anchor held (161/161), and the next round went through the *number* instead:
+# `bir buçuk lira` (a fraction word that was not in the set), `yüzbin lira` and `onbir lira`
+# (compounds written closed up), and `165 T Lye` (the spaced abbreviation with an unmarked
+# suffix). The set of Turkish number words is closed and finite, so listing it is safe; how
+# those words combine is not, so that part is grammar.
+
+WRITTEN_NUMBER_BYPASSES = [
+    # Fractions.
+    ("bir buçuk", "bir buçuk lira", "SCRIPT_FABRICATED_PRICE"),
+    ("beş buçuk", "beş buçuk lira", "SCRIPT_FABRICATED_PRICE"),
+    ("yarım milyon", "yarım milyon dolar", "SCRIPT_FABRICATED_PRICE"),
+    ("çeyrek milyon", "çeyrek milyon lira", "SCRIPT_FABRICATED_PRICE"),
+    ("fraction with a unit suffix", "on beş buçuk TL'ye", "SCRIPT_FABRICATED_PRICE"),
+    # Compounds written closed up or hyphenated.
+    ("yüzbin", "yüzbin lira", "SCRIPT_FABRICATED_PRICE"),
+    ("onbir", "onbir lira", "SCRIPT_FABRICATED_PRICE"),
+    ("part-closed", "yüz ellibeş lira", "SCRIPT_FABRICATED_PRICE"),
+    ("hyphenated", "yüz-altmış-beş lira", "SCRIPT_FABRICATED_PRICE"),
+    ("fully closed", "yediyüzelli lira", "SCRIPT_FABRICATED_PRICE"),
+    ("closed compound not in any list", "onaltıbin lira", "SCRIPT_FABRICATED_PRICE"),
+    # The amount run straight into the unit.
+    ("beşerlira", "beşerlira", "SCRIPT_FABRICATED_PRICE"),
+    ("beşer lira", "beşer lira", "SCRIPT_FABRICATED_PRICE"),
+    # The spaced abbreviation carrying an unmarked suffix, and the half-spelled-out form.
+    ("T Lye", "165 T Lye", "SCRIPT_FABRICATED_PRICE"),
+    ("T Lya", "165 T Lya", "SCRIPT_FABRICATED_PRICE"),
+    ("T L'ye", "165 T L'ye", "SCRIPT_FABRICATED_PRICE"),
+    # Found by attacking this fix: the second element spelled out in full.
+    ("T Lira", "165 T Lira", "SCRIPT_FABRICATED_PRICE"),
+    ("T lirasıyla", "165 T lirasıyla", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [(text, code) for _, text, code in WRITTEN_NUMBER_BYPASSES],
+    ids=[label for label, _, _ in WRITTEN_NUMBER_BYPASSES],
+)
+def test_a_written_amount_is_an_amount_however_it_is_spaced(text: str, code: str) -> None:
+    assert find_fabrication(text) == code
+
+
+@pytest.mark.parametrize(
+    "text",
+    [text for _, text, _ in WRITTEN_NUMBER_BYPASSES],
+    ids=[label for label, _, _ in WRITTEN_NUMBER_BYPASSES],
+)
+def test_no_written_amount_can_be_resolved_into_a_document(text: str) -> None:
+    document = script_document()
+    document["segments"][1]["voice_text"] = f"Sadece {text}."
+    outcome = resolve_script(parse_script(document), context=context())
+
+    assert outcome.document is None
+
+
+@pytest.mark.parametrize(
+    ("word", "is_a_number"),
+    [
+        # A closed-up compound is a number only when the segmentation consumes the whole word.
+        ("onbir", True),
+        ("yuzbin", True),
+        ("yediyuzelli", True),
+        ("birbucuk", True),
+        # `birey` is `bir` plus `ey`, and `ey` is not a number word — so it is not a number, and
+        # the pin below says the same thing from the outside.
+        ("birey", False),
+        ("birlikte", False),
+        ("onur", False),
+        ("besleme", False),
+        ("ceyrekci", False),
+    ],
+)
+def test_a_closed_up_compound_is_a_number_only_if_nothing_is_left_over(
+    word: str, is_a_number: bool
+) -> None:
+    assert (re.fullmatch(_WRITTEN_NUMBER, word) is not None) is is_a_number
+
+
+def test_the_abbreviation_suffix_is_a_closed_set_so_a_word_cannot_pose_as_one() -> None:
+    """One letter does no discriminating of its own, so `T L` needs the strict chain.
+
+    `ye` is a suffix; `ezzetli` is not expressible as a sequence of suffixes, which is what
+    keeps "Şef T. Lezzetli" out of the currency rule while `T Lye` falls into it.
+    """
+
+    for suffix in ("ye", "ya", "den", "nin", "yle", "ler", "lik", "e"):
+        assert re.fullmatch(_SUFFIX_SEQUENCE, suffix) is not None
+    for word in ("ezzetli", "ider", "utfen", "ira"):
+        assert re.fullmatch(_SUFFIX_SEQUENCE, word) is None
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        # The work order's pins for this round, and the ones the verification round measured.
+        ("birey", "Birey 2 kez geldi"),
+        ("initial before a word", "Şef T. Lezzetli 5 tarif sunuyor"),
+        ("initial before another word", "Şef T. Lütfen 5 dakika bekleyin"),
+        ("conjunction", "Bu yüzden 3 kişi daha katıldı"),
+        ("eurovision", "Eurovision 2026 başlıyor"),
+        ("euro kebap", "Euro Kebap 5 yıldır hizmette"),
+        ("a cat named Lira", "Lira adlı kedi 2 yaşında"),
+        # Recipes, where lone letters and written numbers are units of measure rather than money.
+        ("recipe abbreviations", "1 t. tuz, 2 l. su"),
+        ("recipe measures", "2 su bardağı un, 1 tatlı kaşığı tuz"),
+        ("recipe timing", "Bir buçuk saat pişirin, üç buçuk dakika dinlendirin"),
+        # A written number next to something that is not money is still not money.
+        ("closed-up compound counting people", "onbir kişi geldi"),
+        ("closed-up compound counting guests", "yüzbin kişi katıldı"),
+    ],
+)
+def test_the_written_number_grammar_stops_at_things_that_are_not_money(
+    label: str, text: str
+) -> None:
+    assert find_fabrication(text) is None
+
+
+def test_no_written_amount_escapes_through_spacing_or_composition() -> None:
+    """The scan the work order asked for, bounded: number words x joiner x suffix x root.
+
+    The unbounded sweep (111,129 variants, including every accepted letter) runs out of band and
+    is recorded in the report; this is the part that has to stay green on every commit.
+    """
+
+    words = ["bir", "iki", "beş", "on", "yirmi", "yüz", "bin", "milyon", "yarım", "buçuk"]
+    roots = ["lira", "dolar", "TL", "kuruş", "euro"]
+    escapes: list[str] = []
+    for first, second in [(a, b) for a in words for b in words]:
+        for joiner in (" ", "", "-"):
+            for suffix in ("", "ı", "er", "lerce"):
+                for gap in (" ", ""):
+                    for root in roots:
+                        text = f"{first}{joiner}{second}{suffix}{gap}{root}"
+                        if find_fabrication(text) is None:
+                            escapes.append(text)
 
     assert escapes == []
 
