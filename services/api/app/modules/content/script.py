@@ -237,32 +237,73 @@ _SUFFIX: Final = r"[acdegiklmnrstuyz]*"
 # because the `t` is followed by a letter rather than by a separator. The trailing run is what
 # lets the prefix form reach its number in `T.L. 165`.
 #
-# Its suffix is the one exception to `_SUFFIX` below, and it has to be: an inflection may follow
-# only *after another separator* (`T.L.'ye`, `T.L.ye`). Letting the chain start straight after
-# the `l` would read "Şef T. Lezzetli 5 tarif" as a currency, because `ezzetli` is spelled
-# entirely in suffix letters. The separator is what tells an abbreviation from an initial.
-_TL_ABBREVIATION: Final = rf"t[\W_]+l(?:[\W_]{{1,2}}{_SUFFIX})?"
+# Its suffix is the one exception to `_SUFFIX` above, and it has to be. After a separator
+# (`T.L.'ye`) the loose chain is fine — the separator is already the signal. Without one, the
+# loose chain cannot tell `T Lye` from "Şef T. Lezzetli", because `ezzetli` is spelled entirely
+# in suffix letters; a one-letter root does no discriminating of its own. So the bare form is
+# matched against the *closed set of actual Turkish suffixes* instead: `ye` is one, `ezzetli`
+# is not expressible as a sequence of them, and the pin survives.
+#
+# The closed set is only safe here. Everywhere else `_SUFFIX` stays, because the two lists fail
+# in opposite directions: an alphabet over-accepts (costing a false rejection, one regeneration)
+# while a forgotten suffix under-accepts (costing a bypass, a fabricated price in front of a
+# customer). Over-accepting is the safe default, and this is the one place it is not affordable.
+_TURKISH_SUFFIX: Final = (
+    r"lerce|larca|leri|lari|ler|lar|"
+    r"yle|yla|le|la|"
+    r"nden|ndan|den|dan|ten|tan|de|da|te|ta|"
+    r"nin|nun|in|un|"
+    r"ye|ya|ne|na|e|a|"
+    r"yi|yu|si|su|i|u|"
+    r"lik|luk|li|lu|siz|suz|ci|cu|"
+    r"ymis|mis|mus|ydi|di|du|yken|ken|dir|dur|tir|tur|"
+    r"deki|daki|teki|taki|ki|"
+    r"imiz|umuz|iniz|unuz|im|um|"
+    r"ce|ca|ser|sar|er|ar"
+)
+_SUFFIX_SEQUENCE: Final = rf"(?:{_TURKISH_SUFFIX})+"
+#
+# The second element may also be the whole word: `165 T Lira` and `165 T lirası` are the same
+# abbreviation half-spelled out, and the plain currency rule cannot reach them because the `T `
+# sits between the amount and the unit. Found by attacking this fix.
+_TL_ABBREVIATION: Final = (
+    rf"t[\W_]+(?:lira{_SUFFIX}|l(?:[\W_]{{1,2}}{_SUFFIX}|{_SUFFIX_SEQUENCE})?)"
+)
 
 # Roots only. Every inflection of these — `lirayla`, `liralarla`, `kurusla`, `dolarla`,
 # `eurodan`, `turk lirasiyla` — is `_SUFFIX`'s business, and a root is listed here exactly once.
 _CURRENCY_ROOT: Final = r"tl|try|turk\s+lira|lira|kurus|usd|eur|euro|avro|dolar|gbp|sterlin"
 _CURRENCY_WORD: Final = rf"(?:{_CURRENCY_ROOT}){_SUFFIX}|{_TL_ABBREVIATION}"
 _CURRENCY_SYMBOL: Final = r"₺|\$|€|£"
+# Turkish number words are a **closed, finite set** — the language does not coin new ones — so
+# writing them out is safe in a way that writing out inflections or confusables never was.
+# `bucuk` belongs here for the same reason `yarim` and `ceyrek` already did: `bir bucuk lira` is
+# an amount, and it reached a stored document without it (Codex, 2026-08-02).
 _NUMBER_WORD: Final = (
     r"bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz|on|yirmi|otuz|kirk|elli|"
-    r"altmis|yetmis|seksen|doksan|yuz|bin|milyon|milyar|yarim|ceyrek"
+    r"altmis|yetmis|seksen|doksan|yuz|bin|milyon|milyar|yarim|ceyrek|bucuk"
 )
 # Months inflect the same way — `1 agustosta`, `1 agustostan itibaren`, `subatta` — and the same
 # anchor mistake was in the date rules too.
 _MONTH_ROOT: Final = r"ocak|subat|mart|nisan|mayis|haziran|temmuz|agustos|eylul|ekim|kasim|aralik"
 _MONTH: Final = rf"(?:{_MONTH_ROOT}){_SUFFIX}"
-_WRITTEN_NUMBER: Final = rf"(?:{_NUMBER_WORD})(?:\s+(?:{_NUMBER_WORD}))*"
+# How the closed set *combines* is not finite, so it is grammar rather than a list: consecutive
+# number words are one amount whether they are written apart, hyphenated, or run together.
+# `yuzbin`, `onbir` and `yuz ellibes` all passed while this said `\s+` — and writing those three
+# compounds out by hand would have been the same enumeration mistake one layer down, with
+# `onaltibin` waiting behind it.
+#
+# Nothing may be left over. The anchors do that work: `(?<!\w)` and the `(?!\w)` every use of
+# this group carries mean a segmentation has to consume the whole word, so `onbir` is `on`+`bir`
+# and `birey` is not a number — `ey` is not a number word, and the pin says so.
+_JOINED: Final = r"[-\s]*"
+_WRITTEN_NUMBER: Final = rf"(?:{_NUMBER_WORD})(?:{_JOINED}(?:{_NUMBER_WORD}))*"
 # A written calendar day has a much smaller grammar than a currency amount. Keeping it bounded
 # avoids turning arbitrary prose ending in a month name into a date, while covering 1–31.
 _WRITTEN_DAY: Final = (
-    r"bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz|on(?:\s+(?:bir|iki|uc|dort|bes|alti|"
-    r"yedi|sekiz|dokuz))?|yirmi(?:\s+(?:bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz))?|"
-    r"otuz(?:\s+bir)?"
+    rf"bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz|on(?:{_JOINED}(?:bir|iki|uc|dort|bes|alti|"
+    rf"yedi|sekiz|dokuz))?|yirmi(?:{_JOINED}(?:bir|iki|uc|dort|bes|alti|yedi|sekiz|dokuz))?|"
+    rf"otuz(?:{_JOINED}bir)?"
 )
 
 _PRICE_PATTERNS: Final = (
@@ -275,7 +316,9 @@ _PRICE_PATTERNS: Final = (
     # too, and closing it is worth more than the grammar suggests: `yuzlerce lira`,
     # `binlerce dolar` and `onlarca euro` are exactly the vague money claims a model reaches for
     # when it is told not to write a figure, and all three read as `<number word>+suffix`.
-    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER}){_SUFFIX}\s+(?:{_CURRENCY_WORD})(?!\w)"),
+    # `\s*`, not `\s+`: `beserlira` runs the amount straight into the unit, and a reader still
+    # reads a price. Backtracking sorts the two apart — the inflection chain gives `lira` back.
+    re.compile(rf"(?<!\w)(?:{_WRITTEN_NUMBER}){_SUFFIX}\s*(?:{_CURRENCY_WORD})(?!\w)"),
     re.compile(
         rf"(?<!\w)(?:{_CURRENCY_SYMBOL}|{_CURRENCY_WORD})\s+(?:{_WRITTEN_NUMBER}){_SUFFIX}(?!\w)"
     ),

@@ -305,6 +305,142 @@ Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
    `origin`'e push edilmedi. Dal ve worktree, protokol gereği birleşik Codex turu bitene kadar
    duruyor.
 
+## Rapor — takip düzeltmesi 2 · 2026-08-02 · yürüten oturum (Opus 5)
+
+**Dal:** `fix/w17-latin-fold` (`git merge main` ile `02455ef` üzerine güncellendi) ·
+**Commit:** `9e35a71` · **Durum:** tamamlandı, dalda bırakıldı
+
+### 1 — Sayı sözcükleri liste, birleşimleri gramer
+
+PM kararı 1 aynen uygulandı ve gerekçesi koda yazıldı: Türkçenin sayı sözcükleri **kapalı ve
+sonlu** olduğu için `bucuk` listeye eklemek güvenli — dil yeni sayı sözcüğü üretmiyor, bu yüzden
+confusable/çekim listelerinden farklı bir şey. **Birleşimleri ise gramere çevrildi:**
+
+```
+_JOINED         = [-\s]*                               # boşluk, tire veya hiçbir şey
+_WRITTEN_NUMBER = (?:sayı sözcüğü)(?:_JOINED(?:sayı sözcüğü))*
+```
+
+`yuzbin`, `onbir`, `yuz ellibes`, `yuz-altmis-bes`, `yediyuzelli`, **ve listede olmayan
+`onaltibin`** aynı kuralla düşüyor. Üç bileşiği elle yazmak, bir katman aşağıda aynı enumerasyon
+hatası olurdu.
+
+**Kalıntı yasağı çapalarla zorlanıyor** (PM kararı 2). `(?<!\w)` ve her kullanımın taşıdığı
+`(?!\w)` bölümlemenin kelimenin tamamını kaplamasını mecbur kılıyor: `onbir` = `on`+`bir`
+sayıdır, `birey` = `bir`+`ey` değildir çünkü `ey` sayı sözcüğü değil. Bunu dışarıdan pin
+(`Birey 2 kez geldi`) *ve* içeriden doğrudan ölçüm birlikte sabitliyor
+(`re.fullmatch(_WRITTEN_NUMBER, …)` — 9 girdi, 4 sayı / 5 değil).
+
+**Tutar birimin içine akabiliyor.** `beserlira` için sayı ile para biriminin arası `\s+` yerine
+`\s*`; `beser`i `_SUFFIX` zaten üretiyordu (takip 1), eksik olan tek şey boşluksuz bitişmeydi.
+
+### 2 — `T Lye`: tek harflik kök gramerle savunulur
+
+PM kararı 3 uygulandı. Ayırıcısız ek biçimi artık **kapalı Türkçe ek kümesinin dizisi**
+(`_SUFFIX_SEQUENCE`) ile eşleşiyor: `T Lye` yakalanıyor, **`Şef T. Lezzetli 5 tarif` pini
+korunuyor** — `ezzetli` gerçek eklerin dizisi olarak ifade edilemiyor (`e` sonrası `zzetli`ye
+başlayan ek yok). Sınırı ayrıca `Şef T. Lider`, `Şef T. Lütfen` ve `T Lira`'nın tersi yönde
+ölçtüm.
+
+**Kapalı küme yalnızca burada kullanıldı ve bu bilinçli.** İki liste zıt yönde bozulur: ek
+*alfabesi* fazla kabul eder (bedeli bir yanlış pozitif, yani bir üretim tekrarı), **unutulmuş bir
+ek ise az kabul eder** (bedeli bir atlatma — insan onayına giden metinde uydurma fiyat). Çok
+harfli köklerde ayrımı kökün kendisi yapıyor ve orada fazla kabul etmek doğru taraf; tek harflik
+`l` kökünde hiçbir ayrım yok, kapalı kümenin bedelini ödemeye değen tek yer orası. Bu yüzden
+takip 1'in alfabesi (Codex turunda 161/161 tuttu) yerinde bırakıldı.
+
+**Kendi düzeltmeme saldırırken bulduğum ve kapattığım ek sınıf:** `165 T Lira` ve
+`165 T lirasıyla` — boşluklu kısaltmanın ikinci öğesi **tam kelime** olarak yazılmış hâli. Sade
+para birimi kuralı bunlara ulaşamıyor çünkü tutar ile birim arasında `T ` duruyor. Aynı ailenin
+üçüncü üyesi; kısaltmanın ikinci öğesi artık `l` + ek dizisi **veya** `lira` + çekim.
+
+### 3 — Tarama (kabul kriteri 3): 111.129 varyant, **0 kaçış**
+
+Takip 1'in taraması korundu ve sayı birleşimi boyutu eklendi:
+
+| Boyut | Kapsam |
+|---|---|
+| Harf | Parser'ın kabul ettiği ve **tek** ASCII harfe katlanan 746 ASCII-dışı harf (çok karakterli katlamalar — `ß`→`ss`, `æ`→`ae`, … — hiçbir kökte "ss"/"ae" dizisi olmadığı için yer değiştirme üretmiyor) |
+| Kök | 12 para + 12 ay × 28 para eki / 12 tarih eki (takip 1 taraması) |
+| **Sayı birleşimi** | 25 sayı sözcüğünden 2–4 sözcüklük diziler × **3 birleştirici** (boşluk / bitişik / tire) × 7 sayı eki × **2 birim aralığı** (boşluklu / bitişik) × 5 para kökü |
+| **Kesir** | 25 sözcük × 3 birleştirici × 4 kök, hem `X buçuk <kök>` hem `X buçukkök` hem `yuzde X buçuk` |
+| **Kısaltma** | 8 ayırıcı × 11 ek biçimi × 2 harf durumu + tam kelime kuyrukları (`Lira`, `lirasi`, `lirasiyla`, `liralarla`) × 4 ayırıcı |
+| Ölçüt | `parse_text` → `find_fabrication`; `PASS` ise kaçış |
+
+**Sonuç: 111.129 varyant, 0 kaçış.** Sınırlı hâli teste alındı
+(`test_no_written_amount_escapes_through_spacing_or_composition`: 10 sözcük × 10 sözcük × 3
+birleştirici × 4 ek × 2 aralık × 5 kök = 12.000 girdi, süiti yavaşlatmadan).
+
+### 4 — Yanlış pozitif ölçümü (kabul kriteri 2)
+
+| Girdi | Sonuç |
+|---|---|
+| `Birey 2 kez geldi` · `Şef T. Lezzetli 5 tarif` · `Bu yüzden 3 kişi` · `Eurovision 2026` · `Euro Kebap 5 yıldır` · `Lira adlı kedi 2 yaşında` | **6/6 geçti** |
+| Tarif metinleri: `1 t. tuz, 2 l. su` · `2 su bardağı un, 1 tatlı kaşığı tuz` · `Bir buçuk saat pişirin, üç buçuk dakika dinlendirin` | **3/3 geçti** |
+| Takip 1'in 25 girdilik sıradan-kopya kümesi + 8 aksanlı ad pini + kök-benzeri kelimeler (`Lirik`, `kurulum`, `dolapta`, `Beslenme`, `Onur`, `Trendyol`, `Martı Cafe`, `Nisan Butik`) | **hepsi geçti, takip 1'e göre fark yok** |
+| Sayı + para-olmayan: `onbir kişi geldi` · `yüzbin kişi katıldı` · `Bir buçuk kilo et` · `Üç buçuk dakika bekleyin` | **4/4 geçti** |
+| Ek sınır ölçümü: `Şef T. Lider 5 tarif` · `Şef T. Lütfen 5 dakika` | **2/2 geçti** |
+
+**Yeni yanlış pozitif yok.** Takip 1'de kayda geçen üç bilinçli ret (`3 martı`, `2 ocakta`,
+`Ekim ekimi 5`) aynen duruyor; bu tur onlara dokunmadı.
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- Redaksiyon · timeline `forbidden_matcher` (W18) · katlama mekanizması · ay adlarının sıradan
+  isim olması ve iki politika pini · yasak terimlerde çekim (PM kararı) — WO'nun kapsam-dışı
+  listesi, dokunulmadı.
+- `bir bucuk agustos` gibi **kesirli tarih** kapatılmadı: `buçuk` takvim günü değil, "bir buçuk
+  Ağustos" Türkçe bir tarih ifadesi değil. Kesir yalnızca tutar gramerine eklendi.
+
+### Doğrulama
+
+Araç zinciri: **Python 3.13.14 · pytest 9.1.1 · mypy 2.3.0 · ruff 0.16.0 · unicodedata 15.1.0 ·
+PostgreSQL 16.14 · MinIO · FFmpeg · Docker Engine 25.0.3 / Compose v2.24.6-desktop.1**. İzole
+stack `COMPOSE_PROJECT_NAME=sp-w17` (worktree kökünden, `--env-file .env.w17`; API 8021, PG
+55453, Redis 56400, MinIO 59030/59031). Tüm koşular **konteyner içinde**.
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app tests migrations scripts) | **yeşil** |
+| `ruff format --check` | **yeşil** — 190 dosya |
+| `mypy .` (strict) | **yeşil** — 178 dosya |
+| `pytest` (`RUN_INTEGRATION_TESTS=1`, gerçek PG + MinIO + FFmpeg) | **yeşil** — **1020 passed** (taban 947, +73) |
+| Kontrat drift | **fark yok** |
+| Alembic head | `0014_voiceover_assets` — değişmedi; `migrations/` altında değişiklik yok |
+
+| # | Kabul kriteri | Sonuç |
+|---|---|---|
+| 1 | 10 girdi birim **ve** HTTP'de reddediliyor, `document IS NULL` | ✅ Birim: `test_a_written_amount_is_an_amount_however_it_is_spaced` (18 girdi) + `test_no_written_amount_can_be_resolved_into_a_document`. HTTP: `test_a_written_amount_never_reaches_a_stored_script` — 10 girdi × `422` + `("failed", <kod>, NULL)` |
+| 2 | Yanlış pozitif pinleri korunuyor | ✅ tablo yukarıda; HTTP tarafında `test_a_written_number_that_is_not_money_still_generates` (4 girdi, `201`) |
+| 3 | Tarama genişletildi, 0 kaçış, sınırlı hâli testte | ✅ 111.129 varyant / 0 kaçış; testte 12.000 girdilik hâli |
+| 4 | `make verify` yeşil, taban 947'nin altına düşmüyor, kontrat farksız, migration yok | ✅ 947 → **1020** |
+| 5 | Rapor + araç zinciri, merge yok | ✅ |
+
+### Açıkça belirtmem gerekenler
+
+1. **İlan listesi dışına çıkmadım:** `script.py`, iki test dosyası, `modules/content/CLAUDE.md`
+   (iki yeni değişmez: sayı grameri ve tek-harflik kök kuralı), bu rapor.
+
+2. **PM kararı 3'ü dar uyguladım.** Kapalı ek kümesi **yalnızca** `T L` istisnasında; diğer
+   köklerde takip 1'in ek alfabesi duruyor. Gerekçe yukarıda (iki listenin zıt yönde bozulması)
+   ve bu bir sapma sayılabilir — PM tersini isterse kapalı kümeyi tüm köklere yaymak tek satır,
+   ama o zaman unutulan her ek bir atlatma kanalı olur ve alfabenin bu turda 161/161 tutmuş
+   olduğu ölçümü kaybederiz.
+
+3. **`\s*` ile tutar birime bitişebiliyor**, yani `<sayı sözcüğü><çekim><para kökü>` biçimindeki
+   *tek bir kelime* fiyat sayılıyor. Gerçek Türkçede böyle bir kelime yok (ölçtüm: `birlikte`,
+   `onur`, `birey`, `beslenme` etkilenmiyor çünkü ardından para kökü gelmiyor), ama sınır burada.
+
+4. **Docker Engine oturum ortasında düştü** (`sp-w17` dahil tüm stack'ler); kullanıcı yeniden
+   başlattı, `alembic upgrade head` tekrar koşuldu ve tüm doğrulama düşüşten *sonra*, tek ve
+   temiz bir stack üzerinde yapıldı.
+
+5. **`main`'e merge etmedim.** Dal `main`'i (`02455ef`) içeriyor:
+
+   ```
+   git -C A:/socialpilot-ai merge --ff-only fix/w17-latin-fold
+   ```
+
 ## Rapor — takip düzeltmesi 1 · 2026-08-02 · yürüten oturum (Opus 5)
 
 **Dal:** `fix/w17-latin-fold` (`git merge main` ile `6fd5ec2` üzerine güncellendi) ·

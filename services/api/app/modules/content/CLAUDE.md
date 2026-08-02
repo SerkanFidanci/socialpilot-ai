@@ -41,6 +41,19 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
   kökünün "Eurovision"a ulaşamamasının tek sebebi budur. Yeni bir kök eklerken çekimini listeye
   yazma, kökü yaz. Tek istisna `T.L.` kısaltması: eki ancak **başka bir ayırıcıdan sonra**
   gelebilir, yoksa "Şef T. Lezzetli" para birimi olurdu.
+- **Sayı sözcükleri liste, birleşimleri gramerdir** (W17 takip 2). Türkçenin sayı sözcükleri
+  kapalı ve sonlu (`bir`…`dokuz`, `on`…`doksan`, `yuz`, `bin`, `milyon`, `milyar`, `yarim`,
+  `ceyrek`, `bucuk`) — dil yeni sayı sözcüğü üretmediği için bu listeyi yazmak güvenlidir.
+  **Birleşimleri değil:** ardışık sayı sözcükleri boşluklu, tireli **veya bitişik** tek bir
+  tutardır (`yuzbin`, `onbir`, `yuz ellibes`, `beserlira`) ve bileşikleri tek tek yazmak yine
+  enumerasyondur. Bölümleme kelimenin tamamını kaplamak zorundadır — çapalar bunu zorlar:
+  `onbir` = `on`+`bir` sayıdır, `birey` = `bir`+`ey` değildir.
+- **Tek harflik kök gramerle savunulur, alfabeyle değil.** `T L` kısaltmasının eki `_SUFFIX`
+  alfabesiyle ayırt edilemez (`ezzetli` de o alfabededir); bu yüzden ayırıcısız biçim **kapalı
+  Türkçe ek kümesinin dizisiyle** (`_SUFFIX_SEQUENCE`) eşleşir: `T Lye` yakalanır, "Şef T.
+  Lezzetli" yakalanmaz. Kapalı küme **yalnızca burada** kullanılır: alfabe fazla kabul eder
+  (bedeli bir üretim tekrarı), unutulmuş bir ek ise az kabul eder (bedeli bir atlatma) — çok
+  harfli köklerde fazla kabul etmek doğru taraftır.
 - **Katlama yalnızca eşleştirme içindir; saklanan değer `normalize_encoding`'den geçer.** İkinci
   fonksiyon kodlamayı (görünmezler, NFD, fullwidth, confusable, büyük/küçük harf) katlar ama
   harfleri korur. `_scene_tags` saklanan bir değer üretir ve 2C/2E onu video-understanding

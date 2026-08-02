@@ -690,6 +690,72 @@ def test_a_word_that_only_starts_like_a_money_root_still_generates(label: str, p
     assert phrase in str(response.json()["document"])
 
 
+WRITTEN_NUMBER_BYPASSES = [
+    # The work order's numbered inputs for follow-up 2. A fraction word that was not in the set,
+    # compounds written closed up, the amount run into the unit, and the spaced abbreviation
+    # with an unmarked suffix — every one of them answered `201` with `status=generated`.
+    ("bir buçuk", "Sadece bir buçuk lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("beş buçuk", "Sadece beş buçuk lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("yarım milyon", "Yarım milyon dolar kazanç.", "SCRIPT_FABRICATED_PRICE"),
+    ("çeyrek milyon", "Çeyrek milyon lira değerinde.", "SCRIPT_FABRICATED_PRICE"),
+    ("yüzbin", "Sadece yüzbin lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("onbir", "Sadece onbir lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("part-closed compound", "Sadece yüz ellibeş lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("beşerlira", "Sadece beşerlira.", "SCRIPT_FABRICATED_PRICE"),
+    ("beşer lira", "Sadece beşer lira.", "SCRIPT_FABRICATED_PRICE"),
+    ("T Lye", "Sadece 165 T Lye.", "SCRIPT_FABRICATED_PRICE"),
+]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("phrase", "issue"),
+    [(phrase, issue) for _, phrase, issue in WRITTEN_NUMBER_BYPASSES],
+    ids=[label for label, _, _ in WRITTEN_NUMBER_BYPASSES],
+)
+def test_a_written_amount_never_reaches_a_stored_script(phrase: str, issue: str) -> None:
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-written", "s-written@example.com"), "Written")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "SCRIPT_VALIDATION_FAILED"
+    assert [entry["code"] for entry in response.json()["meta"]["issues"]] == [issue]
+    assert query("SELECT status, failure_code, document FROM content_scripts") == [
+        ("failed", issue, None)
+    ]
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("label", "phrase"),
+    [
+        # The pins that pay for the grammar above, asserted where a rejection costs a generation.
+        ("birey", "Birey 2 kez geldi ve memnun ayrıldı."),
+        ("initial before a word", "Şef T. Lezzetli 5 tarif sunuyor."),
+        ("recipe timing", "Bir buçuk saat pişirin, üç buçuk dakika dinlendirin."),
+        ("closed-up compound counting people", "onbir kişi aynı anda ağırlanıyor."),
+    ],
+)
+def test_a_written_number_that_is_not_money_still_generates(label: str, phrase: str) -> None:
+    adapter = FakeScriptGenerationAdapter(config())
+    with TestClient(app_with(config(), adapter), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("s-written-ok", "s-written-ok@example.com"), "WrittenOk")
+        output = _mutate(
+            tenant.cta_id, lambda document: document["segments"][1].update({"voice_text": phrase})
+        )
+        adapter.output_json = output
+        response = tenant.generate()
+
+    assert response.status_code == 201, response.text
+    assert phrase in str(response.json()["document"])
+
+
 @requires_postgres
 def test_a_latin_letter_the_fold_cannot_spell_is_refused_at_the_boundary() -> None:
     """Fail-closed: an unmapped letter is rejected, never passed to rules that cannot read it."""
