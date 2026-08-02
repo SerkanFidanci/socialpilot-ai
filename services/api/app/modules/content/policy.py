@@ -38,6 +38,7 @@ class ContentAction(StrEnum):
     VOICEOVER_GENERATE = "content.voiceover.generate"
     PROJECT_READ = "content.project.read"
     PROJECT_WRITE = "content.project.write"
+    PROJECT_DECIDE = "content.project.decide"
 
 
 ACTION_PERMISSIONS: dict[ContentAction, Permission] = {
@@ -56,6 +57,12 @@ ACTION_PERMISSIONS: dict[ContentAction, Permission] = {
     # may write a script, lay a timeline and ask for a render may also ask for all three at once.
     ContentAction.PROJECT_READ: Permission.BUSINESS_READ,
     ContentAction.PROJECT_WRITE: Permission.CONTENT_GENERATE,
+    # Approving and rejecting is the one content action that is *not* producing content, so it
+    # is the one that does not map onto `content.generate`. This is the line PRD §4 draws: an
+    # editor writes and an approver signs, and the two roles hold disjoint abilities. Requesting
+    # a revision and cancelling stay on `PROJECT_WRITE` — both ask for work to be done or undone,
+    # which is the producer's side of that line.
+    ContentAction.PROJECT_DECIDE: Permission.CONTENT_APPROVE,
 }
 
 

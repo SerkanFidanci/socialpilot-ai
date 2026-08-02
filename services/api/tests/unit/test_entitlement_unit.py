@@ -259,15 +259,48 @@ def test_a_stale_failure_code_on_delivered_work_does_not_hand_the_credit_back() 
 
 
 def test_source_outcome_is_total_over_the_project_state_machine() -> None:
-    for state in ProjectState:
-        assert isinstance(source_outcome(state), SourceOutcome)
+    """`ProjectState × delivered`, walked whole. Slice 2F added the second dimension."""
+
+    for state, delivered in itertools.product(ProjectState, (False, True)):
+        assert isinstance(source_outcome(state, preview_delivered=delivered), SourceOutcome)
 
 
-def test_only_preview_ready_delivers_and_only_failed_abandons() -> None:
+def test_a_project_that_never_previewed_delivers_only_from_preview_ready() -> None:
     for state in ProjectState:
-        outcome = source_outcome(state)
-        assert (outcome is SourceOutcome.DELIVERED) is (state is ProjectState.PREVIEW_READY)
-        assert (outcome is SourceOutcome.ABANDONED) is (state is ProjectState.FAILED)
+        outcome = source_outcome(state, preview_delivered=False)
+        assert (outcome is SourceOutcome.DELIVERED) is (
+            state in {ProjectState.PREVIEW_READY, ProjectState.APPROVED}
+        )
+        assert (outcome is SourceOutcome.ABANDONED) is (
+            state in {ProjectState.FAILED, ProjectState.CANCELLED}
+        )
+
+
+def test_a_delivered_preview_stays_delivered_wherever_the_project_ends_up() -> None:
+    """The rule slice 2F had to add, and the reason it is a second argument rather than a state.
+
+    §21 puts a revision loop *after* the preview. A project can now reach `preview_ready` — where
+    PRD §12.7 consumes the credit — then be rejected, revised, and end in `failed` or `cancelled`.
+    Reading only the final state would ask the ledger to release a hold it already consumed,
+    which `resolve_settlement` correctly calls a `CONFLICT`; the project would be stuck having
+    done nothing wrong. The customer keeps the preview they were given in every one of those
+    endings, so every one of them is `DELIVERED`.
+    """
+
+    for state in ProjectState:
+        assert source_outcome(state, preview_delivered=True) is SourceOutcome.DELIVERED
+
+    for state in (ProjectState.FAILED, ProjectState.CANCELLED, ProjectState.REVISION_REQUESTED):
+        decision = settlement_outcome(
+            source_outcome(state, preview_delivered=True), "PROJECT_RENDER_FAILED"
+        )
+        assert decision is SettlementOutcome.CONSUME
+        # And the settlement that already happened at `preview_ready` is simply replayed, which
+        # writes nothing at all rather than refunding a second time.
+        assert (
+            resolve_settlement(ReservationStatus.CONSUMED, decision)
+            is SettlementAction.ALREADY_APPLIED
+        )
 
 
 def test_the_composed_rule_charges_exactly_one_project_state() -> None:
@@ -278,7 +311,7 @@ def test_the_composed_rule_charges_exactly_one_project_state() -> None:
     held: set[tuple[str, str | None]] = set()
     released: set[tuple[str, str | None]] = set()
     for state, code in itertools.product(ProjectState, codes):
-        answer = settlement_outcome(source_outcome(state), code)
+        answer = settlement_outcome(source_outcome(state, preview_delivered=False), code)
         bucket = {
             None: held,
             SettlementOutcome.CONSUME: charged,
@@ -286,8 +319,29 @@ def test_the_composed_rule_charges_exactly_one_project_state() -> None:
         }[answer]
         bucket.add((state.value, code))
     assert len(charged) + len(held) + len(released) == len(list(ProjectState)) * len(codes)
-    assert {state for state, _ in charged} == {ProjectState.PREVIEW_READY.value}
-    assert {state for state, _ in released} == {ProjectState.FAILED.value}
+    # Two states charge, and both mean the same thing: a preview exists. `approved` is only
+    # reachable through `preview_ready`, so nothing is charged twice — `resolve_settlement`
+    # answers `ALREADY_APPLIED` for the second pass.
+    assert {state for state, _ in charged} == {
+        ProjectState.PREVIEW_READY.value,
+        ProjectState.APPROVED.value,
+    }
+    # Two states release, and both mean the same thing: no preview was ever produced. The
+    # cancellation codes slice 2F introduces are not in `FAILURE_CLASSES` and therefore classify
+    # as `UNCLASSIFIED`, which refunds — the correct answer, and the one this loop covers by
+    # including an unmapped code.
+    assert {state for state, _ in released} == {
+        ProjectState.FAILED.value,
+        ProjectState.CANCELLED.value,
+    }
+    for code in ("PROJECT_CANCELLED", "PROJECT_ABANDONED"):
+        assert classify_failure(code) is FailureClass.UNCLASSIFIED
+        assert (
+            settlement_outcome(
+                source_outcome(ProjectState.CANCELLED, preview_delivered=False), code
+            )
+            is SettlementOutcome.RELEASE
+        )
 
 
 # --- policy ---------------------------------------------------------------------------------------
@@ -312,8 +366,11 @@ def test_reading_the_ledger_is_ordinary_business_read() -> None:
     for action in (EntitlementAction.BALANCE_READ, EntitlementAction.LEDGER_READ):
         assert required_permission(action) is Permission.BUSINESS_READ
         assert permits_action(BusinessRole.VIEWER, action)
-        # The approver holds nothing at all and keeps holding nothing.
-        assert not permits_action(BusinessRole.APPROVER, action)
+        # Slice 2F gave the approver `business.read` so it can see what it is signing off, and
+        # this read rides on that permission. What it did *not* get is any way to move credit:
+        # granting is still the owner alone, asserted directly above.
+        assert permits_action(BusinessRole.APPROVER, action)
+        assert not permits_action(BusinessRole.APPROVER, EntitlementAction.GRANT_CREATE)
 
 
 def test_the_grant_permission_is_in_the_central_table_for_every_role() -> None:

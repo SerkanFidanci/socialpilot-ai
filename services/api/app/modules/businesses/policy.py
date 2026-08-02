@@ -21,6 +21,12 @@ class Permission(StrEnum):
     # do neither. Folding generation into `business.update` would lock editors out; folding it
     # into `media.upload` would make the table lie about what the permission means.
     CONTENT_GENERATE = "content.generate"
+    # Deciding whether produced content may go out (PRD §21). Separate from `content.generate`
+    # because PRD §4 makes them separate roles: an approver holds *only* this one and cannot
+    # produce anything, and an editor produces content and cannot sign it off. Folding approval
+    # into generation would give every editor the approver's signature and leave the approver
+    # role with nothing to do — which is what it had before slice 2F.
+    CONTENT_APPROVE = "content.approve"
     # Writing credits into a tenant's ledger. Held by the owner alone — not by an admin, who may
     # otherwise do everything an owner can except end the business. The reason is the same one:
     # a grant is money, and until Phase 3 connects a store there is no receipt behind it, so the
@@ -41,8 +47,11 @@ ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
             Permission.MEDIA_READ,
             Permission.MEDIA_UPLOAD,
             Permission.CONTENT_GENERATE,
+            Permission.CONTENT_APPROVE,
         }
     ),
+    # An editor produces content and does not sign it off (PRD §4). It may ask for a revision —
+    # that is a generation request, and it goes through `content.generate`.
     BusinessRole.EDITOR: frozenset(
         {
             Permission.BUSINESS_READ,
@@ -52,10 +61,16 @@ ROLE_PERMISSIONS: dict[BusinessRole, frozenset[Permission]] = {
         }
     ),
     BusinessRole.VIEWER: frozenset({Permission.BUSINESS_READ, Permission.MEDIA_READ}),
-    # Approver holds no permission yet: the approval sources it would read and decide on do not
-    # exist until Phase 2. It is mapped explicitly (not omitted) so `permits` never raises for a
-    # real role, and so that granting it any ability later is a deliberate one-line change here.
-    BusinessRole.APPROVER: frozenset(),
+    # Slice 2F is the phase this role was waiting for. It holds exactly one ability — deciding
+    # whether produced content may go out — and still cannot produce, upload or configure
+    # anything. `business.read` comes with it because a decision made without seeing the project
+    # would not be a decision.
+    #
+    # There is deliberately **no self-approval restriction**: a business with one owner and one
+    # approver would deadlock the moment the approver was also the person who asked for the
+    # content, and PRD §4 does not ask for separation of duties. Who approved what is recorded on
+    # every decision, so the question stays answerable without being enforced.
+    BusinessRole.APPROVER: frozenset({Permission.BUSINESS_READ, Permission.CONTENT_APPROVE}),
 }
 
 

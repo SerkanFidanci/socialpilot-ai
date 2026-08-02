@@ -277,6 +277,42 @@ class Settings(BaseSettings):
     # do.
     lifecycle_pending_sweep_age_seconds: int = Field(default=1_800, ge=60, le=86_400)
     lifecycle_sweep_batch_size: int = Field(default=50, ge=1, le=500)
+    # --- approval and revision (PRD §21, §12.3, slice 2F) -------------------------------------
+    # The §21.1 policy a project is opened under when the request does not name one. `always` is
+    # the safe default and the only defensible one before a tenant has expressed a preference:
+    # the other direction publishes content nobody looked at because nobody configured anything.
+    # §12.2 puts this on a subscription item, which is Phase 3; until then this is the fallback
+    # and the create request is the override.
+    content_approval_policy_default: Literal[
+        "always",
+        "campaign_only",
+        "price_or_discount_only",
+        "ads_only",
+        "first_n_contents",
+        "low_confidence_only",
+        "never_within_guardrails",
+    ] = "always"
+    # How many contents `first_n_contents` still asks a person to look at. A deployment-wide
+    # number rather than a stored one: unlike the policy, this is not a choice a tenant has made
+    # yet, and Phase 3's subscription item is where it becomes one.
+    content_approval_first_n: int = Field(default=3, ge=1, le=1_000)
+    # §12.3's "üç revizyon". Captured onto each project at creation, so raising it later does not
+    # retroactively widen an allowance somebody has already been told about.
+    revision_quota_default: int = Field(default=3, ge=0, le=100)
+    # What one revision spends. A minor revision restarts part of the pipeline; a major one buys
+    # a fresh script generation and therefore a real provider call, which is why it costs more.
+    # **The 2 is an estimate, not a measurement** — W08's benchmark is what will price a
+    # generation, and this being configuration rather than a constant is how that revision lands
+    # as a deployment change instead of a code change.
+    revision_quota_minor_cost: int = Field(default=1, ge=1, le=100)
+    revision_quota_major_cost: int = Field(default=2, ge=1, le=100)
+    # How long a project may wait on a person before the sweep withdraws it and hands the credit
+    # back. Deliberately long — this is a customer's unfinished work, not a stalled job, and the
+    # step timeout that catches stalled jobs explicitly does not apply to waiting states. Thirty
+    # days by default; validated below to clear one step timeout by a wide margin.
+    lifecycle_abandoned_project_age_seconds: int = Field(default=2_592_000, ge=3_600, le=31_536_000)
+    # The abandoned-project sweep reconciles a slow human, so it runs rarely.
+    celery_beat_project_sweep_interval_seconds: int = Field(default=3_600, ge=1, le=86_400)
     # --- entitlement ledger (PRD §12.4, §12.8, slice W20) --------------------------------------
     # Which version of the content point table prices new work. Pinned rather than "whatever is
     # newest": a price change has to be a deliberate, deployed decision, and the version a charge
@@ -573,6 +609,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ENTITLEMENT_RESERVATION_SWEEP_AGE_SECONDS must exceed one lifecycle step timeout"
             )
+        # The abandoned-project sweep cancels a customer's unfinished work and refunds it. A
+        # threshold under one step timeout would let it withdraw a project that is merely between
+        # two steps — the one thing this sweep must never do.
+        if self.lifecycle_abandoned_project_age_seconds <= self.lifecycle_step_timeout_seconds:
+            raise ValueError(
+                "LIFECYCLE_ABANDONED_PROJECT_AGE_SECONDS must exceed one lifecycle step timeout"
+            )
+        # A single revision has to fit inside the allowance, or the most expensive revision would
+        # be one nobody could ever ask for.
+        if self.revision_quota_default and (
+            self.revision_quota_major_cost > self.revision_quota_default
+        ):
+            raise ValueError("REVISION_QUOTA_MAJOR_COST cannot exceed REVISION_QUOTA_DEFAULT")
+        if self.revision_quota_minor_cost > self.revision_quota_major_cost:
+            raise ValueError("REVISION_QUOTA_MINOR_COST cannot exceed REVISION_QUOTA_MAJOR_COST")
         maximum_job_timeout = max(
             self.media_technical_job_timeout_seconds,
             self.scene_speech_job_timeout_seconds,

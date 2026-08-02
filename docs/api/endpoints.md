@@ -3,7 +3,7 @@
 <!-- ÜRETİLMİŞ DOSYA — elle düzenlenmez. Kaynak: docs/generated/openapi.json
      Üreten: services/api/scripts/generate_endpoints_doc.py (`make generate-docs`) -->
 
-**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **45 endpoint**
+**Kontrat:** SocialPilot AI API `0.1.0` · **OpenAPI** `3.1.0` · **50 endpoint**
 
 > Bu dosya [`../generated/openapi.json`](../generated/openapi.json) yerine okunur:
 > aynı kontrat, ~%98 daha az token. Şema/alan detayı gerekiyorsa tek endpoint'i
@@ -62,7 +62,12 @@ Hata gövdeleri RFC 9457 Problem Details formatındadır; her operasyon `400/401
 | `GET` | `/v1/businesses/{business_id}/content/projects` | List this business's content projects newest first, with an opaque cursor | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `POST` | `/v1/businesses/{business_id}/content/projects` | Open a content project (PRD §20). The response is the record, not the video | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `201` |
 | `GET` | `/v1/businesses/{business_id}/content/projects/{project_id}` | Read one project: its state, what it produced, and why it stopped if it did | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `GET` | `/v1/businesses/{business_id}/content/projects/{project_id}/approvals` | Every decision made about this project, including the ones the policy made itself | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/projects/{project_id}/approvals` | Approve or reject a preview (PRD §21). Requires the approver's permission | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/projects/{project_id}/cancel` | Withdraw a project that has not finished, releasing any credit it still holds | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
 | `POST` | `/v1/businesses/{business_id}/content/projects/{project_id}/media` | Give a project waiting on footage the assets it was waiting for | `HTTPBearer` + tenant (`business_id`) | yok — **değerlendirilmeli** | `200` |
+| `GET` | `/v1/businesses/{business_id}/content/projects/{project_id}/revisions` | Every revision asked for on this project, with its class, scope and quota cost | `HTTPBearer` + tenant (`business_id`) | — | `200` |
+| `POST` | `/v1/businesses/{business_id}/content/projects/{project_id}/revisions` | Say what should change after a rejection, and restart the pipeline where it matters | `HTTPBearer` + tenant (`business_id`) | **var** — `Idempotency-Key` | `200` |
 | `GET` | `/v1/businesses/{business_id}/content/projects/{project_id}/transitions` | Read a project's whole history (PRD §20) — the answer to "where did this get stuck?" | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `GET` | `/v1/businesses/{business_id}/content/renders/{render_id}` | Get Render | `HTTPBearer` + tenant (`business_id`) | — | `200` |
 | `GET` | `/v1/businesses/{business_id}/content/renders/{render_id}/qc` | Read the automatic QC report for one render: every check, its verdict, its thresholds | `HTTPBearer` + tenant (`business_id`) | — | `200` |

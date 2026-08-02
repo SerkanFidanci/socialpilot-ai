@@ -14,13 +14,37 @@ pair in the product, and answers `None` for the ones PRD §20 does not draw. A c
 for `RENDERING → PREVIEW_READY` gets a refusal, not a `KeyError` and not a silent success, which
 is what makes "no state may be skipped" a property of the data rather than of everyone's care.
 
-**The states are PRD §20's, not a summary of them.** `WAITING_APPROVAL`, `REVISION_REQUESTED`,
-`SCHEDULED`, `PUBLISHING` and `PUBLISHED` are absent because slice 2F and Phase 4 own them; every
-state this slice does reach is spelled the way §20 spells it. The one addition is
-`ProjectEvent.STEP_FAILED`, which §20's diagram does not draw: the diagram reaches `FAILED` only
-from `QUALITY_CHECK` and `PUBLISHING`, and a project whose script generation failed has nowhere
-to be. Recording that as an explicit extension is better than quietly widening `QC_FAILED` to
-mean two different things — see the report on this work order.
+**The states are PRD §20's, not a summary of them.** `SCHEDULED`, `PUBLISHING` and `PUBLISHED` are
+absent because slice 2G and Phase 4 own them; every state this slice does reach is spelled the way
+§20 spells it. There are three documented extensions, each one a state or event the diagram does
+not draw and the product needs:
+
+- `ProjectEvent.STEP_FAILED` (slice 2E). The diagram reaches `FAILED` only from `QUALITY_CHECK`
+  and `PUBLISHING`, and a project whose script generation failed has nowhere to be.
+- `ProjectState.APPROVED` (slice 2F). §20 draws `WAITING_APPROVAL --> SCHEDULED` directly, and
+  there is no scheduler until 2G. An approved project has to rest *somewhere* that is not
+  `WAITING_APPROVAL`, or "approved" would be invisible to every query the product asks — the list
+  of things awaiting a decision would contain the things that already got one. Slice 2G adds the
+  edge `APPROVED --> SCHEDULED`; §20's arrow is that path with this state named in the middle.
+- `ProjectState.CANCELLED` (slice 2F). A customer withdrawing a project is not a failure, and the
+  distinction is not cosmetic: `failure_code` drives the refund classification and a support
+  answer that cannot separate "the encoder died" from "they changed their mind" is not an answer.
+
+**Reaching `PREVIEW_READY` is no longer the end.** Slice 2E made it terminal because approval did
+not exist. It is now a state the sequencer passes through — it evaluates §21.1's policy there and
+either asks for approval or records an automatic one. What did *not* move is the moment the credit
+is spent: PRD §12.7 consumes on "ön izleme başarıyla hazır", so the project records
+`preview_delivered_at` on first arrival and every later outcome is `DELIVERED` regardless of where
+the project ends up. Without that, a revision that failed after a good preview would try to hand
+back credit for a preview the customer already received, and the ledger would refuse it as a
+contradiction.
+
+**The revision loop is bounded by quota, the render loop by attempts.** These are two different
+loops with two different bounds and they must not share one. `render_attempts` bounds what the
+*machine* does on its own after a failed check; a revision is a person asking for something
+different, so it resets that counter and spends the revision quota instead. Sharing one counter
+would mean either that a person cannot get a re-render after two automatic ones, or that the
+automatic loop could be reopened indefinitely from outside.
 
 **Bounding the render loop is expressed here, not in the service.** `decide_after_qc` takes the
 attempts already spent and the ceiling, and there is no combination of inputs for which it
@@ -42,6 +66,7 @@ from enum import StrEnum
 from typing import Final
 from uuid import UUID
 
+from app.modules.content.approval import RevisionScope
 from app.modules.content.qc import QcVerdict, RemediationPath
 from app.modules.content.render import RenderProfile, profile_spec
 from app.modules.content.text_normalization import normalize_encoding
@@ -76,14 +101,20 @@ FAILURE_VOICEOVER_FAILED: Final = "PROJECT_VOICEOVER_FAILED"
 FAILURE_TIMELINE_REJECTED: Final = "PROJECT_TIMELINE_REJECTED"
 FAILURE_RENDER_FAILED: Final = "PROJECT_RENDER_FAILED"
 FAILURE_SOURCE_NOT_ANALYZED: Final = "PROJECT_SOURCE_NOT_ANALYZED"
+# The two ways a project ends without having broken. They are codes rather than an absent one
+# because `failure_code` is what the ledger classifies a settlement by, and a support answer that
+# cannot separate "the encoder died" from "they changed their mind" is not an answer.
+FAILURE_CANCELLED: Final = "PROJECT_CANCELLED"
+FAILURE_ABANDONED: Final = "PROJECT_ABANDONED"
 
 
 class ProjectState(StrEnum):
-    """PRD §20's states, up to the point slice 2E is responsible for.
+    """PRD §20's states, up to the point slice 2F is responsible for.
 
-    The diagram continues past `PREVIEW_READY` into approval, scheduling and publishing. Those
-    are slice 2F and Phase 4; adding them here as unreachable values would put states in the
-    database that nothing can produce and nothing can consume.
+    The diagram continues past approval into scheduling and publishing. Those are slice 2G and
+    Phase 4; adding them here as unreachable values would put states in the database that nothing
+    can produce and nothing can consume. `APPROVED` and `CANCELLED` are the two documented
+    extensions — see the module docstring for why each exists.
     """
 
     PLANNED = "planned"
@@ -95,8 +126,12 @@ class ProjectState(StrEnum):
     RENDERING = "rendering"
     QUALITY_CHECK = "quality_check"
     PREVIEW_READY = "preview_ready"
+    WAITING_APPROVAL = "waiting_approval"
+    REVISION_REQUESTED = "revision_requested"
+    APPROVED = "approved"
     FAILED = "failed"
     RETRYING = "retrying"
+    CANCELLED = "cancelled"
 
 
 class ProjectEvent(StrEnum):
@@ -122,6 +157,20 @@ class ProjectEvent(StrEnum):
     RETRY_REQUESTED = "retry_requested"
     RETRY_STARTED = "retry_started"
     STEP_FAILED = "step_failed"
+    # §21.1's policy was evaluated over a finished preview and answered one of two ways. Both are
+    # facts about what the policy said, not instructions: the table decides where each one leads.
+    APPROVAL_REQUIRED = "approval_required"
+    AUTO_APPROVED = "auto_approved"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    # Which stage the revision invalidated (`approval.RevisionScope`). Three events rather than
+    # one because the transition table maps a pair to a single state, and a revision that only
+    # changes the caption style must not walk back through a script generation. The *scope* is
+    # decided by a pure classifier over the changed fields; these events only carry its answer.
+    REVISION_SCOPED_TO_SCRIPT = "revision_scoped_to_script"
+    REVISION_SCOPED_TO_VOICE = "revision_scoped_to_voice"
+    REVISION_SCOPED_TO_TIMELINE = "revision_scoped_to_timeline"
+    CANCELLED = "cancelled"
 
 
 # PRD §20's edges, verbatim, for the part of the diagram this slice covers. `STEP_FAILED` is the
@@ -140,14 +189,17 @@ _WORKING_STATES: Final[tuple[ProjectState, ...]] = (
 )
 
 _TERMINAL_STATES: Final[frozenset[ProjectState]] = frozenset(
-    {ProjectState.PREVIEW_READY, ProjectState.FAILED}
+    {ProjectState.APPROVED, ProjectState.FAILED, ProjectState.CANCELLED}
 )
 
 # The states in which the sequencer is waiting on a person rather than on itself. They are
 # claimed like any other working state — a project has to be able to notice its media arrived —
-# but the step timeout does not apply to them, because "the customer has not uploaded yet" is
-# not a stalled job.
-_USER_WAIT_STATES: Final[frozenset[ProjectState]] = frozenset({ProjectState.WAITING_MEDIA})
+# but the step timeout does not apply to them, because "the customer has not uploaded yet" and
+# "the approver is at lunch" are not stalled jobs. What catches a project abandoned in one of
+# these is the age sweep, which is a much longer clock and gives the credit back.
+_USER_WAIT_STATES: Final[frozenset[ProjectState]] = frozenset(
+    {ProjectState.WAITING_MEDIA, ProjectState.WAITING_APPROVAL, ProjectState.REVISION_REQUESTED}
+)
 
 _TRANSITIONS: Final[Mapping[tuple[ProjectState, ProjectEvent], ProjectState]] = {
     (ProjectState.PLANNED, ProjectEvent.MEDIA_REQUIRED): ProjectState.WAITING_MEDIA,
@@ -163,13 +215,42 @@ _TRANSITIONS: Final[Mapping[tuple[ProjectState, ProjectEvent], ProjectState]] = 
     # `requires_human_review` flag rather than by a state of its own. Today *every* render is
     # `needs_review`, because the vision adapter is disabled in production and slice 2D's
     # fail-closed rule turns an unmeasured model check into an unknown one; a second state would
-    # therefore be the state every project ends in, and slice 2F's approval flow would have to
-    # treat the two identically anyway.
+    # therefore be the state every project ends in, and the approval flow below has to treat the
+    # two identically anyway — §21.1's `low_confidence_only` reads the verdict, not the state.
     (ProjectState.QUALITY_CHECK, ProjectEvent.QC_NEEDS_REVIEW): ProjectState.PREVIEW_READY,
     (ProjectState.QUALITY_CHECK, ProjectEvent.QC_FAILED): ProjectState.FAILED,
     (ProjectState.FAILED, ProjectEvent.RETRY_REQUESTED): ProjectState.RETRYING,
     (ProjectState.RETRYING, ProjectEvent.RETRY_STARTED): ProjectState.ANALYZING,
+    # --- §21's approval loop ----------------------------------------------------------------
+    # The sequencer applies §21.1's policy the moment a preview exists and takes one of two
+    # edges. Neither is optional and there is no third: a preview that nobody decided about
+    # would sit in a state the product has no screen for.
+    (ProjectState.PREVIEW_READY, ProjectEvent.APPROVAL_REQUIRED): ProjectState.WAITING_APPROVAL,
+    (ProjectState.PREVIEW_READY, ProjectEvent.AUTO_APPROVED): ProjectState.APPROVED,
+    (ProjectState.WAITING_APPROVAL, ProjectEvent.APPROVED): ProjectState.APPROVED,
+    (ProjectState.WAITING_APPROVAL, ProjectEvent.REJECTED): ProjectState.REVISION_REQUESTED,
+    # §20 draws `REVISION_REQUESTED --> SCRIPTING` and that is the major-revision edge. The two
+    # beside it are what "yalnızca etkilenen adımdan yeniden başlar" means once the pipeline
+    # actually has stages: a new voice does not need new words, and a new caption style does not
+    # need new speech.
+    (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_SCRIPT): (
+        ProjectState.SCRIPTING
+    ),
+    (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_VOICE): (
+        ProjectState.VOICE_GENERATION
+    ),
+    (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_TIMELINE): (
+        ProjectState.TIMELINE_BUILDING
+    ),
     **{(state, ProjectEvent.STEP_FAILED): ProjectState.FAILED for state in _WORKING_STATES},
+    # Cancellation is available from every state the project has not already finished in, and
+    # from nowhere else. Written over the same closed list the terminal set is defined by, so
+    # "can this be cancelled?" and "is this over?" cannot drift apart.
+    **{
+        (state, ProjectEvent.CANCELLED): ProjectState.CANCELLED
+        for state in ProjectState
+        if state not in _TERMINAL_STATES
+    },
 }
 
 INITIAL_STATE: Final = ProjectState.PLANNED
@@ -187,9 +268,40 @@ def next_state(state: ProjectState, event: ProjectEvent) -> ProjectState | None:
 
 
 def is_terminal(state: ProjectState) -> bool:
-    """A state the sequencer never leaves on its own. Slice 2F reopens `PREVIEW_READY`."""
+    """A state the project never leaves. `APPROVED`, `FAILED` and `CANCELLED`, and no others.
+
+    `PREVIEW_READY` was terminal in slice 2E and is not any more: the sequencer passes through
+    it to apply §21.1's policy. `WAITING_APPROVAL` and `REVISION_REQUESTED` are not terminal
+    either — they wait on a person, which `waits_for_user` is what says.
+    """
 
     return state in _TERMINAL_STATES
+
+
+def can_cancel(state: ProjectState) -> bool:
+    """Whether a customer may still withdraw this project. Exactly the non-terminal states."""
+
+    return next_state(state, ProjectEvent.CANCELLED) is not None
+
+
+# Which event carries a revision of a given scope. The scope is decided by `approval`'s pure
+# classifier over the changed fields; the mapping from that answer to an edge lives here, beside
+# the table the edge is in, so a new scope cannot be added without a transition to go with it.
+_SCOPE_EVENTS: Final[Mapping[RevisionScope, ProjectEvent]] = {
+    RevisionScope.SCRIPT: ProjectEvent.REVISION_SCOPED_TO_SCRIPT,
+    RevisionScope.VOICE: ProjectEvent.REVISION_SCOPED_TO_VOICE,
+    RevisionScope.TIMELINE: ProjectEvent.REVISION_SCOPED_TO_TIMELINE,
+}
+
+_UNROUTED_SCOPES = tuple(scope.value for scope in RevisionScope if scope not in _SCOPE_EVENTS)
+if _UNROUTED_SCOPES:  # pragma: no cover - a start-up failure, asserted by the unit suite
+    raise RuntimeError(f"revision scopes with no transition: {_UNROUTED_SCOPES}")
+
+
+def revision_event(scope: RevisionScope) -> ProjectEvent:
+    """Total over `RevisionScope`. The edge a revision of this scope takes out of the wait."""
+
+    return _SCOPE_EVENTS[scope]
 
 
 def waits_for_user(state: ProjectState) -> bool:
@@ -202,6 +314,17 @@ def advanceable_states() -> tuple[ProjectState, ...]:
     """The states a worker may claim. Terminal states are never claimed."""
 
     return tuple(state for state in ProjectState if state not in _TERMINAL_STATES)
+
+
+def working_states() -> tuple[ProjectState, ...]:
+    """The states in which the machine is doing the work, so a step can fail underneath it.
+
+    Distinct from `advanceable_states` by exactly the states that wait on a person and by
+    `PREVIEW_READY`: a customer who has not uploaded anything has not failed at anything, and a
+    finished preview has nothing left to fail at. Those waits end by cancellation, not failure.
+    """
+
+    return _WORKING_STATES
 
 
 class LifecycleTransitionError(RuntimeError):

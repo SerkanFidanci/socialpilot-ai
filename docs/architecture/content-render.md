@@ -537,9 +537,134 @@ satırları artık `content.pending.sweep` ile yaş eşiğine göre `failed`e d�
 kabiliyetin en uzun dürüst koşusundan büyük olmaya zorlanıyor — sadece *yavaş* olan bir koşuyu
 terk edilmiş ilan etmek bu süpürmenin yapmaması gereken tek şey.
 
-## Bu dört slice'ın taşımadıkları
+## Onay sistemi ve revizyon (slice 2F)
 
-Entitlement/kota tüketimi (W20), onay/revizyon akışı (2F), planlayıcı (2G). Yayınlama Phase 4.
+2E projeyi `PREVIEW_READY`'ye getirip **orada bırakıyordu**: kullanıcı beğenmezse yapabileceği
+hiçbir şey yoktu. §21 o döngüyü kapatıyor — ve fail-closed QC gereği bugün *her* çıktı
+`needs_review` işaretiyle geldiği için insan incelemesi ürünün merkezinde.
+
+```
+QUALITY_CHECK ─► PREVIEW_READY ─┬─ politika onay istiyorsa ─► WAITING_APPROVAL ─► APPROVED
+                                └─ istemiyorsa ───────────────────────────────► APPROVED
+
+               WAITING_APPROVAL ─► REVISION_REQUESTED ─► SCRIPTING          (büyük / CTA / başlık)
+                                                      ─► VOICE_GENERATION   (ses)
+                                                      ─► TIMELINE_BUILDING  (kesit / müzik / altyazı)
+
+       terminal olmayan her durum ─► CANCELLED        (iptal + iade)
+```
+
+**`PREVIEW_READY` artık terminal değil.** Sıralayıcı oradan geçerken §21.1'in politikasını
+uyguluyor. Kredinin harcandığı an **değişmedi**: §12.7 "ön izleme başarıyla hazır" diyor, proje
+ilk varışta `preview_delivered_at` damgasını basıyor ve **sonraki her sonuç `DELIVERED`**. Bu
+damga olmasaydı, iyi bir ön izlemeden sonra düşen bir revizyon müşterinin zaten aldığı ön izleme
+için krediyi geri vermeye çalışırdı — defter bunu haklı olarak çelişki sayıp reddeder ve proje
+hiçbir şey yapmamışken kilitlenirdi.
+
+**İki belgelenmiş genişletme** (§20'nin çizmedikleri; gerekçe `lifecycle.py`'nin başında):
+`APPROVED` — planlayıcı 2G'de, ve onaylanmış bir projenin "karar bekleyenler" listesinde durması
+ürünün sorduğu soruyu cevapsız bırakırdı; 2G `APPROVED → SCHEDULED` kenarını ekler, yani §20'nin
+oku bu durumun adlandırıldığı hâliyle aynı yol. `CANCELLED` — müşterinin vazgeçmesi bir arıza
+değil, ve `failure_code` iadeyi sınıflandıran alan: "encoder öldü" ile "fikir değişti"yi
+ayıramayan bir destek cevabı cevap değildir.
+
+**Politika veri, kod değil** (§21.1). Yedi politika `content_projects.approval_policy`'de
+saklanıyor, canlı okunmuyor: gelecek ay gevşetilen bir politika bugün üretilmiş bir ön izlemede
+neyin gerektiğini geriye dönük değiştirmemeli. `requires_approval(politika, bağlam)` saf ve
+**total**; her politika **yalnızca kendi boyutunu** okuyor. Cazip alternatif — her politikanın
+guardrail ihlalinde de tetiklemesi — kulağa güvenli geliyor ve değil: VLM disabled olduğu için
+her render `needs_review`, dolayısıyla evrensel bir guardrail kaçışı yedi politikayı birbirinin
+aynısı yapardı ve müşterinin seçimi süse dönerdi.
+
+> **`low_confidence_only` bugün her zaman onay istiyor ve bu doğru.** Okuduğu güven QC'nin
+> güveni; gerçek VLM sağlayıcısı bağlanana kadar (W08) §19.4'ün model kontrolleri `unknown`
+> dönüyor ve 2D ölçülmemiş bir kontrolü "geçti" saymayı reddediyor. Sağlayıcı bağlandığında
+> `approval.py`'de tek satır değişmeden ayrışmaya başlar. Testte **gerekçesiyle** pinli.
+>
+> **`ads_only` bugün hiçbir şeye onay istemiyor**, çünkü §14 henüz reklam senaryosu açmadı.
+> `_ADVERTISING_SCENARIOS` tabloyu `ScenarioCode`'un tamamı üzerinde yazıyor ve totalliği import
+> anında zorluyor: yeni bir senaryo "reklam değil" cevabını **unutulduğu için** alamaz.
+
+**Ret nedeni kapalı küme + serbest not** (§21.2). On neden enum; `other` seçilirse not zorunlu,
+ve nedensiz bir ret `APPROVAL_REASON_REQUIRED` ile reddediliyor. Not **tenant'ın kendi metnidir**
+ve tam olarak iki yere gider: `content_approvals.note` ve aynı tenant'ın yetkili üyesinin
+okuması. Log'a, span'e, audit detayına, hata gövdesine, geçiş `reason`'ına ve **hiçbir prompt'a**
+girmez; fabrikasyon dedektöründen de geçmez — o dedektör *modelin* fiyat uydurmasını durdurmak
+için var, müşterinin kendi kataloğu hakkında yazdığı doğruyu değil. Yapısal kanıt:
+`approval_service.py`'nin AST'sinde `note` yalnızca doğrulamaya ve satır yazımına gidiyor, ve
+modülün yürütülebilir kaynağında `prompt`/`input_data` sözcüğü hiç geçmiyor. §21.2'nin son
+cümlesi ("kullanıcıya özel kalmalıdır") **yapmayarak** karşılanıyor: bu slice hiçbir toplama
+yapmıyor; satırlar `business_id` taşıyor ki ileride bir kullanım tenant-kapsamlı sorgu olarak
+yazılabilsin, ve o ayrı bir karar ile ayrı bir rıza ister.
+
+**Revizyon sınıfı değişen alandan türetilir** (§21.3) — kullanıcı "küçük revizyon" demez, ne
+değiştirdiğini söyler. İki **ayrı** total fonksiyon aynı kapalı alan kümesini okuyor:
+`revision_class` ne kadara mal olduğunu, `revision_scope` hattın nereden yeniden başlayacağını.
+Ayrı olmalarının sebebi §21.3'ün yalnızca birincisini sabitlemesi: **CTA küçük bir revizyondur ve
+yine de senaryodan başlar**, çünkü CTA metni senaryo dokümanına çözülüyor ve seslendirme onu
+konuşuyor — timeline'dan başlamak, hâlâ eski sözü söyleyen bir videonun yeni kurgusunu üretirdi.
+Belirsizlik (boş küme) **büyük** tarafa ve **senaryoya** düşer: gereksiz bir yeniden üretim bir
+sağlayıcı çağrısı, tersi ise müşterinin kaldırılmasını istediği şeyi hâlâ taşıyan bir video.
+
+| Alan | Sınıf (§21.3) | Yeniden başlangıç |
+|---|---|---|
+| `cta`, `headline` | küçük | `SCRIPTING` |
+| `voice` | küçük | `VOICE_GENERATION` |
+| `single_cut`, `music`, `caption_style` | küçük | `TIMELINE_BUILDING` |
+| `content_type`, `product`, `concept`, `duration_class` | büyük | `SCRIPTING` |
+
+Her kapsam **yeniden başladığı adımdan itibaren üretilen her artefaktı** atar ve öncekileri
+korur: yeni bir ses aynı sözleri ister, yeni bir altyazı stili ne yeni söz ne yeni ses. Birim
+testi bu eşleşmeyi durum makinesinden türeterek doğruluyor.
+
+**Kota §12.3'ün, kredi değil.** Küçük 1, büyük 2 düşürür (`REVISION_QUOTA_*`); varsayılan
+allowance 3 ve **projeye yazılıyor**, sonradan yükseltilen bir ayar açık bir projenin hakkını
+geriye dönük genişletmesin diye. **K4 yapısal olarak korunuyor:** `approval_service.py` içinde
+`EntitlementService` çağrısı *yoktur* — rezervasyon projeye bağlı (W20), dolayısıyla ne saf
+yeniden render ne revizyon yeni kredi açabilir. Kota bitince revizyon `REVISION_QUOTA_EXHAUSTED`
+ile reddedilir; yol yeni projedir, yani yeni kredidir. Büyük revizyonun 2 olması bir
+**tahmindir** — gerçek maliyeti W08 benchmark'ı ölçecek; config'de olmasının sebebi tam olarak bu.
+
+**Revizyon render sayacını sıfırlar.** İki farklı döngünün iki farklı sınırı var:
+`render_attempts` makinenin QC başarısızlığından sonra *kendi kendine* yaptığını sınırlar,
+revizyon ise bir insanın başka bir şey istemesidir ve onu sınırlayan kotadır. Tek sayaç
+paylaşmak ya iki otomatik denemeden sonra insana yeniden render'ı yasaklardı ya da otomatik
+döngüyü dışarıdan süresiz açılabilir yapardı.
+
+**Adım idempotency anahtarı revizyonu da adlandırır** (`project:{id}:r{n}:script`). Revizyon
+zaten koşulmuş adımları yeniden koşuyor; anahtarda revizyon olmasaydı ikinci `scripting` koşusu
+ilk senaryoyu **yeniden oynatır**, yani müşteriye tam olarak reddettiği şeyi geri verirdi.
+Revizyon sıfır 2E'nin yazımını birebir koruyor, böylece dağıtım sırasında uçuşta olan bir proje
+anahtar değiştirmiyor.
+
+**Yetki PRD §4'ün çizgisi.** `approver` rolü artık boş değil: `business.read` + yeni
+`content.approve`. `editor` üretir ve **imzalayamaz**; `approver` imzalar ve **üretemez** —
+revizyon istemek üretim tarafındadır ve `content.generate`'e bağlı. **Kendi ürettiğini onaylama
+kısıtı yoktur** (ürün kararı): dört kişilik bir işletmede kilitlenme yaratırdı ve §4 görev
+ayrılığı istemiyor; kimin neyi onayladığı her kararda kayıtlı, yani soru zorlanmadan
+cevaplanabilir kalıyor.
+
+**Otomatik onay da bir karardır.** Politika kimseye sormadıysa satır yine yazılır
+(`auto_approved`, aktör `NULL`, şemada zorunlu olarak öyle). Yalnızca insanların verdiği onayları
+kaydeden bir sistem, kimsenin vermediği onaylar için "bunu kim geçirdi?" sorusunu cevaplayamazdı.
+
+**İptal W20'nin bıraktığı açığı kapatıyor.** Terminal olmayan her durumdan iptal edilebilir;
+iptal, sıralayıcının çağırdığı **aynı** `settle`'ı aynı transaction'da çağırır — ikinci bir iade
+mekanizması yok. `Idempotency-Key` yok, çünkü bu bir create değil korumalı geçiş: tekrar gönderim
+terminal projeyi bulup `PROJECT_TRANSITION_NOT_ALLOWED` alır, ve oraya ulaşsa bile
+`resolve_settlement` `ALREADY_APPLIED` deyip hiçbir şey yazmaz — iki bağımsız sebep. Ön izleme
+üretmiş bir proje iptal edilirse **ücret kalır**: müşteri ön izlemeyi aldı.
+
+**Terk edilmiş proje süpürücüsü** (`content.project.sweep`) tek bir durumu tarıyor:
+`WAITING_MEDIA`. Bir kişiyi bekleyen üç durumdan **yalnızca o hâlâ kredi tutuyor**; diğer ikisi
+teslim edilmiş bir ön izlemenin arkasında ve orada iptal, müşterinin zaten sahip olduğu işi yok
+edip hiçbir şey geri kazandırmazdı. Eşik `LIFECYCLE_ABANDONED_PROJECT_AGE_SECONDS` (varsayılan
+30 gün) ve `Settings` doğrulamasında bir tam adım timeout'unu aşmaya zorlanıyor: iki adım
+arasındaki bir projeyi geri çekmek bu süpürmenin yapmaması gereken tek şey.
+
+## Bu beş slice'ın taşımadıkları
+
+Planlayıcı (2G). Yayınlama Phase 4.
 Gerçek C2PA manifest yazımı ayrı iş. `fade` geçişi ve `music` ses kaynağı adapter kabiliyetinde
 **bildirilmiyor** (müzik lisans kaydı ister, §18.3), dolayısıyla doğrulama onları temiz biçimde
 reddediyor.

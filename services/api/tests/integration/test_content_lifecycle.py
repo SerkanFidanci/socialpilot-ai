@@ -1049,11 +1049,13 @@ def test_the_project_endpoints_answer_to_the_same_permissions_the_writes_they_or
         listed = client.get(f"/v1/businesses/{tenant.business_id}/content/projects", headers=viewer)
         assert listed.status_code == 200
         assert len(listed.json()["items"]) == 1
+        # Slice 2F gave the approver `business.read`: a decision made without seeing the project
+        # would not be a decision. What it still cannot do is open one, asserted above.
         assert (
             client.get(
                 f"/v1/businesses/{tenant.business_id}/content/projects", headers=approver
             ).status_code
-            == 403
+            == 200
         )
 
 

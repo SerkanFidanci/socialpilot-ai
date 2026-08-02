@@ -153,6 +153,20 @@ def sweep_abandoned_runs() -> dict[str, object]:
     return context.run(_drain(context, context.abandoned_run_sweeper, needs_workdir=False))
 
 
+@celery_app.task(name="content.project.sweep")
+def sweep_abandoned_projects() -> dict[str, object]:
+    """Withdraw projects that have waited on a person for far too long (PRD §21, §12.7).
+
+    The second drain here with no producer, and for the same reason as the first: nothing emits
+    "a customer stopped caring". A project parked in `WAITING_MEDIA` holds credit that nobody
+    will ever spend, and only a clock can observe that absence. The threshold is thirty days by
+    default — long, because this is somebody's unfinished work rather than a stalled job.
+    """
+
+    context = get_worker_context()
+    return context.run(_drain(context, context.abandoned_project_sweeper, needs_workdir=False))
+
+
 @celery_app.task(name="entitlement.reservation.sweep")
 def sweep_abandoned_reservations() -> dict[str, object]:
     """Release credit holds whose work can no longer settle them (PRD §12.7).

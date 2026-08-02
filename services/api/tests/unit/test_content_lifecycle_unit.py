@@ -31,6 +31,7 @@ from app.modules.content.lifecycle import (
     SceneCandidate,
     TimelineCompositionError,
     advanceable_states,
+    can_cancel,
     compose_timeline,
     decide_after_qc,
     decide_after_render_failure,
@@ -39,6 +40,7 @@ from app.modules.content.lifecycle import (
     normalize_scene_tag,
     require_next_state,
     waits_for_user,
+    working_states,
 )
 from app.modules.content.qc import QcVerdict, RemediationPath
 from app.modules.content.render import (
@@ -80,6 +82,33 @@ PRD_EDGES = {
     (ProjectState.QUALITY_CHECK, ProjectEvent.QC_FAILED): ProjectState.FAILED,
     (ProjectState.FAILED, ProjectEvent.RETRY_REQUESTED): ProjectState.RETRYING,
     (ProjectState.RETRYING, ProjectEvent.RETRY_STARTED): ProjectState.ANALYZING,
+    # §21's approval loop, added by slice 2F. `PREVIEW_READY --> WAITING_APPROVAL` and
+    # `WAITING_APPROVAL --> REVISION_REQUESTED --> SCRIPTING` are drawn in §20 exactly as
+    # written here; the rest of 2F's edges are the documented extension below.
+    (ProjectState.PREVIEW_READY, ProjectEvent.APPROVAL_REQUIRED): ProjectState.WAITING_APPROVAL,
+    (ProjectState.WAITING_APPROVAL, ProjectEvent.REJECTED): ProjectState.REVISION_REQUESTED,
+    (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_SCRIPT): (
+        ProjectState.SCRIPTING
+    ),
+}
+
+# The edges §20 does not draw, each one argued for in `lifecycle.py`'s module docstring. Kept as
+# its own set so that "which parts of this machine are ours?" is a question with a written answer
+# rather than a diff between a diagram and a table.
+EXTENSION_EDGES = {
+    # There is no scheduler until slice 2G, so an approved project has to rest somewhere that is
+    # not "awaiting a decision" — otherwise the list of things awaiting a decision contains the
+    # things that already got one.
+    (ProjectState.PREVIEW_READY, ProjectEvent.AUTO_APPROVED): ProjectState.APPROVED,
+    (ProjectState.WAITING_APPROVAL, ProjectEvent.APPROVED): ProjectState.APPROVED,
+    # §21.3's small revisions: a new voice needs the same words, and a new caption style needs
+    # neither new words nor new speech.
+    (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_VOICE): (
+        ProjectState.VOICE_GENERATION
+    ),
+    (ProjectState.REVISION_REQUESTED, ProjectEvent.REVISION_SCOPED_TO_TIMELINE): (
+        ProjectState.TIMELINE_BUILDING
+    ),
 }
 
 
@@ -108,18 +137,31 @@ def test_the_defined_edges_are_exactly_the_prd_diagram_plus_the_documented_exten
         for pair in itertools.product(ProjectState, ProjectEvent)
         if (target := next_state(*pair)) is not None
     }
+    blanket = {ProjectEvent.STEP_FAILED, ProjectEvent.CANCELLED}
     step_failures = {
         pair: target for pair, target in defined.items() if pair[1] is ProjectEvent.STEP_FAILED
     }
-
-    assert {pair: target for pair, target in defined.items() if pair not in step_failures} == (
-        PRD_EDGES
-    )
-    # The extension: every non-terminal state can fail, and `FAILED` is the only place it lands.
-    assert set(step_failures) == {
-        (state, ProjectEvent.STEP_FAILED) for state in ProjectState if not is_terminal(state)
+    cancellations = {
+        pair: target for pair, target in defined.items() if pair[1] is ProjectEvent.CANCELLED
     }
+
+    assert {pair: target for pair, target in defined.items() if pair[1] not in blanket} == (
+        PRD_EDGES | EXTENSION_EDGES
+    )
+    # The first extension: every state the *machine* works in can fail, and `FAILED` is the only
+    # place it lands. The states that wait on a person are excluded, and so is `PREVIEW_READY` —
+    # a customer who has not uploaded anything has not failed at anything, and a finished preview
+    # cannot fail either. What ends those waits is the project sweep, by cancelling.
+    assert set(step_failures) == {(state, ProjectEvent.STEP_FAILED) for state in working_states()}
     assert set(step_failures.values()) == {ProjectState.FAILED}
+    # The second: a project can be withdrawn from anywhere it has not already finished, and from
+    # nowhere else. Cancelling a finished project is refused rather than silently repeated,
+    # which is what makes a duplicate cancel unable to refund twice.
+    assert set(cancellations) == {
+        (state, ProjectEvent.CANCELLED) for state in ProjectState if not is_terminal(state)
+    }
+    assert set(cancellations.values()) == {ProjectState.CANCELLED}
+    assert all(can_cancel(state) is not is_terminal(state) for state in ProjectState)
 
 
 @pytest.mark.parametrize(
@@ -136,6 +178,16 @@ def test_the_defined_edges_are_exactly_the_prd_diagram_plus_the_documented_exten
         (ProjectState.PREVIEW_READY, ProjectEvent.STEP_FAILED),
         (ProjectState.FAILED, ProjectEvent.QC_PASSED),
         (ProjectState.QUALITY_CHECK, ProjectEvent.RETRY_STARTED),
+        # Slice 2F's own escapes: approving something nobody was asked about, revising something
+        # nobody rejected, deciding on a project that is already finished, and cancelling one
+        # that is already cancelled.
+        (ProjectState.PREVIEW_READY, ProjectEvent.APPROVED),
+        (ProjectState.QUALITY_CHECK, ProjectEvent.APPROVAL_REQUIRED),
+        (ProjectState.WAITING_APPROVAL, ProjectEvent.REVISION_SCOPED_TO_SCRIPT),
+        (ProjectState.PREVIEW_READY, ProjectEvent.REVISION_SCOPED_TO_TIMELINE),
+        (ProjectState.APPROVED, ProjectEvent.REJECTED),
+        (ProjectState.CANCELLED, ProjectEvent.CANCELLED),
+        (ProjectState.APPROVED, ProjectEvent.CANCELLED),
     ],
 )
 def test_a_state_cannot_be_skipped_or_walked_backwards(
@@ -154,13 +206,23 @@ def test_creation_is_an_entry_arrow_and_not_a_transition() -> None:
 
 def test_terminal_states_are_never_claimed_and_wait_states_are() -> None:
     assert set(advanceable_states()) == {state for state in ProjectState if not is_terminal(state)}
-    assert ProjectState.PREVIEW_READY not in advanceable_states()
-    assert ProjectState.FAILED not in advanceable_states()
-    # A project waiting on a person is still claimed — it has to notice its media arrived — but
-    # the step timeout must not apply to it.
-    assert ProjectState.WAITING_MEDIA in advanceable_states()
-    assert waits_for_user(ProjectState.WAITING_MEDIA)
-    assert not any(waits_for_user(state) for state in ProjectState if state.name != "WAITING_MEDIA")
+    # The terminal set slice 2F moved to. `PREVIEW_READY` is deliberately no longer in it: the
+    # sequencer passes through that state to apply §21.1's policy, and a project that stopped
+    # there would never be offered for approval at all.
+    assert set(ProjectState) - set(advanceable_states()) == {
+        ProjectState.APPROVED,
+        ProjectState.FAILED,
+        ProjectState.CANCELLED,
+    }
+    assert ProjectState.PREVIEW_READY in advanceable_states()
+    # A project waiting on a person is still claimed — it has to notice its media arrived, or its
+    # decision — but the step timeout must not apply to it.
+    assert {state for state in ProjectState if waits_for_user(state)} == {
+        ProjectState.WAITING_MEDIA,
+        ProjectState.WAITING_APPROVAL,
+        ProjectState.REVISION_REQUESTED,
+    }
+    assert all(state in advanceable_states() for state in ProjectState if waits_for_user(state))
 
 
 # --- the QC decision table (criteria 3 and 4) -------------------------------------------------

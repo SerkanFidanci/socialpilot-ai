@@ -953,19 +953,15 @@ def test_an_editor_can_author_and_render_while_a_viewer_and_an_approver_cannot(
                 assert refused.status_code == 403, refused.text
                 assert refused.json()["code"] == "INSUFFICIENT_PERMISSION"
 
-        # A viewer still reads; an approver holds no permission at all, not even read.
-        assert (
-            client.get(
-                f"/v1/businesses/{business_id}/content/timelines/{timeline_id}", headers=viewer
-            ).status_code
-            == 200
-        )
-        assert (
-            client.get(
-                f"/v1/businesses/{business_id}/content/timelines/{timeline_id}", headers=approver
-            ).status_code
-            == 403
-        )
+        # A viewer still reads, and so does an approver from slice 2F onwards — it has to see
+        # what it is being asked to sign off. Neither may write, which is asserted above.
+        for reader in (viewer, approver):
+            assert (
+                client.get(
+                    f"/v1/businesses/{business_id}/content/timelines/{timeline_id}", headers=reader
+                ).status_code
+                == 200
+            )
 
 
 @requires_storage

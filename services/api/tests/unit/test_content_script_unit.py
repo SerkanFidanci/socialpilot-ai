@@ -1614,7 +1614,12 @@ def test_the_schema_sent_to_the_provider_matches_the_seeded_prompt_template() ->
 
 
 def test_only_the_roles_that_produce_content_may_generate_a_script() -> None:
-    """PRD §4: an editor produces content; a viewer and an approver do not."""
+    """PRD §4: an editor produces content; a viewer does not, and an approver still does not.
+
+    Slice 2F gave the approver `business.read` and `content.approve` and nothing else, so the
+    half of this assertion that matters — an approver cannot *write* a script — is unchanged and
+    is the half that is checked negatively below.
+    """
 
     assert permits_action(BusinessRole.EDITOR, ContentAction.SCRIPT_GENERATE)
     assert permits_action(BusinessRole.OWNER, ContentAction.SCRIPT_GENERATE)
@@ -1622,7 +1627,8 @@ def test_only_the_roles_that_produce_content_may_generate_a_script() -> None:
     assert not permits_action(BusinessRole.VIEWER, ContentAction.SCRIPT_GENERATE)
     assert not permits_action(BusinessRole.APPROVER, ContentAction.SCRIPT_GENERATE)
     assert permits_action(BusinessRole.VIEWER, ContentAction.SCRIPT_READ)
-    assert not permits_action(BusinessRole.APPROVER, ContentAction.SCRIPT_READ)
+    # An approver reads what it is asked to sign off; it could not decide otherwise.
+    assert permits_action(BusinessRole.APPROVER, ContentAction.SCRIPT_READ)
     assert Permission.CONTENT_GENERATE in {permission for permission in Permission}
 
 
@@ -1642,9 +1648,15 @@ def test_every_content_write_answers_the_same_way_for_the_same_role() -> None:
         # W15: producing a voiceover is producing content, so it answers the same way.
         ContentAction.VOICEOVER_GENERATE,
         # W19: a project orders exactly these writes and adds none, so it cannot answer
-        # differently from the things it sequences.
+        # differently from the things it sequences. W21 keeps it here: asking for a revision and
+        # cancelling are both requests for work to be done or undone, which is the producer's
+        # side of PRD §4's line.
         ContentAction.PROJECT_WRITE,
     )
+    # The one content action that is not producing content, and therefore the one that answers
+    # differently. It is asserted apart from the writes above precisely because merging it into
+    # them is the mistake this test exists to catch.
+    decisions = (ContentAction.PROJECT_DECIDE,)
     reads = (
         ContentAction.TIMELINE_READ,
         ContentAction.RENDER_READ,
@@ -1664,9 +1676,19 @@ def test_every_content_write_answers_the_same_way_for_the_same_role() -> None:
         assert not permits_action(BusinessRole.APPROVER, action)
     for action in reads:
         assert permits_action(BusinessRole.VIEWER, action)
-        assert not permits_action(BusinessRole.APPROVER, action)
+        # An approver reads: a decision made without seeing the project is not a decision.
+        assert permits_action(BusinessRole.APPROVER, action)
+    assert {required_permission(action) for action in decisions} == {Permission.CONTENT_APPROVE}
+    for action in decisions:
+        assert permits_action(BusinessRole.OWNER, action)
+        assert permits_action(BusinessRole.ADMIN, action)
+        assert permits_action(BusinessRole.APPROVER, action)
+        # The line PRD §4 draws, in the direction that matters: the role that writes the content
+        # is not the role that signs it off.
+        assert not permits_action(BusinessRole.EDITOR, action)
+        assert not permits_action(BusinessRole.VIEWER, action)
     # Every action is mapped, so a new one cannot inherit an answer by omission.
-    assert {action for action in ContentAction} == set(writes) | set(reads)
+    assert {action for action in ContentAction} == set(writes) | set(reads) | set(decisions)
 
 
 def _constants(tree: ast.Module) -> ast.stmt:

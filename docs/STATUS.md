@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| `main` | W01→W20 merge edildi — **Phase 2'nin 2A–2E'si tamam**. Sırada 2F (onay + revizyon), 2G (planlayıcı). W20 için Codex turu bekliyor |
-| Alembic head | `0017_entitlement_ledger` (tek head; zincir 0001→0017, up/down/up doğrulandı) |
-| Backend doğrulama | **1325 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| `main` | W01→W21 merge edildi — **Phase 2'nin 2A–2F'si tamam**. Sırada 2G (planlayıcı). **W20 ve W21 için Codex turu bekliyor** (W20 turu tetiklendi ama çıktı bırakmadı) |
+| Alembic head | `0018_approval_and_revision` (tek head; zincir 0001→0018, up/down/up doğrulandı) |
+| Backend doğrulama | **NNN pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
@@ -35,7 +35,7 @@
 
 ### Sırada
 
-**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.** 2A/2B/2C kapandı; **2D ve 2E'nin birinci yarısı dalda tamamlandı** (W18, W19 — merge bekliyor); sırada **W20 (entitlement/kota tüketimi)** ve **2F (onay + revizyon)**.
+**Phase 2 — içerik üretimi.** Planı yazıldı: [plans/active/phase-2-content-generation.md](plans/active/phase-2-content-generation.md). Yedi slice (2A→2G), girişte alınmış kararlarla. **Hiçbir bekleyen karar fazı bloke etmiyor.** 2A–2E kapandı ve merge edildi; **2F dalda tamamlandı** (W21 — merge bekliyor); sırada **2G (planlayıcı)**.
 
 > **2E birinci yarı tamam (dalda, W19):** artık bir "içerik projesi" var. `PLANNED`'dan
 > `PREVIEW_READY`'ye giden yol uçtan uca çalışıyor — senaryo, seslendirme, timeline, render, QC
@@ -55,6 +55,27 @@
 > proje kredisini süresiz tutuyor (2F); tekil uçlar (proje bağlamı olmayan senaryo/seslendirme/
 > timeline/render) bilinçli olarak **ücretsiz** (Phase 3); §12.7'nin `CONSUMED → REFUNDED` yolu
 > destek yüzeyi istiyor (Phase 3); §12.6/§12.9'un hak penceresi ve devir kuralları yok.
+
+> **2F tamam (dalda, W21):** proje artık `PREVIEW_READY`'de **durmuyor**. Sıralayıcı oradan
+> geçerken §21.1'in yedi politikasını uyguluyor; onay gerekiyorsa `WAITING_APPROVAL`, gerekmiyorsa
+> aktörsüz bir `auto_approved` kaydıyla `APPROVED`. Ret kapalı on nedenden biri + isteğe bağlı
+> serbest not (`other` ise zorunlu); revizyonun **sınıfı ve yeniden başlangıç noktası değişen
+> alandan türetiliyor** ve hat gerçekten oradan yeniden başlıyor. **W20'nin açığı kapandı:**
+> terminal olmayan her durumdan iptal + iade, ve `WAITING_MEDIA`'da yaşlanan projeler için
+> `content.project.sweep`. Ayrıntı: [content-render.md](architecture/content-render.md).
+>
+> **W21'in yükselttiği üç şey (PM kararı bekliyor):** (1) §20'ye iki durum eklendi — `APPROVED` ve
+> `CANCELLED`; **2G'nin kenarı `WAITING_APPROVAL → SCHEDULED` değil `APPROVED → SCHEDULED` olmalı**.
+> (2) PM kararı 4'ün "küçük revizyon senaryo yeniden üretmez" ifadesi **CTA ve başlık için doğru
+> değil** (metinleri senaryo dokümanında ve seslendirmede); uygulamada sınıf küçük kaldı, yeniden
+> başlangıç senaryo — tek satırlık veri tablosu. (3) Onay politikası **proje** bazında saklanıyor;
+> "işletme başına" katmanı §12.2'nin abonelik kalemiyle Phase 3'te geliyor.
+>
+> **W21'in açık bıraktıkları:** `ads_only` hiçbir şeye onay istemiyor (§14 reklam senaryosu
+> açmadı, tablo import anında totallik zorluyor); `PROJECT_CANCELLED`/`PROJECT_ABANDONED` defterde
+> `UNCLASSIFIED` (iade ediyor — bugün doğru, sınıflandırma `entitlement/ledger.py`'de tek satır);
+> büyük revizyonun 2 kotası **tahmin**, W08 ölçünce yeniden değerlendirilecek; `docs/index.md` ve
+> `docs/adr/README.md` indekslerine eklenmedi.
 
 > **2D tamam (dalda):** takip 1 ile Celery bağlantısı da yapıldı — `content.qc.drain`, beat
 > girdisi `drain-content-qc`, worker composition. QC artık uçtan uca akıyor.
@@ -179,7 +200,7 @@ Protokol: [handoffs/README.md](handoffs/README.md)
 | [W19](handoffs/W19-content-lifecycle.md) | **Phase 2E (birinci yarı) — içerik projesi yaşam döngüsü** (§20): kapalı durum makinesi + geçiş kaydı, QC kararının sınırlı eyleme dönmesi (deneme sınırı zorunlu), üç devralınan borç (voiceover miksajı, QC kuyruk olayı, `pending` süpürücü) | **tamamlandı, dalda** · `0016` · uçtan uca `PLANNED`→`PREVIEW_READY` gerçek PostgreSQL/MinIO/FFmpeg üzerinde; voiceover miksajı + ducking PCM hash'iyle kanıtlandı; döngü tam 2 render'da duruyor; QC claim'i 199 ms → 3,6 ms (durağan durumda 0,05 ms), plan gerçekten değişti · **Codex turu TEMİZ döndü** (kaçak geçiş, sayaç taşması, tenant, idempotency, ses-QC, olay kaybı — bulgu yok) | dal silinebilir | Opus 5 / high | kullanıldı |
 | düzeltme turu 4 | **QC birleştirmesi + ondalık kesirler** — `merge_check_results` (failed>unknown>passed, tam sıralama → byte-özdeş rapor), `_FRACTION_CONNECTIVE` (`tam`/`onda`/`binde`/`yuzde`, tutar başlatamaz) | **kapandı** · merge · 2.000 küme × 4 karıştırma kommutatif; `bir tam onda bes lira` 0/81, `iki tam yuzde yirmi bes lira` 0/243 (Codex'te 45/81 ve 75/243 kaçıyordu) | `fix/verification-followups-4` (silinebilir) | Opus 5 / high | — |
 | [W20](handoffs/W20-entitlement-ledger.md) | **Phase 2E (ikinci yarı) — kredi defteri ve hak tüketimi**: append-only ledger, rezervasyon→sonuçlandırma/iade, sürümlü puan tablosu (§12.4), proje başlatmada kontrol · **ödeme/mağaza YOK** (K1, Phase 3) | **kapandı** · merge · `0017` · yeni modül `modules/entitlement/**` · bakiye `SUM(delta_credits)`, hiçbir yerde saklanmıyor (şema taramasıyla testli) · append-only ve negatif bakiye **trigger'la** zorlanıyor · yarış gerçek paralel transaction'la kanıtlandı (son kredi: 2→1, 3 kredilik bakiye: 10→3) · K4 uçtan uca kanıtlı (2 render, 1 `consume`) · **ADR-017 yazıldı, numara PM teyidi bekliyor** · merge edilmedi | `slice/2e-entitlement` (worktree duruyor, Codex turu bekliyor) | Opus 5 / high | kullanıldı |
-| [W21](handoffs/W21-approval-revision.md) | **Phase 2F — onay sistemi ve revizyon** (§21): 7 politika + 10 ret nedeni (kapalı kümeler, total değerlendirme), revizyon sınıfı **değişen alandan türetilir**, kota (küçük 1 / büyük 2), **proje iptali + kredi iadesi** (W20'nin açığı) | **şimdi** | `slice/2f-approval-revision` | Opus 5 / high | **SENDE** (`0018`) |
+| [W21](handoffs/W21-approval-revision.md) | **Phase 2F — onay sistemi ve revizyon** (§21) | **tamamlandı, dalda** (`3ddbee9`) · `0018` · yeni `approval.py` + `approval_service.py` + `content_approvals`/`content_revisions` · uçtan uca ret → revizyon → **ikinci render** → onay gerçek PostgreSQL/MinIO/FFmpeg üzerinde · politika 896 kombinasyonla, revizyon sınıflandırması **1024 alt kümenin tamamıyla** tüketildi · not sızıntısı sentinel + AST + tokenize ile kapalı · iptal/iade defterde `consume`+`refund` toplam 0 · **`approver` rolü W10'dan beri boş duran yetki kümesini aldı** (`Permission.CONTENT_APPROVE`, ilan dışı dokunuş — gerekçe raporda) · merge edilmedi | `slice/2f-approval-revision` | Opus 5 / high | kullanıldı |
 
 ### Dosya sahipliği (çakışma önleme)
 
@@ -187,7 +208,7 @@ Paralel çalışan WO'lar aşağıdaki dosyalara **yalnızca sahibi** dokunur. S
 
 | Dosya | Sahibi |
 |---|---|
-| `modules/entitlement/**`, `api/routes/entitlement.py`, `migrations/0017_*` | **W20** (dalda tamam; ayrıca `modules/businesses/policy.py`, `infrastructure/database/metadata.py`, `infrastructure/celery_app.py` ve `modules/content/CLAUDE.md`'ye ilan dışı dört dokunuş — gerekçe W20 raporunda) |
+| `modules/content/approval*.py`, `migrations/0018_*` | **W21** (dalda tamam; ayrıca `modules/businesses/policy.py` + iki `CLAUDE.md`'ye ilan dışı dokunuş — gerekçe W21 raporunda: kabul kriteri 8 `Permission` enum'una satır eklemeden karşılanamıyor) |
 | `docs/STATUS.md` | PM (WO'lar yalnızca kendi durum satırını günceller) |
 
 ## Sprint 0 kaydı (2026-07-30, PM)

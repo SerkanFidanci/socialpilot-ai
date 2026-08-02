@@ -44,7 +44,18 @@ from app.core.errors import ProblemException
 from app.core.pagination import Cursor, Page, build_page, resolve_limit
 from app.modules.businesses.models import BusinessStatus
 from app.modules.businesses.repository import BusinessRepository
+from app.modules.content.approval import (
+    ApprovalContext,
+    ApprovalDecision,
+    ApprovalPolicy,
+    is_advertisement,
+    qc_is_confident,
+    requires_approval,
+    script_names_price,
+)
 from app.modules.content.lifecycle import (
+    FAILURE_ABANDONED,
+    FAILURE_CANCELLED,
     FAILURE_RENDER_ATTEMPTS_EXHAUSTED,
     FAILURE_SCRIPT_FAILED,
     FAILURE_SOURCE_NOT_ANALYZED,
@@ -57,6 +68,7 @@ from app.modules.content.lifecycle import (
     ProjectEvent,
     ProjectState,
     TimelineCompositionError,
+    can_cancel,
     compose_timeline,
     decide_after_qc,
     decide_after_render_failure,
@@ -65,6 +77,7 @@ from app.modules.content.lifecycle import (
     waits_for_user,
 )
 from app.modules.content.models import (
+    ContentApproval,
     ContentProject,
     ContentProjectTransition,
     RenderStatus,
@@ -103,9 +116,24 @@ PROJECT_ADVANCE_EVENT = "content.project.advance.requested"
 # small enough that a tenant with a long library cannot turn selection into an unbounded read.
 MAX_SCENE_CANDIDATES = 200
 
-# What each state of PRD §20's machine means to the credit ledger. Three answers, not eleven:
-# entitlement does not know this state machine and must not, because publishing and advertising
-# will consume credits under machines of their own.
+_TERMINAL_PROJECT_STATES: Final[tuple[ProjectState, ...]] = tuple(
+    state for state in ProjectState if is_terminal(state)
+)
+
+# The states the abandoned-project sweep withdraws from, and it is deliberately one.
+#
+# A project waits on a person in three states, and only this one is still *holding credit*: a
+# preview has not been produced, so the reservation opened at creation is untouched, and PRD
+# §12.7 has nothing to consume. `waiting_approval` and `revision_requested` are the other two,
+# and both sit behind a delivered preview whose credit was consumed the moment it existed —
+# cancelling one of those would destroy work the customer already paid for and already has, and
+# would reclaim nothing at all. The sweep exists to return credit, so it goes where credit is.
+_ABANDONABLE_STATES: Final[tuple[ProjectState, ...]] = (ProjectState.WAITING_MEDIA,)
+
+# What each state of PRD §20's machine means to the credit ledger, for a project that has **not
+# yet produced a preview**. Three answers, not fifteen: entitlement does not know this state
+# machine and must not, because publishing and advertising will consume credits under machines of
+# their own.
 #
 # The table is written out rather than derived from `is_terminal` so that adding a state is a
 # decision here about what it costs. The import-time check below makes a forgotten state a
@@ -123,7 +151,14 @@ _SOURCE_OUTCOMES: Final[dict[ProjectState, SourceOutcome]] = {
     # PRD §12.7 draws `RESERVED --> CONSUMED` from "ön izleme başarıyla hazır". This is that
     # state, and it is the only one that charges.
     ProjectState.PREVIEW_READY: SourceOutcome.DELIVERED,
+    # Reachable only from `preview_ready`, so in practice the delivered branch below answers for
+    # all three. Mapped anyway, because a table with a hole in it is a table that stops being a
+    # proof the moment somebody adds an edge.
+    ProjectState.WAITING_APPROVAL: SourceOutcome.RUNNING,
+    ProjectState.REVISION_REQUESTED: SourceOutcome.RUNNING,
+    ProjectState.APPROVED: SourceOutcome.DELIVERED,
     ProjectState.FAILED: SourceOutcome.ABANDONED,
+    ProjectState.CANCELLED: SourceOutcome.ABANDONED,
 }
 
 _UNMAPPED_STATES = tuple(state.value for state in ProjectState if state not in _SOURCE_OUTCOMES)
@@ -131,9 +166,22 @@ if _UNMAPPED_STATES:  # pragma: no cover - a start-up failure, asserted by the u
     raise RuntimeError(f"project states with no entitlement outcome: {_UNMAPPED_STATES}")
 
 
-def source_outcome(state: ProjectState) -> SourceOutcome:
-    """Total over `ProjectState`. What the ledger needs to know about where a project got to."""
+def source_outcome(state: ProjectState, *, preview_delivered: bool) -> SourceOutcome:
+    """Total over `ProjectState × delivered`. What the ledger needs to know about a project.
 
+    **A project that has ever produced a preview is delivered, whatever happens afterwards.**
+    That is the whole reason this takes a second argument. PRD §12.7 consumes the credit when a
+    preview is ready, and slice 2F puts a revision loop *after* that moment: a project can now
+    reach `preview_ready`, be rejected, be revised, and then fail. Reading only the final state
+    would ask the ledger to release a hold that was already consumed, which it correctly refuses
+    as a contradiction — and the project would be stuck, having done nothing wrong.
+
+    The customer keeps the preview they were given in every one of those endings, including
+    cancellation. What a revision spends is §12.3's allowance, not credit.
+    """
+
+    if preview_delivered:
+        return SourceOutcome.DELIVERED
     return _SOURCE_OUTCOMES[state]
 
 
@@ -161,6 +209,10 @@ class ContentProjectService:
         source_asset_ids: tuple[UUID, ...],
         idempotency_key: str | None,
         correlation_id: str,
+        # Optional because omitting it *means* something: take the deployment default, which is
+        # `always`. Making it required would force every caller to restate a decision the
+        # configuration already holds — and §12.2 moves it onto a subscription item in Phase 3.
+        approval_policy: ApprovalPolicy | None = None,
     ) -> ContentProject:
         """Open a project in `PLANNED` and hand it to the sequencer.
 
@@ -176,6 +228,7 @@ class ContentProjectService:
         and an automatic re-render after a failed check buys nothing further (K4).
         """
 
+        policy = approval_policy or ApprovalPolicy(self._settings.content_approval_policy_default)
         async with self._session.begin():
             await self._authorize(user_id, business_id, ContentAction.PROJECT_WRITE)
             await self._require_active_business(business_id)
@@ -193,6 +246,7 @@ class ContentProjectService:
                     if campaign_offer_id is None
                     else str(campaign_offer_id),
                     "source_asset_ids": sorted(str(value) for value in source_asset_ids),
+                    "approval_policy": policy.value,
                 },
                 correlation_id=correlation_id,
             )
@@ -222,6 +276,14 @@ class ContentProjectService:
                 step_attempts=0,
                 requires_human_review=False,
                 recommended_path=RemediationPath.NONE,
+                # Both captured now rather than read at decision time: a policy loosened next
+                # month must not change what was required of this preview, and an allowance
+                # raised next month must not silently widen one somebody was already told about.
+                approval_policy=policy,
+                revision_quota=self._settings.revision_quota_default,
+                revisions_requested=0,
+                revision_quota_used=0,
+                preview_delivered_at=None,
                 state_entered_at=now,
                 # Due immediately: the outbox event below wakes a worker, and the beat tick is
                 # the second net if the broker lost it.
@@ -309,7 +371,7 @@ class ContentProjectService:
                 )
             await self._require_assets(business_id, source_asset_ids)
             project.source_asset_ids = [str(value) for value in source_asset_ids]
-            _apply_transition(
+            apply_transition(
                 project,
                 event=ProjectEvent.MEDIA_ATTACHED,
                 reason=None,
@@ -326,6 +388,78 @@ class ContentProjectService:
                 resource_id=project.id,
                 correlation_id=correlation_id,
                 details={"source_assets": len(source_asset_ids)},
+            )
+            return project
+
+    async def cancel_project(
+        self,
+        *,
+        user_id: UUID,
+        business_id: UUID,
+        project_id: UUID,
+        correlation_id: str,
+    ) -> ContentProject:
+        """Withdraw a project the customer no longer wants, and give the credit back.
+
+        This is the gap slice 2E left and slice W20 named: a project parked in `WAITING_MEDIA`
+        held its reservation open forever, because the only thing that released a hold was the
+        project reaching a terminal state and nothing could make it. Cancellation is that thing.
+
+        The refund is not a second mechanism. `settle` releases a reservation whose work is over,
+        and cancelling makes the work over — so this method calls exactly what the sequencer
+        calls, in the same transaction as the transition, and the ledger's own tables decide the
+        rest. A cancelled project that had already produced a preview therefore keeps its charge:
+        `source_outcome` reads `preview_delivered_at`, PRD §12.7 consumed the credit the moment
+        that preview existed, and the customer has it.
+
+        No `Idempotency-Key`, for the reason `attach_media` has none: this is a guarded
+        transition, not a create. A replay finds a terminal project and is refused with
+        `PROJECT_TRANSITION_NOT_ALLOWED`, so cancelling twice cannot refund twice — and if it
+        somehow reached the ledger, `resolve_settlement` would answer `ALREADY_APPLIED` and write
+        nothing. Two independent reasons the second refund cannot exist.
+        """
+
+        async with self._session.begin():
+            await self._authorize(user_id, business_id, ContentAction.PROJECT_WRITE)
+            await self._require_active_business(business_id)
+            project = await self._repository.get_project(business_id, project_id, lock=True)
+            if project is None:
+                raise _not_found("PROJECT_NOT_FOUND", "Project not found")
+            if not can_cancel(project.state):
+                raise ProblemException(
+                    status=409,
+                    code="PROJECT_TRANSITION_NOT_ALLOWED",
+                    title="Project is already finished",
+                    detail="A project that has finished cannot be cancelled.",
+                    meta={"state": project.state.value},
+                )
+            project.failure_code = FAILURE_CANCELLED
+            apply_transition(
+                project,
+                event=ProjectEvent.CANCELLED,
+                reason=FAILURE_CANCELLED,
+                actor_user_id=user_id,
+                sequence=await self._repository.next_transition_sequence(business_id, project_id),
+                session_add=self._repository.add,
+                poll_seconds=0,
+            )
+            await self._entitlement.settle(
+                business_id=business_id,
+                source_type=SOURCE_CONTENT_PROJECT,
+                source_id=project.id,
+                outcome=source_outcome(
+                    project.state, preview_delivered=project.preview_delivered_at is not None
+                ),
+                failure_code=project.failure_code,
+                correlation_id=correlation_id,
+            )
+            self._audit(
+                business_id=business_id,
+                user_id=user_id,
+                action="content.project.cancelled",
+                resource_id=project.id,
+                correlation_id=correlation_id,
+                details={"failure_code": FAILURE_CANCELLED},
             )
             return project
 
@@ -432,27 +566,7 @@ class ContentProjectService:
         )
 
     def _wake_sequencer(self, project: ContentProject) -> None:
-        """Ask the worker to look now, through the outbox rather than the broker directly.
-
-        The event carries no state and the Celery message carries no arguments at all: the worker
-        re-reads the project under its own tenant-scoped claim. A lost message costs one beat
-        interval, which is exactly what the tick is there for.
-        """
-
-        OperationsRepository(self._session).add(
-            OutboxEvent(
-                id=uuid4(),
-                business_id=project.business_id,
-                event_type=PROJECT_ADVANCE_EVENT,
-                aggregate_type=PROJECT_RESOURCE_TYPE,
-                aggregate_id=project.id,
-                payload={"project_id": str(project.id)},
-                correlation_id=project.correlation_id,
-                status=OutboxStatus.PENDING,
-                max_attempts=self._settings.render_max_attempts,
-                next_attempt_at=datetime.now(UTC),
-            )
-        )
+        wake_sequencer(self._session, project, settings=self._settings)
 
     async def _authorize(self, user_id: UUID, business_id: UUID, action: ContentAction) -> None:
         membership = await self._businesses.get_active_membership(business_id, user_id)
@@ -554,6 +668,34 @@ def _not_found(code: str, title: str) -> ProblemException:
     )
 
 
+def wake_sequencer(session: AsyncSession, project: ContentProject, *, settings: Settings) -> None:
+    """Ask the worker to look now, through the outbox rather than the broker directly.
+
+    The event carries no state and the Celery message carries no arguments at all: the worker
+    re-reads the project under its own tenant-scoped claim. A lost message costs one beat
+    interval, which is exactly what the tick is there for.
+
+    A free function because three writers need it — opening a project, attaching media, and
+    slice 2F's revision request — and the third lives in another file. A second copy of the
+    envelope is how two producers of the same event come to disagree about its shape.
+    """
+
+    OperationsRepository(session).add(
+        OutboxEvent(
+            id=uuid4(),
+            business_id=project.business_id,
+            event_type=PROJECT_ADVANCE_EVENT,
+            aggregate_type=PROJECT_RESOURCE_TYPE,
+            aggregate_id=project.id,
+            payload={"project_id": str(project.id)},
+            correlation_id=project.correlation_id,
+            status=OutboxStatus.PENDING,
+            max_attempts=settings.render_max_attempts,
+            next_attempt_at=datetime.now(UTC),
+        )
+    )
+
+
 # --- the worker side ---------------------------------------------------------------------------
 
 
@@ -576,8 +718,12 @@ class _ClaimedProject:
     voiceover_id: UUID | None
     timeline_id: UUID | None
     render_id: UUID | None
+    qc_report_id: UUID | None
     render_attempts: int
     step_attempts: int
+    revisions_requested: int
+    approval_policy: ApprovalPolicy
+    requires_human_review: bool
     expired: bool
 
 
@@ -593,6 +739,10 @@ class _Step:
     assignments: dict[str, UUID | None] = field(default_factory=dict)
     render_attempted: bool = False
     step_failed: bool = False
+    # Set when §21.1's policy said nobody has to look. The decision row is written by the
+    # settlement transaction rather than by the step, for the same reason every other write is:
+    # a step runs with no transaction open and may be replayed after a crash.
+    auto_approved: bool = False
 
     @property
     def moved(self) -> bool:
@@ -677,8 +827,12 @@ class ContentProjectAdvanceService:
                 voiceover_id=project.voiceover_id,
                 timeline_id=project.timeline_id,
                 render_id=project.render_id,
+                qc_report_id=project.qc_report_id,
                 render_attempts=project.render_attempts,
                 step_attempts=project.step_attempts,
+                revisions_requested=project.revisions_requested,
+                approval_policy=project.approval_policy,
+                requires_human_review=project.requires_human_review,
                 # A project waiting on a person is not a stalled job, so the ceiling that catches
                 # a step nobody will ever finish does not apply to it.
                 expired=(
@@ -734,6 +888,13 @@ class ContentProjectAdvanceService:
             return await self._step_rendering(claimed)
         if claimed.state is ProjectState.QUALITY_CHECK:
             return await self._step_quality_check(claimed)
+        if claimed.state is ProjectState.PREVIEW_READY:
+            return await self._step_preview_ready(claimed)
+        if claimed.state in (ProjectState.WAITING_APPROVAL, ProjectState.REVISION_REQUESTED):
+            # Waiting on a person. The decision and the revision request move the project
+            # themselves, exactly as `attach_media` does; the abandoned-project sweep is what
+            # eventually notices a wait nobody ever ends.
+            return _Step()
         if claimed.state is ProjectState.RETRYING:
             # A retry keeps the script, the voiceover and the timeline — they are still valid,
             # and regenerating them would spend a provider call to reproduce the same words.
@@ -799,7 +960,9 @@ class ContentProjectAdvanceService:
                 source_asset_ids=claimed.source_asset_ids,
                 target_duration_ms=None,
             ),
-            idempotency_key=_step_key(claimed.project_id, "script"),
+            idempotency_key=_step_key(
+                claimed.project_id, "script", revision=claimed.revisions_requested
+            ),
             correlation_id=claimed.correlation_id,
         )
         return _Step(events=(ProjectEvent.SCRIPT_READY,), assignments={"script_id": script.id})
@@ -832,7 +995,9 @@ class ContentProjectAdvanceService:
             user_id=claimed.user_id,
             business_id=claimed.business_id,
             request=VoiceoverRequest(script_id=claimed.script_id, voice_profile_code=None),
-            idempotency_key=_step_key(claimed.project_id, "voiceover"),
+            idempotency_key=_step_key(
+                claimed.project_id, "voiceover", revision=claimed.revisions_requested
+            ),
             correlation_id=claimed.correlation_id,
         )
         return _Step(
@@ -890,7 +1055,9 @@ class ContentProjectAdvanceService:
             business_id=claimed.business_id,
             document=serialize_timeline(timeline),
             profile=claimed.profile,
-            idempotency_key=_step_key(claimed.project_id, "timeline"),
+            idempotency_key=_step_key(
+                claimed.project_id, "timeline", revision=claimed.revisions_requested
+            ),
             correlation_id=claimed.correlation_id,
         )
         return _Step(
@@ -923,7 +1090,11 @@ class ContentProjectAdvanceService:
                 business_id=claimed.business_id,
                 timeline_id=claimed.timeline_id,
                 profile=claimed.profile,
-                idempotency_key=_step_key(claimed.project_id, f"render:{claimed.render_attempts}"),
+                idempotency_key=_step_key(
+                    claimed.project_id,
+                    f"render:{claimed.render_attempts}",
+                    revision=claimed.revisions_requested,
+                ),
                 correlation_id=claimed.correlation_id,
                 # A re-render of the same document generates nothing new and calls no provider,
                 # so it draws on the revision quota rather than a generation right (plan §2, PRD
@@ -1002,6 +1173,60 @@ class ContentProjectAdvanceService:
             assignments={"qc_report_id": report_id},
         )
 
+    async def _step_preview_ready(self, claimed: _ClaimedProject) -> _Step:
+        """Apply PRD §21.1's policy to a finished preview. The only decision this step makes.
+
+        Slice 2E stopped here because approval did not exist. Now the sequencer asks the policy
+        the project was opened under whether a person has to look, and takes one of two edges.
+        Neither is optional: a preview nobody decided about would sit in a state the product has
+        no screen for.
+
+        Every input is read here and handed to a pure function. Nothing about *why* approval is
+        or is not required lives in this method — the reason it needs a script template and a QC
+        verdict at all is that §21.1 asks about prices and about confidence, and those are facts
+        about produced artefacts rather than about the project row.
+        """
+
+        async with self._session.begin():
+            script = (
+                None
+                if claimed.script_id is None
+                else await self._repository.get_script(claimed.business_id, claimed.script_id)
+            )
+            template = None if script is None else script.template
+            report = (
+                None
+                if claimed.qc_report_id is None
+                else await self._repository.get_qc_report(claimed.business_id, claimed.qc_report_id)
+            )
+            verdict = None if report is None else report.verdict
+            delivered = await self._repository.delivered_project_count(
+                claimed.business_id, excluding=claimed.project_id
+            )
+        context = ApprovalContext(
+            is_campaign=claimed.campaign_offer_id is not None,
+            # A campaign offer *is* a discount (§11.3), so it answers this question on its own;
+            # a price additionally reaches the audience through a `{{price:…}}` slot, which is
+            # read from the template because that is the representation that still says "a price
+            # goes here" rather than showing one.
+            has_price_or_discount=(
+                claimed.campaign_offer_id is not None or script_names_price(template)
+            ),
+            is_advertisement=is_advertisement(claimed.scenario_code),
+            delivered_content_count=delivered,
+            first_n_contents=self._settings.content_approval_first_n,
+            # No report means nothing was measured, which is the definition of low confidence
+            # rather than a near miss.
+            qc_confident=verdict is not None and qc_is_confident(verdict),
+            # The guardrail signal is slice 2D's own: a render nobody could verify carries the
+            # human-review flag, and that is exactly the render `never_within_guardrails` will
+            # not let out unseen.
+            within_guardrails=not claimed.requires_human_review,
+        )
+        if requires_approval(claimed.approval_policy, context):
+            return _Step(events=(ProjectEvent.APPROVAL_REQUIRED,))
+        return _Step(events=(ProjectEvent.AUTO_APPROVED,), auto_approved=True)
+
     def _retry_step(self, claimed: _ClaimedProject, *, code: str) -> _Step:
         if claimed.step_attempts + 1 >= self._settings.lifecycle_max_step_attempts:
             return _Step(
@@ -1044,12 +1269,26 @@ class ContentProjectAdvanceService:
             sequence = await self._repository.next_transition_sequence(
                 claimed.business_id, claimed.project_id
             )
+            # Read before a single state change, not after. Every mutation below leaves the row
+            # briefly inconsistent with `ck_content_project_due_matches_state` — a terminal state
+            # still carrying the due time it had a moment ago — and any query issued in between
+            # would autoflush it straight into that constraint. The row becomes consistent again
+            # when `next_check_at` is set at the end of this block, and nothing may read from the
+            # session until then.
+            approval_sequence = await self._repository.next_approval_sequence(
+                claimed.business_id, claimed.project_id
+            )
             for offset, event in enumerate(step.events):
                 from_state = project.state
                 to_state = require_next_state(from_state, event)
                 project.state = to_state
                 project.state_entered_at = now
                 project.step_attempts = 0
+                if to_state is ProjectState.PREVIEW_READY and project.preview_delivered_at is None:
+                    # PRD §12.7's charging moment, stamped once. A project revised and previewed
+                    # again keeps the first stamp: it names when the customer first received
+                    # something, which is what the credit was for.
+                    project.preview_delivered_at = now
                 self._add_transition(
                     project,
                     from_state=from_state,
@@ -1057,6 +1296,25 @@ class ContentProjectAdvanceService:
                     event=event,
                     sequence=sequence + offset,
                     reason=step.reason,
+                )
+            if step.auto_approved:
+                self._repository.add(
+                    ContentApproval(
+                        id=uuid4(),
+                        business_id=project.business_id,
+                        project_id=project.id,
+                        sequence=approval_sequence,
+                        decision=ApprovalDecision.AUTO_APPROVED,
+                        policy=project.approval_policy,
+                        rejection_reason=None,
+                        note=None,
+                        render_id=project.render_id,
+                        # No actor, and the schema requires exactly that of an automatic
+                        # decision: "the policy let this through" is the answer to "who
+                        # approved it", and it has to be recorded as such.
+                        actor_user_id=None,
+                        correlation_id=project.correlation_id,
+                    )
                 )
             if step.step_failed:
                 project.step_attempts = claimed.step_attempts + 1
@@ -1070,7 +1328,9 @@ class ContentProjectAdvanceService:
                 business_id=project.business_id,
                 source_type=SOURCE_CONTENT_PROJECT,
                 source_id=project.id,
-                outcome=source_outcome(project.state),
+                outcome=source_outcome(
+                    project.state, preview_delivered=project.preview_delivered_at is not None
+                ),
                 failure_code=project.failure_code,
                 correlation_id=project.correlation_id,
             )
@@ -1085,6 +1345,12 @@ class ContentProjectAdvanceService:
             # Something happened: look again immediately so a whole pipeline can run through in
             # one drain batch instead of one state per beat tick.
             return now
+        if waits_for_user(project.state):
+            # Nothing here will change until a person acts, and when they do they write an
+            # outbox event. Polling a project that is waiting on a customer at the same rate as
+            # one waiting on a render would spend a claim every few seconds, for months, to
+            # discover that the customer still has not uploaded anything.
+            return now + timedelta(seconds=self._settings.lifecycle_lease_seconds)
         if step.step_failed:
             return now + timedelta(
                 seconds=min(
@@ -1197,24 +1463,37 @@ class ContentProjectReservationProbe:
             return frozenset()
         statement = select(ContentProject.id).where(
             ContentProject.id.in_(source_ids),
-            ContentProject.state.notin_([ProjectState.PREVIEW_READY, ProjectState.FAILED]),
+            # Derived from the state machine rather than restated, so that reopening
+            # `preview_ready` in slice 2F could not leave this query believing a project which
+            # is still being sequenced has nothing left to settle.
+            ContentProject.state.notin_(_TERMINAL_PROJECT_STATES),
         )
         live = set(await self._session.scalars(statement))
         return frozenset(source_id for source_id in source_ids if source_id not in live)
 
 
-def _step_key(project_id: UUID, step: str) -> str:
+def _step_key(project_id: UUID, step: str, *, revision: int) -> str:
     """A deterministic idempotency key, so a replayed step replays rather than repays.
 
     This is the whole reason the sub-calls are safe to retry after a crash: the key names the
     project and the step, not the attempt, so the second run of a step whose provider call
     already settled gets the stored answer back.
+
+    It also names the *revision*, which slice 2F had to add and which is not optional. A revision
+    re-runs steps this project has already run; without the revision in the key, the second run
+    of `scripting` would replay the first script and the customer would be handed back exactly
+    the thing they rejected. Revision zero keeps slice 2E's spelling so a project mid-flight
+    across the deployment does not change key underneath itself.
     """
 
-    return f"project:{project_id}:{step}"
+    return (
+        f"project:{project_id}:{step}"
+        if revision == 0
+        else f"project:{project_id}:r{revision}:{step}"
+    )
 
 
-def _apply_transition(
+def apply_transition(
     project: ContentProject,
     *,
     event: ProjectEvent,
@@ -1224,7 +1503,12 @@ def _apply_transition(
     session_add: Any,
     poll_seconds: int,
 ) -> None:
-    """Move a project from an API request and record it, in the caller's transaction."""
+    """Move a project from an API request and record it, in the caller's transaction.
+
+    Public, and imported by `approval_service` rather than copied there: the transition and its
+    record have to be written by one piece of code, or a transition that committed without its
+    record eventually gets written by whichever copy forgot.
+    """
 
     from_state = project.state
     to_state = require_next_state(from_state, event)
@@ -1303,6 +1587,77 @@ SCRIPT_ABANDONED = "SCRIPT_GENERATION_ABANDONED"
 VOICEOVER_ABANDONED = "VOICEOVER_ABANDONED"
 
 
+class AbandonedProjectSweeper:
+    """Withdraw projects that have been waiting on a person for so long that nobody is coming.
+
+    This closes the gap slice W20 wrote down: a project in `WAITING_MEDIA` holds its reservation
+    until something makes it terminal, and before slice 2F nothing could. Cancellation is the
+    answer when the customer says so; this is the answer when they never say anything.
+
+    Three properties keep it from being dangerous. It looks at **one state**, the only one that
+    waits on a person while still holding unconsumed credit. Its threshold is a config value
+    validated to exceed a whole step timeout by a wide margin — the default is thirty days, and
+    the point is that this is a customer's unfinished work rather than a stalled job, so the
+    clock that catches stalled jobs deliberately does not apply. And it reuses the same
+    `settle` the sequencer and the cancel endpoint use, so the refund is one code path with one
+    set of rules rather than a third opinion about what a released hold means.
+    """
+
+    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._repository = ContentRepository(session)
+        self._entitlement = EntitlementService(session, settings)
+
+    async def process_next(self) -> dict[str, int] | None:
+        """Withdraw one batch. Returns `None` when there was nothing to sweep, so the drain stops."""
+
+        cutoff = datetime.now(UTC) - timedelta(
+            seconds=self._settings.lifecycle_abandoned_project_age_seconds
+        )
+        async with self._session.begin():
+            projects = await self._repository.claim_abandoned_projects(
+                states=_ABANDONABLE_STATES,
+                older_than=cutoff,
+                limit=self._settings.lifecycle_sweep_batch_size,
+            )
+            if not projects:
+                return None
+            for project in projects:
+                project.failure_code = FAILURE_ABANDONED
+                apply_transition(
+                    project,
+                    event=ProjectEvent.CANCELLED,
+                    reason=FAILURE_ABANDONED,
+                    # Nobody acted; that is the fact this sweep records. The reservation's own
+                    # audit row still names the person whose credit moved — `settle` reads it
+                    # off the reservation for exactly this case.
+                    actor_user_id=None,
+                    sequence=await self._repository.next_transition_sequence(
+                        project.business_id, project.id
+                    ),
+                    session_add=self._repository.add,
+                    poll_seconds=0,
+                )
+                await self._entitlement.settle(
+                    business_id=project.business_id,
+                    source_type=SOURCE_CONTENT_PROJECT,
+                    source_id=project.id,
+                    outcome=source_outcome(
+                        project.state,
+                        preview_delivered=project.preview_delivered_at is not None,
+                    ),
+                    failure_code=FAILURE_ABANDONED,
+                    correlation_id=project.correlation_id,
+                )
+            # A full batch means there may be more behind it. Reported rather than implied: a
+            # sweep that silently truncates reads like a clean one.
+            return {
+                "cancelled": len(projects),
+                "batch_full": int(len(projects) >= self._settings.lifecycle_sweep_batch_size),
+            }
+
+
 def project_summary(project: ContentProject) -> dict[str, object]:
     """The fields a caller needs to know where a project is, with no tenant content in them."""
 
@@ -1312,6 +1667,9 @@ def project_summary(project: ContentProject) -> dict[str, object]:
         "requires_human_review": project.requires_human_review,
         "recommended_path": project.recommended_path.value,
         "failure_code": project.failure_code,
+        "revisions_requested": project.revisions_requested,
+        "revision_quota_used": project.revision_quota_used,
+        "revision_quota": project.revision_quota,
     }
 
 
@@ -1320,10 +1678,13 @@ __all__ = [
     "PROJECT_ADVANCE_EVENT",
     "SCRIPT_ABANDONED",
     "VOICEOVER_ABANDONED",
+    "AbandonedProjectSweeper",
     "AbandonedRunSweeper",
     "ContentProjectAdvanceService",
     "ContentProjectReservationProbe",
     "ContentProjectService",
+    "apply_transition",
     "project_summary",
     "source_outcome",
+    "wake_sequencer",
 ]
