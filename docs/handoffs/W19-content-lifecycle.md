@@ -259,4 +259,28 @@ Araç zinciri: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · PostgreSQL 16.14 �
 
 ## Doğrulama
 
-_(test eden oturum: kaçak durum geçişi zorla, deneme sınırını aşmaya çalış, süpürücüyü sağlıklı satıra vurdurmaya çalış, voiceover'sız/bozuk sesle render'ı `PREVIEW_READY` yaptırmaya çalış, başka tenant'ın projesini ilerletmeye çalış)_
+Test eden oturumu — worktree kökü, `COMPOSE_PROJECT_NAME=sp-codex`, commit
+`255a7c0`. Başlangıçta bu Compose veritabanı `0015` şemasındaydı; entegrasyon
+testlerinden önce normal `alembic upgrade head` ile W19'un `0016_content_projects`
+başına yükseltildi. Kaynak kod değiştirilmedi.
+
+Araç zinciri: Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · Python
+3.13.14 · PostgreSQL 16.14 · FFmpeg 7.1.5 · pytest 9.1.1 · ruff 0.16.0 · mypy
+2.3.0.
+
+| Saldırı / kontrol | Sonuç | Kanıt |
+|---|---|---|
+| PRD §20 dışı kenar, atlama veya geri dönüş | Geçit yok | `tests/unit/test_content_lifecycle_unit.py` tamamı: **42 passed**. Tablo tüm durum/olay çiftlerini, yalnızca tanımlı kenarları ve terminal durumları kapsıyor; ör. `RENDERING` durumundan `QC_PASSED`/`PREVIEW_READY` atlaması `PROJECT_TRANSITION_NOT_ALLOWED` ile reddediliyor. |
+| QC sürekli `failed` iken deneme tavanı | Tavan aşılamadı | `test_a_render_that_never_passes_quality_control_stops_at_the_configured_ceiling`: her QC sonucu `failed` olsa da sayaç varsayılan 2'de kalıyor; proje insan incelemeli terminal `FAILED` oluyor, üçüncü render istenmiyor. |
+| `pending` süpürücüsünü sağlıklı koşuya vurdurma | Sağlıklı koşu korunuyor | `test_a_stale_pending_run_is_settled_and_a_healthy_one_is_left_alone`: yalnızca yaş eşiğini aşmış satır kapatılıyor; güncel `pending` satır değişmeden kalıyor. |
+| Sessiz veya bozuk sesli render'ı `PREVIEW_READY` yapma | Başarısız | `test_a_silent_output_fails_the_audio_check` ve `test_an_output_that_is_not_a_container_fails_rather_than_going_unknown` geçti: sessizlik ve kapsayıcı olmayan çıktı QC'den geçmiyor. W19'un sürekli başarısız QC yolu da yukarıdaki deneme tavanında terminale gidiyor; `PREVIEW_READY` üretilmedi. |
+| Sesli olumlu yol / ducking | Geçiyor | `test_speech_reaches_the_output_and_ducking_changes_what_it_sounds_like` geçti; bu, ses denetiminin yalnızca “ses var” bayrağıyla atlanmadığı karşı kontrolüdür. |
+| Başka tenant'ın projesini okuma veya ilerletme | Engellendi | `test_another_tenants_project_cannot_be_read_attached_to_or_advanced` geçti: okuma, medya ekleme ve ilerletme tenant sınırında reddediliyor. |
+| Aynı idempotency anahtarıyla farklı gövde | Engellendi | `test_the_idempotency_key_is_taken_from_the_whole_request_not_a_summary` geçti: aynı anahtar + farklı gövde `409`, aynı gövde ise güvenli replay. |
+| QC olayı kaybolurken yarış / işçi kesintisi | Kurtarıldı | `test_a_render_that_finished_while_the_worker_was_down_is_still_picked_up` geçti. Olayın dağıtımı kaçırılmış render, `qc_claimed_at IS NULL` taramasıyla tekrar sahiplenilip QC'ye alınıyor. Bu gerçek paralel yük yarışı değil, kayıp-dağıtım/işçi-kesintisi yarışının deterministik simülasyonudur. |
+| Statik denetim | Temiz | `ruff check app tests migrations scripts`, `ruff format --check app tests migrations scripts` ve `mypy app`: sırasıyla temiz, 205 dosya biçimli, 111 kaynak dosyada hata yok. |
+
+Seçili saldırı matrisi: **52 passed**, 1 bilinen Starlette/httpx kullanım dışı uyarısı.
+Tam takım yeniden koşulmadı; merge tabanı için bildirilen sonuç **1204 pytest**. Bu turda
+W19'a özgü kaçak geçiş, sayaç taşması, tenant izolasyonu, idempotency, ses-QC veya
+QC olayı kaybı bulgusu doğrulanmadı.
