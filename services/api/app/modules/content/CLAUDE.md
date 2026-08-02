@@ -1,9 +1,10 @@
-# content — senaryo, seslendirme, timeline, parametrik düzenleme ve render modülü
+# content — senaryo, seslendirme, timeline, parametrik düzenleme, render ve QC modülü
 
 **Sahibi:** senaryo contract'ı (PRD §18.1) ve `script_generation` kabiliyet portu, seslendirme
 (§14.8) ve `tts` kabiliyet portu, timeline dokümanı (§18.2), render öncesi doğrulama (§18.3),
-parametrik düzenleme (K4), `RenderPort` kabiliyet portu ve dayanıklı render job'ı, prompt ve ses
-profili versiyonlama (§17.6).
+parametrik düzenleme (K4), `RenderPort` kabiliyet portu ve dayanıklı render job'ı, otomatik
+kalite kontrol (§19.4) — kontrol kümesi, karar tablosu, `MediaQcProbePort` ve `VisualQcPort` —
+prompt ve ses profili versiyonlama (§17.6).
 **Sahibi değil:** FFmpeg/render ve AI adapter uygulamaları (→ `../../infrastructure/render/`,
 `../../infrastructure/ai/`), medya byte'ı ve materializer (→ `../media/`, ADR-002), doğrulanmış
 kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../operations/`), HTTP taşıma
@@ -85,8 +86,38 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - **Ses süresi ölçülür, beyan edilmez.** `AudioProbePort` dosyadan türetir; sağlayıcının
   `declared_duration_ms` beyanı kayda **eklenir** ama hiçbir karar onu okumaz. §18.3'ün
   "seslendirme süresi" kontrolü, sapma kaydı ve toplamlar yalnızca ölçümü kullanır.
-- **Sapma ölçülür, yargılanmaz.** `drift_ms` = ölçülen − senaryonun hedefi. Eşik 2D'nindir; bu
-  modülde eşik yoktur.
+- **Sapma 2C'de ölçüldü, 2D'de yargılanır.** `drift_ms` = ölçülen − senaryonun hedefi; `tts.py`
+  ve `tts_service.py` hâlâ eşik taşımaz. Eşik `qc.py`'nin `QcThresholds`'ünde ve config'dedir.
+- **QC fail-closed'dır ve bir kontrolü atlamak ifade edilemez.** `build_results` `QcCheck`'in
+  tamamıyla `unknown` başlar, çağıranın cevaplarıyla üzerine yazılır; `decide` eksik kümeyi
+  `QC_REPORT_INCOMPLETE` ile reddeder. Tek bir `unknown` kararı `needs_review`'a düşürür.
+  Ölçmediğini onaylayan bir QC, QC'siz olmaktan kötüdür.
+- **`QcCheck` = §19.4'ün satırları, aynı sırayla.** Sıra iki iş yapar: rapor onu dolaşır, `decide`
+  öneriyi ondan seçer. `CHECK_POLICIES` her üyeyi kapsamak zorunda — politikasız bir kontrol
+  eklemek testi düşürür, çünkü rapordaki delik tam olarak bu modülün önlediği şeydir.
+- **QC karar verir, eylem yapmaz.** `ContentQcService` yapıcısında render/senaryo/tts portu
+  **yoktur**; yeniden render, sağlayıcı değişimi ve deneme sınırı 2E'nindir. Döngüyü sınırı
+  gelmeden kurmak, sınırsız render döngüsünü kontrol edicinin içine gömmek olurdu.
+- **Koşunun başarısızlığı ile videonun başarısızlığı ayrı sütunlardır.** `RenderQcReport.status`
+  koşuyu, `verdict` çıktıyı anlatır. Ölçüm alınamadan denemeler tükenirse satır
+  `failed` + `needs_review` + `failure_code` ile kapanır — `pending`'de bırakmak, kimsenin
+  kontrol etmediği ve kontrol edilmediği görülemeyen bir render demek olurdu.
+- **"Uygulanamaz" ile "ölçülmedi" aynı şey değildir.** Seslendirmesi olmayan timeline'ın senkron
+  kontrolü `passed` + `applicable: false`'tır: dokümandan okunan bir gerçek. `unknown` yalnızca
+  kimsenin bakmadığı durumdur.
+- **Rapor değer taşımaz.** Kontrol sonuçları pointer ve kod tutar; çözülmüş fiyat, çizilen metin
+  ve object key rapora girmez. QC raporu süresiz saklanıyor; bir fiyatın yazıldığı ikinci yer
+  olamaz.
+- **Fiyat/tarih uyumu kaydın kendi tarihinden okunur.** Render çözdüğü değeri saklamaz, bu yüzden
+  karşılaştırma "değer ↔ değer" değil "kayıt ne zaman değişti ↔ render ne zaman bitti"dir.
+  `product_prices` append-only olduğu için bu kesin. `approved_ctas`'ta değişiklik damgası yok:
+  yerinde düzenlenmiş bir CTA görülmüyor, yalnızca kaybolması yakalanıyor — `changed_at=None`
+  bunu gizlemek yerine söylüyor.
+- **Timeline yasak terim eşleşmesi `script.forbidden_matcher`'ı import eder.** İkinci bir katlama
+  uygulaması yazılmaz; import `_forbidden_matcher` içinde geç bağlanır çünkü `script.py` bu
+  modülden `VerifiedValue` alıyor (döngü). Literal metin `contains_unsupported_letter` ile de
+  sınırlanır (`TIMELINE_UNSUPPORTED_CHARACTER`). **Çekim eşleşmesi yoktur** (PM, W18): `şeker`
+  yasakken `şekerli`, `az` yasakken `lezzetli` serbest.
 - **`voiceover` ses track'i `voiceover_assets`'i gösterir**, `media_assets`'i değil. Bu yüzden
   `Timeline.asset_ids` voiceover kimliğini içermez (`voiceover_ids` ayrı): worker onu kaynak
   video sanıp materialize etmeye çalışırdı.
@@ -96,16 +127,18 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | Dosya | İş |
 |---|---|
 | `script.py` | §18.1 contract'ı: katı parse, slot/literal ayrımı, uydurma fiyat-tarih ve URL tespiti (kalıp literalleri **katlanmış alfabede**), `T.L.`/`T L` kısaltma grameri, yasak terim eşleyici, `ScriptGenerationPort`, `ProviderDescriptor`, `RouteSnapshot` (her kabiliyet aynı route kaydını kullanır), prompt payload kurucusu |
-| `text_normalization.py` | `normalize_for_matching` — eşleştirme katlaması (süslü rakam açma → `Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf → **Latin harflerin ASCII'ye katlanması**) · `normalize_encoding` — saklanan değerler için aynısının Latin adımı olmayan hâli · `contains_unsupported_letter` — alfabe kısıtı, katlamanın kendisiyle ifade edilir. Kural içermez; 2D timeline `forbidden_matcher` birleştirmesi aynı fonksiyonları kullanacak |
+| `text_normalization.py` | `normalize_for_matching` — eşleştirme katlaması (süslü rakam açma → `Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf → **Latin harflerin ASCII'ye katlanması**) · `normalize_encoding` — saklanan değerler için aynısının Latin adımı olmayan hâli · `contains_unsupported_letter` — alfabe kısıtı, katlamanın kendisiyle ifade edilir. Kural içermez; `script.py` ve `validation.py` (2D) aynı fonksiyonları çağırır, üçüncü bir çağıran testle yasaktır |
+| `qc.py` | §19.4 kontrol kümesi (`QcCheck`), `CHECK_POLICIES`, saf karar tablosu (`decide`), `build_results` bütünlük garantisi, `QcThresholds` anlık görüntüsü, deterministik değerlendiriciler, doğrulanmış kayıt denetimi (`audit_verified_sources`), `MediaQcProbePort` + `QcMeasurement`, `VisualQcPort` + `VisualQcDisabledError` |
+| `qc_service.py` | `ContentQcService` — QC raporu olmayan `succeeded` render'ı claim, dayanıklı job (durum/timeout/deneme/correlation/dead-letter), materialize + ölçüm + VLM çağrısı, `provider_usage`, iki transaction · `ContentQcReportService` — yalnızca okuma (yetki + rapor), ölçüm portu taşımaz |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
 | `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |
 | `timeline.py` | §18.2 dokümanı: kapalı şema, çapa/stil/metin-kaynağı enum'ları, parse + serialize |
-| `validation.py` | §18.3 kuralları (saf), `ValidationContext`, satır kaydırma, dokümante hata kodları |
+| `validation.py` | §18.3 kuralları (saf), `ValidationContext`, `layout_text_in_frame` (2D ölçülen kareyle de çağırır), `resolve_overlay_text`, `script.forbidden_matcher` + alfabe kısıtı üzerinden yasak terim kapısı, dokümante hata kodları |
 | `patch.py` | K4 parametrik düzenleme: kapalı operasyon kümesi, segment sınırına snap, track yeniden dizilimi, `serialize_patch` (idempotency fingerprint'inin alındığı kanonik biçim) |
 | `render.py` | `RenderPort`, `RenderCapabilities`, `RenderPlan`, §19.2 profilleri, disclosure/provenance durumları |
-| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) |
-| `repository.py` | `ContentRepository` (tenant-kapsamlı; senaryo, prompt sürümü ve seslendirme okumaları dahil) + `ContentFactsReader` (`voiceover_facts` dahil) + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim |
+| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) + `render_qc_reports` (kontroller ve eşik anlık görüntüsü JSONB; `verdict`/`recommended_path` `pending` satırında bile NOT NULL ve karamsar) |
+| `repository.py` | `ContentRepository` (tenant-kapsamlı; senaryo, prompt sürümü, seslendirme ve QC raporu okumaları dahil) + `ContentFactsReader` (`voiceover_facts`, `voiceover_drift`, `verified_record_states` dahil) + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim + QC claim (raporu olmayan `succeeded` render / geri çekilmiş QC job'ı) |
 | `service.py` | `ContentTimelineService` — yetki, doğrulama, revizyon, render isteği, idempotency, audit |
 | `render_service.py` | `ContentRenderService` — job claim, materialize, render, depolama, dead-letter |
 | `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (**her yazma** `content.generate`, her okuma `business.read`) |
@@ -129,5 +162,8 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 
 `tests/unit/test_content_timeline.py` · `tests/unit/test_render_port.py` ·
 `tests/unit/test_content_render_worker.py` · `tests/unit/test_content_script_unit.py` ·
-`tests/unit/test_voiceover_unit.py` · `tests/integration/test_content_render.py` ·
-`tests/integration/test_content_script.py` · `tests/integration/test_content_voiceover.py`
+`tests/unit/test_voiceover_unit.py` · `tests/unit/test_content_qc_unit.py` ·
+`tests/unit/test_qc_probe.py` · `tests/unit/test_visual_qc_port.py` ·
+`tests/unit/test_timeline_forbidden_terms.py` · `tests/integration/test_content_render.py` ·
+`tests/integration/test_content_script.py` · `tests/integration/test_content_voiceover.py` ·
+`tests/integration/test_content_qc.py`

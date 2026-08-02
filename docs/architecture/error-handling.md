@@ -213,6 +213,51 @@ audio already stored is recorded on the `failed` row rather than orphaned in the
 | 503 | `VOICEOVER_STORAGE_UNAVAILABLE` | The audio could not be stored. |
 | 502 | `VOICEOVER_STORAGE_METADATA_INVALID` | What storage observed differs from what the adapter said it wrote. The row must not describe one file while the bucket holds another. |
 
+## Automatic quality control (PRD §19.4 — slice 2D)
+
+QC has **two error surfaces and they answer different questions.** The HTTP one is the ordinary
+read path. The other is not an error surface at all: a check's `code` inside a report is a
+finding, not a failure, and it is the reason a QC report can be a permanent record while the run
+that produced it succeeded.
+
+Request-level:
+
+| HTTP | Code | Meaning |
+|---:|---|---|
+| 404 | `RENDER_NOT_FOUND` | The render does not exist in the authorized tenant. Another tenant's real id answers exactly like a made-up one — the query is tenant-scoped, so the two are indistinguishable by construction. |
+| 404 | `RENDER_QC_REPORT_NOT_FOUND` | The render exists and no QC run has produced a report for it yet. Deliberately **not** an empty verdict: "not checked" and "checked and clean" are different facts and must not share a response. |
+
+Check reason codes, as they appear inside `render_qc_reports.checks[].code`. None of them is an
+HTTP error, and none of them ever carries the value that triggered it — pointers and codes only,
+because a QC report is kept indefinitely and must not become a second place a tenant's price is
+written down.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `QC_CHECK_NOT_RUN` | `unknown` | Nothing supplied an answer for this check. Structurally unreachable in a completed run; it exists so a report that *is* short of a check says so instead of reading clean. |
+| `QC_MEASUREMENT_UNAVAILABLE` | `unknown` | The measurement could not be taken, so every check that depends on the file is unmeasured. Fail-closed: the verdict drops to at least `needs_review`. |
+| `QC_CONTAINER_UNREADABLE` | `failed` | The output is not media this pipeline can open. A verdict about the video, not an outage — the distinction the whole taxonomy rests on. |
+| `QC_DURATION_OUT_OF_TOLERANCE` | `failed` | The measured length differs from the sum of the timeline's cut windows by more than `QC_DURATION_TOLERANCE_MS`. |
+| `QC_NO_AUDIO_STREAM` | `failed` | The output carries no audio stream at all. |
+| `QC_AUDIO_SILENT` | `failed` | There is an audio stream and it carries no programme audio. A silent AAC track satisfies "a stream exists" and fails what §19.4 is asking. |
+| `QC_LOUDNESS_OUT_OF_WINDOW` | `failed` | EBU R128 integrated loudness outside the configured window. Non-blocking: it plays, a person decides whether it ships. |
+| `QC_BLACK_FRAMES_EXCEED_LIMIT` | `failed` | Black picture beyond `QC_BLACK_RATIO_LIMIT`. Suggests another scene, or new media once the whole output is black. |
+| `QC_STATIC_FRAMES_EXCEED_LIMIT` | `failed` | Frozen picture beyond `QC_STATIC_RATIO_LIMIT`. |
+| `QC_TEXT_OUTSIDE_SAFE_AREA` | `failed` | Re-measured against the frame that actually came out. Pre-render validation measured against the profile; a render that landed at another aspect is the one way validated text ends up outside the frame. |
+| `QC_SPEECH_DRIFT_EXCEEDS_LIMIT` | `failed` | Slice 2C's `drift_ms` beyond `QC_SPEECH_DRIFT_MS`. §19.4's "altyazı senkronu", measured on the thing that can actually drift. |
+| `QC_VERIFIED_VALUE_UNRESOLVABLE` | `failed` | A verified reference the frame drew no longer resolves. |
+| `QC_VERIFIED_VALUE_OUT_OF_WINDOW` | `failed` | The campaign behind a drawn value has ended. |
+| `QC_VERIFIED_VALUE_SUPERSEDED` | `failed` | The record's current value became current *after* the render finished — `product_prices` is append-only, so the frame is showing the row that has since been closed. Blocking, and the suggested path is `human_review`: re-rendering would quietly print a figure nobody approved. |
+| `QC_VISUAL_PROVIDER_DISABLED` | `unknown` | No vision provider is configured. The normal state of every deployment until W08's benchmark picks one, and the reason automatic QC never returns `passed` today. |
+| `QC_VISUAL_PROVIDER_UNAVAILABLE` / `QC_VISUAL_PROVIDER_FAILED` | `unknown` | The vision call did not answer. The deterministic checks keep their results; only the model half goes unknown. |
+| `QC_VISUAL_PROVIDER_DID_NOT_ANSWER` | `unknown` | The provider replied without covering a requested check. Filled in by the caller, never trusted to the adapter. |
+| `QC_VISUAL_COST_LIMIT_EXCEEDED` | `unknown` | The estimated cost exceeds `VISUAL_QC_MAX_COST_MINOR`. Checked **before** the call, so nothing was spent and no `provider_usage` row exists. |
+
+Run-level failure codes on `render_qc_reports.failure_code` (`status = failed`) name why the run
+could not finish — `QC_PROBE_TIMEOUT`, `QC_PROBE_UNAVAILABLE`,
+`QC_PROBE_DIAGNOSTIC_LIMIT_EXCEEDED`. A run that failed is not the same fact as a `failed`
+verdict; the row carries both columns so an infrastructure outage can never read as a bad video.
+
 ## Mapping and logging
 
 - Domain/application errors are typed and mapped in one HTTP exception boundary; controllers do not construct ad hoc error payloads.

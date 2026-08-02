@@ -1980,6 +1980,175 @@
         "title": "ProvenanceState",
         "type": "string"
       },
+      "QcCheckResponse": {
+        "description": "One check as the report stored it. Codes and numbers only — never the text on the frame.",
+        "properties": {
+          "check": {
+            "title": "Check",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "measured": {
+            "additionalProperties": true,
+            "title": "Measured",
+            "type": "object"
+          },
+          "pointer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pointer"
+          },
+          "remediation": {
+            "title": "Remediation",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check",
+          "kind",
+          "status",
+          "remediation"
+        ],
+        "title": "QcCheckResponse",
+        "type": "object"
+      },
+      "QcReportResponse": {
+        "properties": {
+          "business_id": {
+            "format": "uuid",
+            "title": "Business Id",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/QcCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "measurement": {
+            "additionalProperties": true,
+            "title": "Measurement",
+            "type": "object"
+          },
+          "qc_version": {
+            "title": "Qc Version",
+            "type": "integer"
+          },
+          "recommended_path": {
+            "$ref": "#/components/schemas/RemediationPath"
+          },
+          "render_id": {
+            "format": "uuid",
+            "title": "Render Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/QcRunStatus"
+          },
+          "thresholds": {
+            "additionalProperties": true,
+            "title": "Thresholds",
+            "type": "object"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/QcVerdict"
+          }
+        },
+        "required": [
+          "id",
+          "business_id",
+          "render_id",
+          "status",
+          "verdict",
+          "recommended_path",
+          "checks",
+          "measurement",
+          "qc_version",
+          "thresholds",
+          "failure_code",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "QcReportResponse",
+        "type": "object"
+      },
+      "QcRunStatus": {
+        "description": "The lifecycle of one QC run, separate from the verdict it reaches.\n\n`pending` is written and committed before any measurement, so a run killed mid-way leaves a\nrow that says so. A `failed` run is one that could not complete — which is not the same fact\nas a `failed` verdict, and conflating the two would let an infrastructure outage read as a\nbad video.",
+        "enum": [
+          "pending",
+          "completed",
+          "failed"
+        ],
+        "title": "QcRunStatus",
+        "type": "string"
+      },
+      "QcVerdict": {
+        "enum": [
+          "passed",
+          "needs_review",
+          "failed"
+        ],
+        "title": "QcVerdict",
+        "type": "string"
+      },
       "ReadyHealthResponse": {
         "description": "Response for safe dependency readiness information.",
         "properties": {
@@ -2003,6 +2172,19 @@
         ],
         "title": "ReadyHealthResponse",
         "type": "object"
+      },
+      "RemediationPath": {
+        "description": "PRD §19.4's \"QC başarısızsa\" list, plus `none` for a report with nothing to fix.\n\nThese are *suggestions*. Nothing in this slice executes one: automatic re-render, scene\nsubstitution, provider switching and attempt limits are slice 2E's, because that is where a\nloop can be bounded.",
+        "enum": [
+          "none",
+          "retry_render",
+          "alternative_scene",
+          "alternative_provider",
+          "human_review",
+          "request_new_media"
+        ],
+        "title": "RemediationPath",
+        "type": "string"
       },
       "RenderProfile": {
         "description": "PRD §19.2's target profiles, verbatim.",
@@ -4917,6 +5099,125 @@
           }
         ],
         "summary": "Get Render",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/renders/{render_id}/qc": {
+      "get": {
+        "description": "Read the automatic QC report for one render: every check, its verdict, its thresholds",
+        "operationId": "get_render_qc_report_v1_businesses__business_id__content_renders__render_id__qc_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "render_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Render Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QcReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Render Qc Report",
         "tags": [
           "content"
         ]

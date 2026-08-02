@@ -31,11 +31,14 @@ from app.infrastructure.render import create_render
 from app.modules.content.models import (
     ContentScript,
     RenderOutput,
+    RenderQcReport,
     RenderStatus,
     RenderTrigger,
     VoiceoverAsset,
 )
 from app.modules.content.patch import MAX_PATCH_OPERATIONS, parse_patch
+from app.modules.content.qc import QcRunStatus, QcVerdict, RemediationPath
+from app.modules.content.qc_service import ContentQcReportService
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
 from app.modules.content.script import ScenarioCode, ScriptGenerationPort, ScriptStatus
 from app.modules.content.script_service import ScriptGenerationService, ScriptRequest
@@ -317,6 +320,75 @@ async def get_render(
         user_id=user.id, business_id=business_id, render_id=render_id
     )
     return RenderResponse.make(render)
+
+
+class QcCheckResponse(BaseModel):
+    """One check as the report stored it. Codes and numbers only — never the text on the frame."""
+
+    check: str
+    kind: str
+    status: str
+    code: str | None = None
+    pointer: str | None = None
+    measured: dict[str, Any] = Field(default_factory=dict)
+    remediation: str
+
+
+class QcReportResponse(BaseModel):
+    id: UUID
+    business_id: UUID
+    render_id: UUID
+    status: QcRunStatus
+    verdict: QcVerdict
+    recommended_path: RemediationPath
+    checks: list[QcCheckResponse]
+    # What the output measured. No object key and no signed URL: a download link is minted on
+    # demand by the storage adapter, and putting one here would put it in logs and caches.
+    measurement: dict[str, Any]
+    qc_version: int
+    # The exact thresholds this verdict was reached under. Returned rather than implied, so a
+    # client comparing two reports can see whether the ruleset moved underneath them.
+    thresholds: dict[str, Any]
+    failure_code: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+    @classmethod
+    def make(cls, report: RenderQcReport) -> QcReportResponse:
+        return cls(
+            id=report.id,
+            business_id=report.business_id,
+            render_id=report.render_id,
+            status=report.status,
+            verdict=report.verdict,
+            recommended_path=report.recommended_path,
+            checks=[QcCheckResponse.model_validate(entry) for entry in report.checks or []],
+            measurement=dict(report.measurement or {}),
+            qc_version=report.qc_version,
+            thresholds=dict(report.thresholds or {}),
+            failure_code=report.failure_code,
+            created_at=report.created_at,
+            completed_at=report.completed_at,
+        )
+
+
+@router.get(
+    "/businesses/{business_id}/content/renders/{render_id}/qc",
+    response_model=QcReportResponse,
+)
+async def get_render_qc_report(
+    business_id: UUID,
+    render_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> QcReportResponse:
+    """Read the automatic QC report for one render: every check, its verdict, its thresholds"""
+
+    report = await ContentQcReportService(session).get_report(
+        user_id=user.id, business_id=business_id, render_id=render_id
+    )
+    return QcReportResponse.make(report)
 
 
 class ScriptGenerateRequest(BaseModel):

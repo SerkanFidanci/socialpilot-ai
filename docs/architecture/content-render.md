@@ -2,8 +2,8 @@
 
 **Kapsam:** senaryo üretimi (`script_generation` portu), seslendirme (`tts` portu), timeline
 dokümanı, render öncesi doğrulama, parametrik düzenleme ve `RenderPort` arkasındaki render hattı.
-Slice 2A (W11) render yolunu, slice 2B (W13) senaryo yolunu, slice 2C (W15) seslendirmeyi
-getirdi.
+Slice 2A (W11) render yolunu, slice 2B (W13) senaryo yolunu, slice 2C (W15) seslendirmeyi,
+slice 2D (W18) otomatik QC'yi getirdi.
 **İlgili:** PRD §17, §18, §19 → [35](../product/requirements/35-ai-routing-cost.md) ·
 [40a](../product/requirements/40a-content-planning-scenarios.md) ·
 [40b](../product/requirements/40b-scenario-render-lifecycle.md) ·
@@ -240,6 +240,7 @@ keşfettirmek yerine.
 | `TIMELINE_VOICEOVER_NOT_ACCESSIBLE` | olmayan, başka tenant'ın ya da medya asset'ine işaret eden seslendirme referansı (2C) |
 | `TIMELINE_VOICEOVER_NOT_READY` | sonuçlanmamış (`pending`) veya kısmi (`failed`) seslendirme — ölçülmüş süresi yok (2C) |
 | `TIMELINE_VOICEOVER_DURATION_OVERFLOW` | §18.3 "seslendirme süresi": ffprobe ile ölçülen ses canvas'ı aşıyor (2C) |
+| `TIMELINE_UNSUPPORTED_CHARACTER` | ASCII'ye katlanamayan harf taşıyan overlay metni — hiçbir kural okuyamadığı için hiçbir kural çalışmadan reddedilir (2D, `parse_text`'in timeline karşılığı) |
 
 Şema (parse) hataları ayrı: `422 TIMELINE_SCHEMA_INVALID` + `meta.issue`/`meta.pointer`.
 Başlıcaları `TIMELINE_UNKNOWN_FIELD` (ham koordinat buraya düşer),
@@ -299,9 +300,122 @@ verildiğinde konfigürasyon değişikliğidir.
 
 Katılık K3 (pazar kapsamı) ile ölçeklenir; alanların varlığı K3'e bağlı değil.
 
+## Otomatik QC (slice 2D)
+
+§19.4'ün listesi. 2A–2C üretimi kurdu ama **güvenilirliği** kurmadı: render biten her çıktı,
+gerçekten açılıyor mu, sesi var mı, yazısı kadrajda mı, fiyatı hâlâ kayda uyuyor mu bilinmeden
+`succeeded` sayılıyordu.
+
+```
+Celery beat ──content.qc.drain──► ContentQcService
+                                   │ claim: QC raporu OLMAYAN `succeeded` render (SKIP LOCKED)
+                                   ├─ T1 COMMIT: render_qc_reports(pending,
+                                   │             verdict=needs_review, path=human_review)
+                                   │             + jobs(content.qc) + attempt + route snapshot
+                                   │
+                                   │  materialize(master)   ◄── W09 materializer
+                                   │  MediaQcProbePort      ◄── FFmpeg/ffprobe (fake'i YOK)
+                                   │  VisualQcPort          ◄── fake / disabled
+                                   │
+                                   └─ T2 COMMIT: 13 kontrol + karar + eşik anlık görüntüsü
+                                      └─► completed (passed | needs_review | failed)
+                                          | failed (ölçüm alınamadı, checks=unknown)
+```
+
+**QC fail-closed'dır.** Çalıştırılamayan kontrol `unknown` olur ve genel karar en az
+`needs_review`'a düşer. Bu bir üslup değil yapı: `build_results` kontrol kümesinin tamamıyla
+`unknown` olarak başlar ve çağıranın verdiği cevaplarla üzerine yazılır — **bir kontrolü atlamak
+ifade edilemiyor.** Gerekçe: ölçmediğini onaylayan bir QC, QC'siz olmaktan kötüdür; sahte güven
+üretir.
+
+**QC karar verir, eylem yapmaz.** `decide` bir karar ve bir *öneri* döner (`retry_render` ·
+`alternative_scene` · `alternative_provider` · `human_review` · `request_new_media`). Yeniden
+render tetiklemez, sağlayıcı değiştirmez, deneme saymaz — sınırsız render döngüsünün sınırı
+yaşam döngüsünündür (2E). `ContentQcService` yapıcısında **render portu yoktur**; bir test
+imzayı zorluyor.
+
+**Kontrol kümesi bizim değil, gereksinimin.** `QcCheck`'in her üyesi §19.4'ün bir satırı, aynı
+sırayla. Bu hattın dört turluk dersi (elle sayılmış her küme delindi) burada "daha uzun liste"
+ile değil **bütünlükle** karşılanıyor: `CHECK_POLICIES` her üyeyi kapsar, `build_results` her
+üyeyi yazar, `decide` eksik kümeyi reddeder. Politikasız bir kontrol eklemek testi düşürür.
+
+| Kontrol | Nasıl ölçülür | Bloke eder mi |
+|---|---|---|
+| `container_readable` | ffprobe açabiliyor mu | evet |
+| `duration_matches_plan` | ölçülen süre ↔ timeline kesitlerinin toplamı | evet |
+| `audio_present` | ses akışı var **ve** loudness sessizlik tabanının üstünde | evet |
+| `loudness` | EBU R128 integrated, config penceresinde | hayır |
+| `black_frames` | `blackdetect` oranı | evet |
+| `static_frames` | `freezedetect` oranı | hayır |
+| `text_within_safe_area` | timeline geometrisi × **ölçülen** çözünürlük | hayır |
+| `logo_visible` | VLM (port + fake) | hayır |
+| `speech_sync` | 2C'nin `drift_ms`'i, eşik burada | hayır |
+| `verified_values_current` | referansın kaydı hâlâ aynı mı | **evet** |
+| `sensitive_content` | VLM (port + fake) | evet |
+| `face_integrity` | VLM (port + fake) | hayır |
+| `product_shape` | VLM (port + fake) | hayır |
+
+§19.4'ün "Altyazı senkronu" satırı burada **seslendirme sapması** olarak ölçülüyor: bu hatta
+altyazılar saklanmış transcript satırlarının kesit geometrisine deterministik izdüşümü — kayamaz;
+sağlayıcının ürettiği konuşma kayabilir ve kayıyor. Yanlış olabilecek şeyi ölçmek bu satırın
+dürüst okuması.
+
+**"Fiyat ve tarih kaynağa uyuyor mu" kopya tutmadan cevaplanıyor.** Render çözdüğü değeri
+saklamaz (bir fiyatın kopyası, fiyatın yaşadığı ikinci yerdir). Bunun yerine kaydın **kendi
+tarihi** okunuyor: referans artık çözülmüyorsa, penceresinin dışına düştüyse, ya da şu anki
+değeri render **bittikten sonra** yürürlüğe girdiyse bayat sayılır. Üçüncüsü kesin, çünkü
+`product_prices` append-only: açık satırın `effective_from`'u render'dan sonraysa karede kapanmış
+satır yazıyor demektir. Rapora yalnızca **pointer ve kod** girer, değer asla — QC raporu süresiz
+saklanıyor ve bir fiyatın yazıldığı ikinci yer olamaz. **Bilinen sınır:** `approved_ctas`
+değişiklik damgası taşımıyor, dolayısıyla yerinde düzenlenmiş bir CTA görülemiyor; yalnızca
+kaybolması yakalanıyor.
+
+**Eşikler config'de ve rapora basılıyor.** Sürüm numarası hangi kural setinin koştuğunu söyler;
+**neye karşı karşılaştırdığını** yalnızca anlık görüntü söyler. İkisi olmadan bir ay arayla
+yazılmış iki rapor karşılaştırılamaz ve yanlışlıkla değiştirilmiş bir eşik kayıtta iz bırakmaz.
+Loudness penceresi **bizim ürün kararımız**, platform gerçeği değil: yayınlanmış bir Instagram
+loudness sözleşmesi [99-external-platform-facts.md](../product/requirements/99-external-platform-facts.md)'de
+kayıtlı değil ve bu depo platform gerçeğini hafızadan yazmaz.
+
+**Ölçüm portunun fake'i yok.** `create_audio_probe`'un 2C'de verdiği kararla aynı: bu port *tam
+olarak* "kimsenin çıktı hakkındaki beyanı olduğu gibi alınmaz" kontrolüdür, dolayısıyla fake bir
+probe fixture'ı doğrulayan bir fixture olurdu. Görünür sonucu doğru olan: yer tutucu render
+adapter'ının yazdığı dosya video değil, ölçüm başarısız oluyor ve rapor bunu söylüyor.
+
+**VLM adapter'ı üretimde `disabled`.** Kural W13'ün, PM'in genelleştirdiği hâliyle — ama en keskin
+hâli bu: fake senaryo yayınlanabilir bir *metin* yazar, fake denetim ise bir insanın üzerine
+işlem yapacağı bir **onay** yazar. "Bu karede hassas içerik yok" hiçbir şeyin bakmadığı bir
+iddiadır. Sonuç bilinçli ve görünür: gerçek sağlayıcı bağlanana kadar (W08 sonrası) dört model
+kontrolü `unknown`, her rapor `needs_review`, hiçbir render otomatik `passed` olmuyor.
+
+**Ölçümün başarısızlığı videonun başarısızlığı değildir.** ffprobe'un ayrıştıramadığı dosya
+"video açılıyor mu"yu `failed` ile cevaplar; koşamayan bir probe `unknown` ile. Biri karar,
+öbürü kesinti — ve aynı biçimde yazılamazlar. Denemeler tükendiğinde satır `failed` **koşu**
+durumuyla, `needs_review` kararıyla ve bir `failure_code` ile kapanır: `pending`'de bırakmak,
+kimsenin kontrol etmediği ve kontrol edilmediği görülemeyen bir render demek olurdu.
+
+**QC işi mevcut render yolunu değiştirmeden var oluyor:** talep, QC raporu **olmayan**
+`succeeded` render'ı tarayarak alınıyor. Worker düşmüşken biten render, worker döndüğünde
+alınıyor; kaybolmuş olabilecek bir kuyruk kaydı yok. Rapor satırı aynı transaction'da yazıldığı
+için ikinci bir tur aynı render'ı görmüyor — otomatik QC render başına bir kez koşuyor.
+
+**Timeline `forbidden_matcher` birleştirmesi (devralınan borç).** Timeline metin tarafı kendi
+`re.IGNORECASE` eşleyicisini çalıştırıyordu; yani senaryo tarafında kapatılan her atlatma
+(görünmez karakter, confusable, NFD, Latin katlaması, süslü rakam) timeline metninde **açıktı**.
+Artık `script.forbidden_matcher` + `normalize_for_matching` import ediliyor ve
+`contains_unsupported_letter` ASCII'ye katlanamayan harfi `TIMELINE_UNSUPPORTED_CHARACTER` ile
+reddediyor — aynı iki fonksiyon, ikinci bir uygulama değil. **Çekim eşleşmesi yok** (PM, W18):
+`şeker` yasakken `şekerli` serbest, `az` yasakken `lezzetli` serbest. Liste markanın, kalıp
+bizim; kök eşleşmesi markanın kastetmediğini yasaklardı.
+
+> **PM'e, açık:** QC servisinin uçtan uca koşması için üç ek satır gerekiyor ve üçü de bu iş
+> emrinin dosya listesinin **dışında**: `worker/tasks.py`'de bir `content.qc.drain` task'ı,
+> `worker/composition.py`'de fabrika satırı, `infrastructure/celery_app.py`'de beat girdisi.
+> Servis, testleri ve raporu tamamlandı; yalnızca beat tetiklemesi bağlanmadı.
+
 ## Bu üç slice'ın taşımadıkları
 
-Otomatik QC (2D), yaşam döngüsü ve entitlement tüketimi (2E), onay/revizyon akışı (2F),
+Yaşam döngüsü ve entitlement tüketimi (2E), onay/revizyon akışı (2F),
 planlayıcı (2G). Yayınlama Phase 4. Gerçek C2PA manifest yazımı ayrı iş. `fade` geçişi ve
 voiceover/music ses kaynakları adapter kabiliyetinde **bildirilmiyor**, dolayısıyla doğrulama
 onları temiz biçimde reddediyor — seslendirmeli timeline'ın bugün kaydedilememesinin sebebi bu
