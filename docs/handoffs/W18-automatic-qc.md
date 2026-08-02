@@ -324,4 +324,16 @@ Araç zinciri değişmedi: Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 · pytest
 
 ## Doğrulama
 
-_(test eden oturum: bozuk medyayı QC'ye "geçti" dedirtmeye çalış — ölçüm hatasını sessiz geçirme, eksik kontrol kümesi, karar tablosunda tanımsız kombinasyon, timeline metninde senaryo tarafında kapalı bir atlatmanın açık kalması)_
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `1e28746`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · FFmpeg 7.1.5 · PostgreSQL 16.14 · MinIO. Koşular compose içindeki geçici `/tmp/socialpilot-test-venv` ortamında yapıldı; kaynak salt-okunurdu. API logları `X-Amz-Signature`, `X-Amz-Credential` ve `https://` için ayrıca tarandı: her biri 0 eşleşme.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | Yinelenen deterministik sonuçta son yazan kazanıyor: başarısız kontrol rapordan düşürülebiliyor. | yüksek | Tüm kontroller `passed`; `black_frames=failed` önce, aynı kontrol `passed` sonra → `decide(build_results(...)) == passed`. Ters sıra `failed`. | açık |
+| 2 | Dış `VisualQcPort` cevabında aynı kontrol iki kez gelirse önceki `failed` bulgu kayboluyor. | yüksek | `sensitive_content=[failed, passed]`, diğer model bulguları `passed` → `model_check_results` üç `passed`, birleşik karar `passed`. | açık |
+| 3 | Gerçek bozuk medya otomatik geçemedi. | — | Tam siyah + sessiz AAC + donuk tek kare + süre sapması + bozuk konteyner: gerçek FFmpeg/MinIO/PG testleri **5/5 geçti**. | kabul edildi |
+| 4 | Ölçüm hatası, kapalı VLM ve eksik kontrol kümesi fail-closed kaldı. | — | **3/3 geçti**; ölçülemeyen kontroller `unknown`, karar `needs_review`. | kabul edildi |
+| 5 | Tenant sızması ve imzalı URL sızıntısı bulunmadı. | — | İki yönlü yabancı-tenant HTTP denemesi `404`; rapor redaksiyonu testi geçti; log sentinel taraması **0/3**. | kabul edildi |
+| 6 | Timeline yasak-terim kapısında senaryodaki görünmez/confusable/Latin-katlama yolları açık kalmadı. | — | QC, normalizasyon ve gramer hedefli birim koşusu: **428 passed**. | kabul edildi |
+| 7 | Statik kapılar yeşil; tam pytest sonucu bu turda kanıt değildir. | — | Ruff check · format (**200 dosya**) · mypy (**188 kaynak dosyası**) temiz. Tam koşu 81% sonrasında dokuz hata işaretiyle ilerlemeyi kestiği için sonlandırıldı; hata özeti üretemedi. Hedefli 428 birim + 10 gerçek entegrasyon testi yeşildir. | açık |
+
+**Karar:** düzeltme gerekiyor. #1 ve #2 için yinelenen kontrol sonucu fail-closed reddedilmeli (veya çelişki `unknown`/`needs_review` olmalı); son-sonuç-kazanır yaklaşımı bir QC kontrolünü düşürebiliyor.

@@ -639,3 +639,16 @@ unicodedata 15.1.0 · PostgreSQL 16.14 · MinIO · FFmpeg. İzole host portları
 | 6 | Mevcut kapı yeşil, fakat #1–#3 için regresyon yok. | orta | Ruff check + format: yeşil; mypy: 178 dosya temiz; `RUN_INTEGRATION_TESTS=1` gerçek PG/MinIO/FFmpeg pytest: **947 passed** (1 Starlette/httpx deprecation uyarısı). Runtime imajında `make` yoktu; eşdeğer alt komutlar doğrudan çalıştırıldı. | açık |
 
 **Karar:** düzeltme gerekiyor. Yazıyla kesirli/bitişik sayı grameri ile `T Lye` için birim ve HTTP kalıcılık-engeli regresyonları eklenmeden takip düzeltmesi teslim edilebilir değil.
+
+### Bağımsız takip-2 saldırı turu — 2026-08-02
+
+Araç zinciri: worktree kökü `A:\socialpilot-ai` (`main` `1e28746`) · `COMPOSE_PROJECT_NAME=sp-codex` · Docker Engine 25.0.3 · Docker Compose v2.24.6-desktop.1 · Python 3.13.14 · pytest 9.1.1 · Ruff 0.16.0 · mypy 2.3.0 · unicodedata 15.1.0 · FFmpeg 7.1.5 · PostgreSQL 16.14 · MinIO. Koşular compose içindeki geçici `/tmp/socialpilot-test-venv` ortamında yapıldı.
+
+| # | Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|---|
+| 1 | `tam` ile yazılan ondalık kesrin tireli/bitişik birleşimleri literal fiyatı geçiriyor. | kritik | `bir-tam-onda-bes-lira`, `birtamondabeslira` ve Latin-katlanmış eşdeğerleri `None` döndü ve `parse_script` + `resolve_script` sonunda kalıcı dokümana ulaştı. `bir tam onda bes lira` için 81 birleşimin **45'i**, `iki tam yüzde yirmi bes lira` için 243 birleşimin **75'i** kaçtı. | açık |
+| 2 | Kesir, dağıtım eki, mevcut kesir sözcükleri ve çoğu kısaltma kuyruğu kapalı kaldı. | — | `bir buçuk`, `bir çeyrek`, `yarım`, `ikişer`/`yüzer` (bitişik dâhil), `binlerce`, katlanmış bileşimler ve `T Lye`/`den`/`nin`/`yle`/`ymiş`/`lerce`/`si`/`leri`: **18/20 ret**. `T Lm` ve `T Lcik` geçti; açık para ifadesi olarak doğrulanamadığı için ayrı bulgu değil. | kabul edildi |
+| 3 | Yeni saldırı turunda ölçülen meşru metinlerde yeni yanlış pozitif yok. | — | Kesirli pişirme süresi, ölçü birimi, tarif, kişi sayısı, `Eurovision`, `Euro Kebap`, `Şef T. Lezzetli`, `Lira` adlı kedi ve kök-benzeri sözcüklerden oluşan **20/20** metin geçti. Bilinen `3 martı`, `2 ocakta`, `Ekim ekimi` homografları aynı kaldı. | kabul edildi |
+| 4 | Gramer/katlama, QC ve timeline hedefli birim regresyonları yeşil kaldı. | — | `test_content_script_unit.py`, `test_content_qc_unit.py`, `test_qc_probe.py`, `test_timeline_forbidden_terms.py`: **428 passed**. Ruff check · format (**200 dosya**) · mypy (**188 kaynak dosyası**) temiz. | kabul edildi |
+
+**Karar:** düzeltme gerekiyor. `tam onda` / `tam yüzde` kesir sözcükleri kapalı sayı sözcüğü gramerinde boşluk, tire ve bitişik bileşimleri kapsayacak biçimde ele alınmalı; aksi hâlde katlama ile birlikte kalıcı fiyat atlatması sürer.
