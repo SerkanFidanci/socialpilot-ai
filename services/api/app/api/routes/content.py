@@ -28,10 +28,22 @@ from app.core.pagination import MAX_PAGE_SIZE, decode_cursor
 from app.infrastructure.ai import create_audio_probe, create_script_generator, create_tts
 from app.infrastructure.database.session import get_session
 from app.infrastructure.render import create_render
+from app.modules.content.approval import (
+    MAX_REJECTION_NOTE_CHARS,
+    ApprovalDecision,
+    ApprovalPolicy,
+    RejectionReason,
+    RevisionClass,
+    RevisionField,
+    RevisionScope,
+)
+from app.modules.content.approval_service import ContentApprovalService
 from app.modules.content.lifecycle import ProjectEvent, ProjectState
 from app.modules.content.models import (
+    ContentApproval,
     ContentProject,
     ContentProjectTransition,
+    ContentRevision,
     ContentScript,
     RenderOutput,
     RenderQcReport,
@@ -115,6 +127,12 @@ def project_service(session: AsyncSession, request: Request) -> ContentProjectSe
     """
 
     return ContentProjectService(session, cast(Settings, request.app.state.settings))
+
+
+def approval_service(session: AsyncSession, request: Request) -> ContentApprovalService:
+    """PRD §21's decisions. It holds no capability port either — approving produces nothing."""
+
+    return ContentApprovalService(session, cast(Settings, request.app.state.settings))
 
 
 def correlation() -> str:
@@ -426,6 +444,12 @@ class ProjectCreateRequest(BaseModel):
     cta_id: UUID
     campaign_offer_id: UUID | None = None
     source_asset_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCE_ASSETS)
+    # PRD §21.1's policy for this project. Omitting it takes the deployment default, which is
+    # `always` — the only defensible fallback before a tenant has expressed a preference, since
+    # the other direction publishes content nobody looked at because nobody configured anything.
+    # §12.2 puts this on a subscription item; that is Phase 3, and this is where it lands until
+    # then.
+    approval_policy: ApprovalPolicy | None = None
 
 
 class ProjectMediaRequest(BaseModel):
@@ -458,6 +482,15 @@ class ProjectResponse(BaseModel):
     requires_human_review: bool
     recommended_path: RemediationPath
     failure_code: str | None
+    # PRD §21: which policy decides whether a person must look, and how much of §12.3's revision
+    # allowance is left. `preview_delivered_at` is the moment §12.7 consumed the credit — exposed
+    # because "was I charged for this?" is a question a client should not have to infer from a
+    # state that a revision can move away from.
+    approval_policy: ApprovalPolicy
+    revision_quota: int
+    revision_quota_used: int
+    revisions_requested: int
+    preview_delivered_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -482,6 +515,11 @@ class ProjectResponse(BaseModel):
             requires_human_review=project.requires_human_review,
             recommended_path=project.recommended_path,
             failure_code=project.failure_code,
+            approval_policy=project.approval_policy,
+            revision_quota=project.revision_quota,
+            revision_quota_used=project.revision_quota_used,
+            revisions_requested=project.revisions_requested,
+            preview_delivered_at=project.preview_delivered_at,
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
@@ -544,6 +582,7 @@ async def create_project(
         cta_id=payload.cta_id,
         campaign_offer_id=payload.campaign_offer_id,
         source_asset_ids=tuple(payload.source_asset_ids),
+        approval_policy=payload.approval_policy,
         idempotency_key=idempotency_key,
         correlation_id=correlation(),
     )
@@ -642,6 +681,225 @@ async def list_project_transitions(
     return ProjectTransitionsResponse(
         items=[ProjectTransitionResponse.make(entry) for entry in transitions]
     )
+
+
+@router.post(
+    "/businesses/{business_id}/content/projects/{project_id}/cancel",
+    response_model=ProjectResponse,
+)
+async def cancel_project(
+    business_id: UUID,
+    project_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ProjectResponse:
+    """Withdraw a project that has not finished, releasing any credit it still holds
+
+    No `Idempotency-Key`, for the reason `attach_media` has none: the state machine is the
+    idempotency. A replay finds a cancelled project — which is terminal — and is refused with
+    `PROJECT_TRANSITION_NOT_ALLOWED`, so a duplicate delivery cannot refund twice.
+    """
+
+    project = await project_service(session, request).cancel_project(
+        user_id=user.id,
+        business_id=business_id,
+        project_id=project_id,
+        correlation_id=correlation(),
+    )
+    return ProjectResponse.make(project)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    """An approver's answer about one preview (PRD §21.1, §21.2).
+
+    `auto_approved` is deliberately not expressible: it is what the *policy* decided when nobody
+    was asked, and a client that could claim it would be claiming a decision nobody made. The
+    request carries `approved` as a boolean for the same reason — two values, no third.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+    # Required for a rejection, forbidden on an approval; `other` additionally requires a note.
+    # All three rules are enforced by the service and repeated as check constraints.
+    rejection_reason: RejectionReason | None = None
+    # The customer's own words. Stored, returned to them, and nowhere else: it is not logged,
+    # not audited, not put in an error body, and never merged into a prompt.
+    note: str | None = Field(default=None, max_length=MAX_REJECTION_NOTE_CHARS)
+
+
+class RevisionRequest(BaseModel):
+    """What should be different (PRD §21.3).
+
+    The client names *fields* and never a class: §21.3 hands the small/large judgement to the
+    rules engine, and a request that carried its own class would let "this is only a small
+    change" be an assertion rather than a consequence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields: list[RevisionField] = Field(min_length=1, max_length=len(RevisionField))
+
+
+class ApprovalResponse(BaseModel):
+    """One recorded decision.
+
+    This is the **only** surface the free note appears on, and it is reached by a member of the
+    tenant that wrote it, through a tenant-scoped query, holding `business.read`.
+    """
+
+    sequence: int
+    decision: ApprovalDecision
+    policy: ApprovalPolicy
+    rejection_reason: RejectionReason | None
+    note: str | None
+    render_id: UUID | None
+    actor_user_id: UUID | None
+    created_at: datetime
+
+    @classmethod
+    def make(cls, approval: ContentApproval) -> ApprovalResponse:
+        return cls(
+            sequence=approval.sequence,
+            decision=approval.decision,
+            policy=approval.policy,
+            rejection_reason=approval.rejection_reason,
+            note=approval.note,
+            render_id=approval.render_id,
+            actor_user_id=approval.actor_user_id,
+            created_at=approval.created_at,
+        )
+
+
+class ApprovalsResponse(BaseModel):
+    items: list[ApprovalResponse]
+
+
+class RevisionResponse(BaseModel):
+    """One revision request, with what the rules engine made of it."""
+
+    sequence: int
+    fields: list[RevisionField]
+    revision_class: RevisionClass
+    scope: RevisionScope
+    quota_cost: int
+    quota_used_after: int
+    requested_by_user_id: UUID
+    created_at: datetime
+
+    @classmethod
+    def make(cls, revision: ContentRevision) -> RevisionResponse:
+        return cls(
+            sequence=revision.sequence,
+            fields=[RevisionField(value) for value in revision.fields],
+            revision_class=revision.revision_class,
+            scope=revision.scope,
+            quota_cost=revision.quota_cost,
+            quota_used_after=revision.quota_used_after,
+            requested_by_user_id=revision.requested_by_user_id,
+            created_at=revision.created_at,
+        )
+
+
+class RevisionsResponse(BaseModel):
+    items: list[RevisionResponse]
+
+
+@router.post(
+    "/businesses/{business_id}/content/projects/{project_id}/approvals",
+    response_model=ProjectResponse,
+)
+async def decide_project(
+    business_id: UUID,
+    project_id: UUID,
+    payload: ApprovalDecisionRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ProjectResponse:
+    """Approve or reject a preview (PRD §21). Requires the approver's permission"""
+
+    project = await approval_service(session, request).decide(
+        user_id=user.id,
+        business_id=business_id,
+        project_id=project_id,
+        approved=payload.approved,
+        rejection_reason=payload.rejection_reason,
+        note=payload.note,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation(),
+    )
+    return ProjectResponse.make(project)
+
+
+@router.post(
+    "/businesses/{business_id}/content/projects/{project_id}/revisions",
+    response_model=ProjectResponse,
+)
+async def request_project_revision(
+    business_id: UUID,
+    project_id: UUID,
+    payload: RevisionRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ProjectResponse:
+    """Say what should change after a rejection, and restart the pipeline where it matters
+
+    Consumes revision allowance (§12.3), never credit: the reservation this project opened at
+    creation covers every step and every render it will ever run (K4).
+    """
+
+    project = await approval_service(session, request).request_revision(
+        user_id=user.id,
+        business_id=business_id,
+        project_id=project_id,
+        fields=frozenset(payload.fields),
+        idempotency_key=idempotency_key,
+        correlation_id=correlation(),
+    )
+    return ProjectResponse.make(project)
+
+
+@router.get(
+    "/businesses/{business_id}/content/projects/{project_id}/approvals",
+    response_model=ApprovalsResponse,
+)
+async def list_project_approvals(
+    business_id: UUID,
+    project_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ApprovalsResponse:
+    """Every decision made about this project, including the ones the policy made itself"""
+
+    approvals = await approval_service(session, request).list_approvals(
+        user_id=user.id, business_id=business_id, project_id=project_id
+    )
+    return ApprovalsResponse(items=[ApprovalResponse.make(entry) for entry in approvals])
+
+
+@router.get(
+    "/businesses/{business_id}/content/projects/{project_id}/revisions",
+    response_model=RevisionsResponse,
+)
+async def list_project_revisions(
+    business_id: UUID,
+    project_id: UUID,
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RevisionsResponse:
+    """Every revision asked for on this project, with its class, scope and quota cost"""
+
+    revisions = await approval_service(session, request).list_revisions(
+        user_id=user.id, business_id=business_id, project_id=project_id
+    )
+    return RevisionsResponse(items=[RevisionResponse.make(entry) for entry in revisions])
 
 
 class ScriptGenerateRequest(BaseModel):

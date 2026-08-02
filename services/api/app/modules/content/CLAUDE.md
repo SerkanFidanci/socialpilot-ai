@@ -5,7 +5,9 @@
 parametrik düzenleme (K4), `RenderPort` kabiliyet portu ve dayanıklı render job'ı, otomatik
 kalite kontrol (§19.4) — kontrol kümesi, karar tablosu, `MediaQcProbePort` ve `VisualQcPort` —
 içerik projesi yaşam döngüsü (§20): kapalı durum makinesi, geçiş kaydı, QC kararının sınırlı
-eyleme dönüşü ve senaryodan timeline kurulumu, prompt ve ses profili versiyonlama (§17.6).
+eyleme dönüşü ve senaryodan timeline kurulumu, **onay sistemi ve revizyon (§21)**: yedi politika,
+on ret nedeni, revizyon sınıflandırması, revizyon kotası, proje iptali; prompt ve ses profili
+versiyonlama (§17.6).
 **Sahibi değil:** FFmpeg/render ve AI adapter uygulamaları (→ `../../infrastructure/render/`,
 `../../infrastructure/ai/`), medya byte'ı ve materializer (→ `../media/`, ADR-002), doğrulanmış
 kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../operations/`), HTTP taşıma
@@ -186,6 +188,42 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 - **`voiceover` ses track'i `voiceover_assets`'i gösterir**, `media_assets`'i değil. Bu yüzden
   `Timeline.asset_ids` voiceover kimliğini içermez (`voiceover_ids` ayrı): worker onu kaynak
   video sanıp materialize etmeye çalışırdı.
+- **Onay politikası veridir ve projeye yazılır** (§21.1, W21). `requires_approval` saf ve
+  **total**; her politika **yalnızca kendi boyutunu** okur. Her politikanın guardrail ihlalinde de
+  tetiklemesi cazip ve yanlış: VLM disabled olduğu için her render `needs_review`, dolayısıyla
+  evrensel bir guardrail kaçışı yedi politikayı birbirinin aynısı yapardı.
+  `low_confidence_only` **bugün her zaman onay ister** (QC hiçbir render'ı `passed` yapamıyor) ve
+  `ads_only` **hiçbir şeye istemez** (§14 reklam senaryosu açmadı); ikisi de testte
+  **gerekçesiyle** pinli. Politika canlı okunmaz — gelecek ay gevşetilen bir ayar bugünkü ön
+  izlemede neyin gerektiğini geriye dönük değiştiremez.
+- **Revizyonun sınıfı ile yeniden başlangıç noktası ayrı sorulardır** (§21.3, W21). İki total
+  fonksiyon aynı kapalı alan kümesini okur; §21.3 yalnızca birincisini sabitler. **CTA küçük bir
+  revizyondur ve senaryodan başlar** — CTA metni senaryo dokümanına çözülüyor ve seslendirme onu
+  konuşuyor, timeline'dan başlamak hâlâ eski sözü söyleyen bir videonun yeni kurgusunu üretirdi.
+  Belirsiz küme **büyük** ve **senaryo** tarafına düşer. `_SCOPE_CLEARS`, yeniden başlanan
+  adımdan itibaren üretilen her artefaktı atar; birim testi bunu durum makinesinden türetir.
+- **Ret notu tenant metnidir ve iki yere gider:** satırın kendisi ve aynı tenant'ın okuması.
+  Log'a, span'e, audit detayına, hata gövdesine, geçiş `reason`'ına, hiçbir prompt'a girmez ve
+  **fabrikasyon dedektöründen geçmez** — o dedektör modelin fiyat uydurmasını durdurur, müşterinin
+  kendi kataloğu hakkında yazdığını değil. AST testi `note`'un yalnızca doğrulama ve satır yazımına
+  gittiğini, tokenize testi modülde `prompt`/`input_data` sözcüğünün geçmediğini zorlar.
+- **Kredi bir kez, ön izlemeye basılır; sonrası kotadır.** `preview_delivered_at` §12.7'nin
+  ücretlendirme anını damgalar ve **ondan sonraki her sonuç `DELIVERED`**'dır. Damga olmasaydı,
+  iyi bir ön izlemeden sonra düşen bir revizyon zaten teslim edilmiş ön izleme için iade isterdi;
+  defter bunu çelişki sayıp reddeder ve proje kilitlenirdi. `PREVIEW_READY` bu yüzden artık
+  terminal **değil** ama hâlâ ücretlendirme noktası.
+- **Revizyon render sayacını sıfırlar.** İki döngünün iki sınırı var: `render_attempts` makinenin
+  kendi kendine yaptığını, kota bir insanın yeniden istemesini sınırlar. Tek sayaç paylaşmak ya
+  insana yeniden render'ı yasaklardı ya da otomatik döngüyü dışarıdan süresiz açardı.
+- **Adım idempotency anahtarı revizyonu adlandırır** (`project:{id}:r{n}:script`). Aksi hâlde
+  ikinci `scripting` koşusu ilk senaryoyu yeniden oynatır — müşteriye reddettiği şeyi geri verir.
+  Revizyon sıfır 2E'nin yazımını korur.
+- **`approval_service.py` içinde `EntitlementService` yoktur.** K4 böylece yapısal: rezervasyon
+  projeye bağlı olduğu için ne saf yeniden render ne revizyon yeni kredi açabilir.
+- **`_settle` state'i değiştirdikten sonra sorgu atmaz.** Mutasyon sırasında satır geçici olarak
+  `ck_content_project_due_matches_state` ile çelişir (terminal durum, hâlâ eski due time) ve
+  arada atılan herhangi bir sorgu autoflush'la onu doğrudan kısıta yollar. Onay sırası döngüden
+  **önce** okunur; satır `next_check_at` yazıldığında tekrar tutarlı olur.
 - **Hak, projeyi yaratan transaction'da rezerve edilir; projeyi bitiren transaction'da
   sonuçlanır** (W20). `create_project` `EntitlementService.reserve`'ü kendi `begin()`'i içinde
   çağırır — yetersiz bakiye `402` fırlatır ve proje satırı dahil her şey geri alınır, yani
@@ -212,8 +250,10 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | `text_normalization.py` | `normalize_for_matching` — eşleştirme katlaması (süslü rakam açma → `Cf/Cn/Co/Cs` çıkarma → NFKC → kalan görünmez/birleşen işaretler → confusable → Türkçe küçük harf → **Latin harflerin ASCII'ye katlanması**) · `normalize_encoding` — saklanan değerler için aynısının Latin adımı olmayan hâli · `contains_unsupported_letter` — alfabe kısıtı, katlamanın kendisiyle ifade edilir. Kural içermez; `script.py` ve `validation.py` (2D) aynı fonksiyonları çağırır, üçüncü bir çağıran testle yasaktır |
 | `qc.py` | §19.4 kontrol kümesi (`QcCheck`), `CHECK_POLICIES`, saf karar tablosu (`decide`), `build_results` bütünlük garantisi, `QcThresholds` anlık görüntüsü, deterministik değerlendiriciler, doğrulanmış kayıt denetimi (`audit_verified_sources`), `MediaQcProbePort` + `QcMeasurement`, `VisualQcPort` + `VisualQcDisabledError` |
 | `qc_service.py` | `ContentQcService` — QC açılmamış `succeeded` render'ı claim, dayanıklı job (durum/timeout/deneme/correlation/dead-letter), materialize + ölçüm + VLM çağrısı, `provider_usage`, iki transaction · `ContentQcReportService` — yalnızca okuma (yetki + rapor), ölçüm portu taşımaz |
-| `lifecycle.py` | §20'nin **saf** yarısı: `ProjectState`/`ProjectEvent`, kapalı ve total geçiş tablosu (`next_state`, `require_next_state`), `decide_after_qc`/`decide_after_render_failure` karar tablosu ve döngü sınırı, `compose_timeline` (senaryo + sahneler → §18.2 dokümanı), `normalize_scene_tag`, dokümante hata kodları. Session/saat/sağlayıcı yok |
-| `project_service.py` | `ContentProjectService` — proje açma (hak rezervasyonu dahil), medya bağlama, okuma (yetki, idempotency, audit, outbox uyandırma) · `ContentProjectAdvanceService` — claim + adım + settle; terminal geçişte hakkı sonuçlandırır, sağlayıcı portu taşımaz · `AbandonedRunSweeper` — `pending`de kalmış senaryo/seslendirme satırlarını yaş eşiğine göre `failed`e düşürür · `source_outcome` (§20 durumu → `SourceOutcome`, total) · `ContentProjectReservationProbe` — entitlement süpürmesinin `ReservationSourceProbe` uygulaması |
+| `approval.py` | §21'in **saf** yarısı: yedi politika (`ApprovalPolicy`) + total `requires_approval`, on ret nedeni (`RejectionReason`), revizyon alanı sözlüğü ve **iki ayrı** total sınıflandırıcı (`revision_class` / `revision_scope`), `revision_cost`, `is_advertisement` ve `qc_is_confident` (ikisi de total), `script_names_price` (saklanan şablondan, fail-closed), dokümante hata kodları. Session/saat/sağlayıcı yok |
+| `approval_service.py` | `ContentApprovalService` — karar (`decide`), revizyon isteği, yetki, kota aritmetiği, idempotency, audit; `_SCOPE_CLEARS` (kapsam → atılan artefaktlar). **Sağlayıcı portu, prompt ve `EntitlementService` yoktur** |
+| `lifecycle.py` | §20'nin **saf** yarısı: `ProjectState`/`ProjectEvent` (2F'in `WAITING_APPROVAL`/`REVISION_REQUESTED` ve iki belgeli genişletmesi `APPROVED`/`CANCELLED` dahil), kapalı ve total geçiş tablosu (`next_state`, `require_next_state`, `can_cancel`, `revision_event`), `decide_after_qc`/`decide_after_render_failure` karar tablosu ve döngü sınırı, `compose_timeline` (senaryo + sahneler → §18.2 dokümanı), `normalize_scene_tag`, dokümante hata kodları. Session/saat/sağlayıcı yok |
+| `project_service.py` | `ContentProjectService` — proje açma (hak rezervasyonu dahil), medya bağlama, **iptal + iade**, okuma (yetki, idempotency, audit, outbox uyandırma) · `ContentProjectAdvanceService` — claim + adım + settle; `PREVIEW_READY`'de §21.1 politikasını uygular, terminal geçişte hakkı sonuçlandırır, sağlayıcı portu taşımaz · `AbandonedRunSweeper` — `pending`de kalmış senaryo/seslendirme satırlarını yaş eşiğine göre `failed`e düşürür · `AbandonedProjectSweeper` — yalnızca `WAITING_MEDIA`'da yaşlanmış projeleri iptal eder ve krediyi iade eder · `apply_transition` / `wake_sequencer` (API tarafının iki paylaşılan yardımcısı; `approval_service` bunları import eder) · `source_outcome` (§20 durumu × teslim edildi mi → `SourceOutcome`, total) · `ContentProjectReservationProbe` |
 | `script_service.py` | `ScriptGenerationService` — yetki, girdi doğrulama, route snapshot + ücretli çağrı + kullanım kaydı, iki transaction, idempotency, liste |
 | `tts.py` | §17.3 `TTSPort` + `AudioProbePort`, kapalı `VOICE_PROFILES` registry'si (§17.6 deseni), çözülmüş senaryodan satır çıkarma (`script_lines`), `VoiceoverSegment` ve sapma aritmetiği, obje anahtarı |
 | `tts_service.py` | `VoiceoverService` — yetki, senaryo durumu, ses profili çözümü, route snapshot + satır başına çağrı + ffprobe ölçümü + depolama, çağrı başına `provider_usage`, kısmi koşu kaydı, idempotency, liste |
@@ -221,17 +261,18 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 | `validation.py` | §18.3 kuralları (saf), `ValidationContext`, `layout_text_in_frame` (2D ölçülen kareyle de çağırır), `resolve_overlay_text`, `script.forbidden_matcher` + alfabe kısıtı üzerinden yasak terim kapısı, dokümante hata kodları |
 | `patch.py` | K4 parametrik düzenleme: kapalı operasyon kümesi, segment sınırına snap, track yeniden dizilimi, `serialize_patch` (idempotency fingerprint'inin alındığı kanonik biçim) |
 | `render.py` | `RenderPort`, `RenderCapabilities`, `RenderPlan`, §19.2 profilleri, disclosure/provenance durumları |
-| `models.py` | `content_timelines` (revizyon başına satır) + `render_outputs` (+ `qc_claimed_at` ve "QC bekleyenler" kısmi index'i) + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) + `render_qc_reports` (kontroller ve eşik anlık görüntüsü JSONB; `verdict`/`recommended_path` `pending` satırında bile NOT NULL ve karamsar) + `content_projects` (durum, sayaçlar, üretilen artefakt referansları, lease) + `content_project_transitions` (proje başına sıralı, `from_state` yalnız girişte NULL) |
+| `models.py` | `content_approvals` (karar başına satır; `note` = §21.2'nin serbest metni, dört kısıt neyin neye eşlik edebileceğini söylüyor) + `content_revisions` (alanlar JSONB, sınıf/kapsam/kota gerçek sütun) + `content_timelines` (revizyon başına satır) + `render_outputs` (+ `qc_claimed_at` ve "QC bekleyenler" kısmi index'i) + `content_scripts` + `prompt_templates` + `voiceover_assets` (segmentler JSONB, ölçülmüş toplam ve sapma gerçek sütun) + `render_qc_reports` (kontroller ve eşik anlık görüntüsü JSONB; `verdict`/`recommended_path` `pending` satırında bile NOT NULL ve karamsar) + `content_projects` (durum, sayaçlar, üretilen artefakt referansları, lease, onay politikası, revizyon kotası, `preview_delivered_at`) + `content_project_transitions` (proje başına sıralı, `from_state` yalnız girişte NULL) |
 | `repository.py` | `ContentRepository` (tenant-kapsamlı; senaryo, prompt sürümü, seslendirme, QC raporu ve proje okumaları dahil) + `ContentFactsReader` (`voiceover_facts`, `voiceover_drift`, `voiceover_object_keys`, `scene_candidates`, `verified_record_states` dahil) + `ScriptFactsReader` (marka/katalog/medya okuma penceresi) + render job claim + QC claim (`qc_claimed_at` damgasını da o basar) + proje claim + terk edilmiş `pending` satır claim'leri |
 | `service.py` | `ContentTimelineService` — yetki, doğrulama, revizyon, render isteği, idempotency, audit |
 | `render_service.py` | `ContentRenderService` — job claim, materialize, render, depolama, dead-letter |
-| `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (**her yazma** `content.generate`, her okuma `business.read`) |
+| `policy.py` | `ContentAction` → merkezî `Permission` eşlemesi (her yazma `content.generate`, her okuma `business.read`, **karar `content.approve`** — üretmeyen tek içerik eylemi) |
 | `domain.py` | `format_money` — doğrulanmış değerin saf gösterimi |
 
 ## Gereksinim, karar, mimari
 
 - [40a-content-planning-scenarios.md](../../../../../docs/product/requirements/40a-content-planning-scenarios.md) (§14, §14.8 seslendirmeli reklam) ·
-  [40b-scenario-render-lifecycle.md](../../../../../docs/product/requirements/40b-scenario-render-lifecycle.md) (§18, §19) ·
+  [40b-scenario-render-lifecycle.md](../../../../../docs/product/requirements/40b-scenario-render-lifecycle.md) (§18, §19, §20, **§21 onay**) ·
+  [50-subscription-entitlement.md](../../../../../docs/product/requirements/50-subscription-entitlement.md) (§12.3 revizyon hakkı) ·
   [35-ai-routing-cost.md](../../../../../docs/product/requirements/35-ai-routing-cost.md) (§17.5 çıktı güvenliği, §17.6 prompt versiyonlama) ·
   [99-external-platform-facts.md](../../../../../docs/product/requirements/99-external-platform-facts.md) (Meta AI etiketi, C2PA)
 - [ADR-004](../../../../../docs/adr/ADR-004-provider-adapter-pattern.md) · [ADR-007](../../../../../docs/adr/ADR-007-media-analysis-provider-routing.md) ·
@@ -249,8 +290,10 @@ kayıtların kendisi (→ `../brands/`), job/outbox/usage tabloları (→ `../op
 `tests/unit/test_content_timeline.py` · `tests/unit/test_render_port.py` ·
 `tests/unit/test_content_render_worker.py` · `tests/unit/test_content_script_unit.py` ·
 `tests/unit/test_voiceover_unit.py` · `tests/unit/test_content_qc_unit.py` ·
-`tests/unit/test_content_lifecycle_unit.py` · `tests/unit/test_qc_probe.py` ·
+`tests/unit/test_content_lifecycle_unit.py` · `tests/unit/test_content_approval_unit.py` ·
+`tests/unit/test_qc_probe.py` ·
 `tests/unit/test_visual_qc_port.py` ·
 `tests/unit/test_timeline_forbidden_terms.py` · `tests/integration/test_content_render.py` ·
 `tests/integration/test_content_script.py` · `tests/integration/test_content_voiceover.py` ·
-`tests/integration/test_content_qc.py` · `tests/integration/test_content_lifecycle.py`
+`tests/integration/test_content_qc.py` · `tests/integration/test_content_lifecycle.py` ·
+`tests/integration/test_content_approval.py`

@@ -640,19 +640,15 @@ def test_only_the_roles_that_produce_content_may_voice_a_script() -> None:
         assert tenant.voice(script_id, headers=editor).status_code == 201
         assert tenant.voice(script_id, headers=viewer).status_code == 403
         assert tenant.voice(script_id, headers=approver).status_code == 403
-        # A viewer may still read what an editor produced; an approver holds no read either.
-        assert (
-            client.get(
-                f"/v1/businesses/{tenant.business_id}/voiceovers", headers=viewer
-            ).status_code
-            == 200
-        )
-        assert (
-            client.get(
-                f"/v1/businesses/{tenant.business_id}/voiceovers", headers=approver
-            ).status_code
-            == 403
-        )
+        # A viewer may still read what an editor produced, and from slice 2F so may an
+        # approver — it has to hear what it is signing off. Neither may produce one.
+        for reader in (viewer, approver):
+            assert (
+                client.get(
+                    f"/v1/businesses/{tenant.business_id}/voiceovers", headers=reader
+                ).status_code
+                == 200
+            )
 
 
 @requires_postgres

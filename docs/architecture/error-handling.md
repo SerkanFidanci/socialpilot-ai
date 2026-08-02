@@ -298,6 +298,44 @@ observed this one fail** — that absence is the fact:
 | `SCRIPT_GENERATION_ABANDONED` | A `content_scripts` row stayed `pending` past `LIFECYCLE_PENDING_SWEEP_AGE_SECONDS`. |
 | `VOICEOVER_ABANDONED` | The same for `voiceover_assets`. Any audio the partial run stored is still recorded on the row. |
 
+## Approval and revision (PRD §21 — slice 2F)
+
+Request-time refusals. Every one of them is repeated as a check constraint on
+`content_approvals`, and both layers are deliberate: the constraint proves a row breaking the
+rule cannot exist, and the code below turns a client-fixable mistake into a documented 422
+instead of a 500.
+
+| Status | Code | When |
+|---|---|---|
+| 409 | `APPROVAL_NOT_PENDING` | Approving or rejecting a project that is not awaiting a decision. `meta.state` names where it actually is. Deciding twice lands here, which is what makes a replayed decision unable to record a second one. |
+| 422 | `APPROVAL_REASON_REQUIRED` | A rejection with no reason. §21.2's set is closed *and* mandatory; without this the enum would be optional in practice. |
+| 422 | `APPROVAL_REASON_NOT_ALLOWED` | An approval carrying a rejection reason. |
+| 422 | `APPROVAL_NOTE_REQUIRED` | Rejecting for `other` without the free note §21.2 makes mandatory. A closed set with an escape hatch that explains nothing is a closed set with a hole in it. |
+| 422 | `APPROVAL_NOTE_NOT_ALLOWED` | A note on an approval. The note explains a rejection; allowing one elsewhere would open a second, unreviewed place for tenant prose to accumulate. |
+| 422 | `APPROVAL_NOTE_INVALID` | The note exceeds `MAX_REJECTION_NOTE_CHARS` (2 000) or contains a null character. The **only** two things done to it — it is the tenant's prose, stored as written, and neither normalization nor the fabrication detector runs over it. |
+| 409 | `REVISION_NOT_REQUESTED` | Asking for a revision on a project that was not rejected. A revision answers a decision. |
+| 422 | `REVISION_FIELDS_REQUIRED` | A revision naming no field. The pure classifier answers `MAJOR` for the empty set, so a request that got through would cost two units of allowance for saying nothing. |
+| 409 | `REVISION_QUOTA_EXHAUSTED` | §12.3's allowance is spent. `meta` carries the quota, what is used and what this revision would cost. The way forward is a **new project**, which is new credit — said in the detail rather than left to be inferred, because the alternative reads like a bug. |
+
+Cancellation reuses `PROJECT_TRANSITION_NOT_ALLOWED` (409) rather than adding a code of its own:
+cancelling a finished project is exactly "a transition §20 does not draw from here", and that is
+also the first of the two independent reasons a duplicate cancel cannot refund twice — the second
+being that `resolve_settlement` answers `ALREADY_APPLIED` on a settled reservation.
+
+Two more terminal `failure_code` values join the project table above. Neither means the system
+broke, which is why they are separate codes rather than an absent one — `failure_code` is what
+the ledger classifies a settlement by:
+
+| Code | Meaning |
+|---|---|
+| `PROJECT_CANCELLED` | The customer withdrew the project. The hold is released in the same transaction unless a preview had already been delivered, in which case §12.7 had already consumed it and the customer has the preview. |
+| `PROJECT_ABANDONED` | `content.project.sweep` withdrew a project that waited on a person past `LIFECYCLE_ABANDONED_PROJECT_AGE_SECONDS`. Like the abandoned-run codes above, nobody observed this one end. |
+
+Both classify as `UNCLASSIFIED` in `entitlement.ledger.FAILURE_CLASSES` and therefore refund,
+which is the correct outcome today — no preview was delivered, so §12.7 has nothing to consume.
+Giving customer withdrawal a `FailureClass` of its own is a one-line change in that file and
+belongs with whoever next owns it; it would not change any behaviour now.
+
 ## Entitlement and the credit ledger (PRD §12.4, §12.7, §12.8 — slice W20)
 
 | HTTP | Code | Meaning |

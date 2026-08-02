@@ -32,6 +32,160 @@
         "title": "AiDisclosureState",
         "type": "string"
       },
+      "ApprovalDecision": {
+        "description": "What happened to a preview that needed a decision.\n\n`AUTO_APPROVED` is a decision with no actor, and it is recorded exactly like the other two.\nA policy that did not ask for approval is the reason a video went out unreviewed, and a\nsystem that records only the approvals a human gave cannot answer \"who let this through?\".",
+        "enum": [
+          "approved",
+          "auto_approved",
+          "rejected"
+        ],
+        "title": "ApprovalDecision",
+        "type": "string"
+      },
+      "ApprovalDecisionRequest": {
+        "additionalProperties": false,
+        "description": "An approver's answer about one preview (PRD §21.1, §21.2).\n\n`auto_approved` is deliberately not expressible: it is what the *policy* decided when nobody\nwas asked, and a client that could claim it would be claiming a decision nobody made. The\nrequest carries `approved` as a boolean for the same reason — two values, no third.",
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RejectionReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "approved"
+        ],
+        "title": "ApprovalDecisionRequest",
+        "type": "object"
+      },
+      "ApprovalPolicy": {
+        "description": "PRD §21.1's seven policies, verbatim.\n\nA policy is a *setting*, which is why this is an enum and not seven code paths. The value a\nproject was created under is stored on the project rather than read live: a policy changed\nnext week must not change what was required of a preview produced today.",
+        "enum": [
+          "always",
+          "campaign_only",
+          "price_or_discount_only",
+          "ads_only",
+          "first_n_contents",
+          "low_confidence_only",
+          "never_within_guardrails"
+        ],
+        "title": "ApprovalPolicy",
+        "type": "string"
+      },
+      "ApprovalResponse": {
+        "description": "One recorded decision.\n\nThis is the **only** surface the free note appears on, and it is reached by a member of the\ntenant that wrote it, through a tenant-scoped query, holding `business.read`.",
+        "properties": {
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ApprovalDecision"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/ApprovalPolicy"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RejectionReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "render_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Render Id"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "decision",
+          "policy",
+          "rejection_reason",
+          "note",
+          "render_id",
+          "actor_user_id",
+          "created_at"
+        ],
+        "title": "ApprovalResponse",
+        "type": "object"
+      },
+      "ApprovalsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ApprovalsResponse",
+        "type": "object"
+      },
       "AssetResponse": {
         "properties": {
           "business_id": {
@@ -2154,6 +2308,16 @@
         "additionalProperties": false,
         "description": "Which scenario, which target profile, and which verified records it may draw on.\n\nThe same shape as a script request plus the render profile, and for the same reason: a\nproject is a sequence of the writes the individual endpoints already accept, so it can carry\nno field they refuse. There is no text here, no price and no date.\n\n`source_asset_ids` may be empty. That is not an oversight — it is PRD §20's `WAITING_MEDIA`:\na project can be planned before the footage exists, and the sequencer parks it until media\nis attached.",
         "properties": {
+          "approval_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "campaign_offer_id": {
             "anyOf": [
               {
@@ -2218,7 +2382,15 @@
           "qc_failed",
           "retry_requested",
           "retry_started",
-          "step_failed"
+          "step_failed",
+          "approval_required",
+          "auto_approved",
+          "approved",
+          "rejected",
+          "revision_scoped_to_script",
+          "revision_scoped_to_voice",
+          "revision_scoped_to_timeline",
+          "cancelled"
         ],
         "title": "ProjectEvent",
         "type": "string"
@@ -2273,6 +2445,9 @@
       },
       "ProjectResponse": {
         "properties": {
+          "approval_policy": {
+            "$ref": "#/components/schemas/ApprovalPolicy"
+          },
           "business_id": {
             "format": "uuid",
             "title": "Business Id",
@@ -2323,6 +2498,18 @@
             "title": "Id",
             "type": "string"
           },
+          "preview_delivered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Delivered At"
+          },
           "product_id": {
             "anyOf": [
               {
@@ -2372,6 +2559,18 @@
           "requires_human_review": {
             "title": "Requires Human Review",
             "type": "boolean"
+          },
+          "revision_quota": {
+            "title": "Revision Quota",
+            "type": "integer"
+          },
+          "revision_quota_used": {
+            "title": "Revision Quota Used",
+            "type": "integer"
+          },
+          "revisions_requested": {
+            "title": "Revisions Requested",
+            "type": "integer"
           },
           "scenario_code": {
             "$ref": "#/components/schemas/ScenarioCode"
@@ -2448,6 +2647,11 @@
           "requires_human_review",
           "recommended_path",
           "failure_code",
+          "approval_policy",
+          "revision_quota",
+          "revision_quota_used",
+          "revisions_requested",
+          "preview_delivered_at",
           "created_at",
           "updated_at"
         ],
@@ -2455,7 +2659,7 @@
         "type": "object"
       },
       "ProjectState": {
-        "description": "PRD §20's states, up to the point slice 2E is responsible for.\n\nThe diagram continues past `PREVIEW_READY` into approval, scheduling and publishing. Those\nare slice 2F and Phase 4; adding them here as unreachable values would put states in the\ndatabase that nothing can produce and nothing can consume.",
+        "description": "PRD §20's states, up to the point slice 2F is responsible for.\n\nThe diagram continues past approval into scheduling and publishing. Those are slice 2G and\nPhase 4; adding them here as unreachable values would put states in the database that nothing\ncan produce and nothing can consume. `APPROVED` and `CANCELLED` are the two documented\nextensions — see the module docstring for why each exists.",
         "enum": [
           "planned",
           "waiting_media",
@@ -2466,8 +2670,12 @@
           "rendering",
           "quality_check",
           "preview_ready",
+          "waiting_approval",
+          "revision_requested",
+          "approved",
           "failed",
-          "retrying"
+          "retrying",
+          "cancelled"
         ],
         "title": "ProjectState",
         "type": "string"
@@ -2754,6 +2962,23 @@
         ],
         "title": "ReadyHealthResponse",
         "type": "object"
+      },
+      "RejectionReason": {
+        "description": "PRD §21.2's ten reasons, closed.\n\nClosed because these are the dimension the product learns along, and a free-text reason is\na dimension with one value per customer. §21.2's own sentence — the reasons may become model\nlearning data but stay specific to the user — is only expressible over a closed set; that\naggregation is explicitly *not* built here (see the module docstring of `approval_service`).",
+        "enum": [
+          "wrong_product",
+          "wrong_price",
+          "wrong_cut",
+          "off_brand_tone",
+          "unsuitable_voice",
+          "unsuitable_music",
+          "wrong_length",
+          "low_quality",
+          "new_concept",
+          "other"
+        ],
+        "title": "RejectionReason",
+        "type": "string"
       },
       "RemediationPath": {
         "description": "PRD §19.4's \"QC başarısızsa\" list, plus `none` for a report with nothing to fix.\n\nThese are *suggestions*. Nothing in this slice executes one: automatic re-render, scene\nsubstitution, provider switching and attempt limits are slice 2E's, because that is where a\nloop can be bounded.",
@@ -3116,6 +3341,130 @@
         ],
         "title": "ReservationStatus",
         "type": "string"
+      },
+      "RevisionClass": {
+        "description": "What a revision costs. §21.3's small/large split, and nothing else.",
+        "enum": [
+          "minor",
+          "major"
+        ],
+        "title": "RevisionClass",
+        "type": "string"
+      },
+      "RevisionField": {
+        "description": "What the customer wants different. PRD §21.3's two lists, as one closed vocabulary.\n\nOne vocabulary rather than two because the *user* names a field and the *code* names the\nclass: a request that carried its own class would let \"this is only a small change\" be an\nassertion rather than a consequence, which is precisely the judgement §21.3 hands to the\nrules engine.",
+        "enum": [
+          "cta",
+          "headline",
+          "single_cut",
+          "voice",
+          "music",
+          "caption_style",
+          "content_type",
+          "product",
+          "concept",
+          "duration_class"
+        ],
+        "title": "RevisionField",
+        "type": "string"
+      },
+      "RevisionRequest": {
+        "additionalProperties": false,
+        "description": "What should be different (PRD §21.3).\n\nThe client names *fields* and never a class: §21.3 hands the small/large judgement to the\nrules engine, and a request that carried its own class would let \"this is only a small\nchange\" be an assertion rather than a consequence.",
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionField"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Fields",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "title": "RevisionRequest",
+        "type": "object"
+      },
+      "RevisionResponse": {
+        "description": "One revision request, with what the rules engine made of it.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "quota_cost": {
+            "title": "Quota Cost",
+            "type": "integer"
+          },
+          "quota_used_after": {
+            "title": "Quota Used After",
+            "type": "integer"
+          },
+          "requested_by_user_id": {
+            "format": "uuid",
+            "title": "Requested By User Id",
+            "type": "string"
+          },
+          "revision_class": {
+            "$ref": "#/components/schemas/RevisionClass"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RevisionScope"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "fields",
+          "revision_class",
+          "scope",
+          "quota_cost",
+          "quota_used_after",
+          "requested_by_user_id",
+          "created_at"
+        ],
+        "title": "RevisionResponse",
+        "type": "object"
+      },
+      "RevisionScope": {
+        "description": "The earliest pipeline stage a revision invalidates.\n\nDeliberately not the same axis as `RevisionClass`. The class is a price and the scope is a\nrestart point, and PRD §21.3 fixes only the first: the CTA is listed as a small revision, and\nthe CTA text is still resolved into the script document (`SlotKind.CTA`) and spoken by the\nvoiceover, so the small revision has to restart at the script. Deriving one from the other\nwould make either the price or the restart point wrong.",
+        "enum": [
+          "script",
+          "voice",
+          "timeline"
+        ],
+        "title": "RevisionScope",
+        "type": "string"
+      },
+      "RevisionsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RevisionsResponse",
+        "type": "object"
       },
       "ScenarioCode": {
         "description": "PRD §14's scenario catalogue, opened one entry at a time.\n\nOnly §14.1's daily product reel exists today. A scenario is not a label: each one implies\nrequired inputs, selection rules and quality checks (§14's common contract), so adding a\nvalue here without those is how a scenario becomes a lie.",
@@ -6087,6 +6436,387 @@
         ]
       }
     },
+    "/v1/businesses/{business_id}/content/projects/{project_id}/approvals": {
+      "get": {
+        "description": "Every decision made about this project, including the ones the policy made itself",
+        "operationId": "list_project_approvals_v1_businesses__business_id__content_projects__project_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Approvals",
+        "tags": [
+          "content"
+        ]
+      },
+      "post": {
+        "description": "Approve or reject a preview (PRD §21). Requires the approver's permission",
+        "operationId": "decide_project_v1_businesses__business_id__content_projects__project_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Project",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/projects/{project_id}/cancel": {
+      "post": {
+        "description": "Withdraw a project that has not finished, releasing any credit it still holds\n\nNo `Idempotency-Key`, for the reason `attach_media` has none: the state machine is the\nidempotency. A replay finds a cancelled project — which is terminal — and is refused with\n`PROJECT_TRANSITION_NOT_ALLOWED`, so a duplicate delivery cannot refund twice.",
+        "operationId": "cancel_project_v1_businesses__business_id__content_projects__project_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Project",
+        "tags": [
+          "content"
+        ]
+      }
+    },
     "/v1/businesses/{business_id}/content/projects/{project_id}/media": {
       "post": {
         "description": "Give a project waiting on footage the assets it was waiting for\n\nNo `Idempotency-Key`, and that is the considered answer rather than an omission: this is a\nguarded transition, not a create. A duplicate delivery finds the project already past\n`WAITING_MEDIA` and is refused with `PROJECT_TRANSITION_NOT_ALLOWED`, so replaying it cannot\napply twice and cannot produce a second anything. The state machine is the idempotency.",
@@ -6211,6 +6941,268 @@
           }
         ],
         "summary": "Attach Project Media",
+        "tags": [
+          "content"
+        ]
+      }
+    },
+    "/v1/businesses/{business_id}/content/projects/{project_id}/revisions": {
+      "get": {
+        "description": "Every revision asked for on this project, with its class, scope and quota cost",
+        "operationId": "list_project_revisions_v1_businesses__business_id__content_projects__project_id__revisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Revisions",
+        "tags": [
+          "content"
+        ]
+      },
+      "post": {
+        "description": "Say what should change after a rejection, and restart the pipeline where it matters\n\nConsumes revision allowance (§12.3), never credit: the reservation this project opened at\ncreation covers every step and every render it will ever run (K4).",
+        "operationId": "request_project_revision_v1_businesses__business_id__content_projects__project_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "business_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Business Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "RFC 9457 Problem Details response."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Project Revision",
         "tags": [
           "content"
         ]

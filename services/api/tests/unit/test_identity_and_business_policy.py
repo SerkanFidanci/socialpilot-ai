@@ -108,12 +108,37 @@ def test_every_role_is_mapped_in_the_permission_table() -> None:
         assert isinstance(permits(role, Permission.BUSINESS_READ), bool)
 
 
-def test_approver_holds_no_permission_yet() -> None:
-    """Approver exists as a role but grants nothing until the Phase 2 approval sources exist.
+def test_approver_holds_exactly_the_ability_to_decide() -> None:
+    """Slice 2F is the phase the approver role was waiting for — and it gets one ability.
 
-    The danger is not creating the role; it is creating it and silently granting breadth. Every
-    permission in the catalogue must be denied to approver today.
+    The danger was never creating the role; it is creating it and silently granting breadth.
+    Until PRD §21's approval sources existed the role held nothing at all, and the test that
+    pinned that has become this one: the approver may read the business and decide whether
+    content goes out, and everything else in the catalogue is still denied. Producing content in
+    particular — an approver signs, it does not write.
     """
 
+    allowed = {Permission.BUSINESS_READ, Permission.CONTENT_APPROVE}
     for permission in Permission:
-        assert not permits(BusinessRole.APPROVER, permission)
+        assert permits(BusinessRole.APPROVER, permission) is (permission in allowed)
+    assert not permits(BusinessRole.APPROVER, Permission.CONTENT_GENERATE)
+
+
+def test_only_the_approver_line_may_decide_and_only_producers_may_generate() -> None:
+    """PRD §4's two lines, checked against each other rather than one at a time.
+
+    Owner and admin hold both because they supervise; editor produces and cannot sign; approver
+    signs and cannot produce; viewer does neither. Written as one table so that widening either
+    permission has to be a deliberate edit here, not a side effect somewhere else.
+    """
+
+    expected = {
+        BusinessRole.OWNER: (True, True),
+        BusinessRole.ADMIN: (True, True),
+        BusinessRole.EDITOR: (True, False),
+        BusinessRole.APPROVER: (False, True),
+        BusinessRole.VIEWER: (False, False),
+    }
+    for role, (generates, approves) in expected.items():
+        assert permits(role, Permission.CONTENT_GENERATE) is generates
+        assert permits(role, Permission.CONTENT_APPROVE) is approves

@@ -45,6 +45,7 @@ from app.infrastructure.media.fake_video_understanding import (
 from app.infrastructure.render import create_qc_probe, create_render
 from app.infrastructure.storage import create_storage
 from app.modules.content.project_service import (
+    AbandonedProjectSweeper,
     AbandonedRunSweeper,
     ContentProjectAdvanceService,
     ContentProjectReservationProbe,
@@ -191,6 +192,15 @@ class WorkerContext:
         """Settle `pending` provider runs nobody will ever come back to. No ports at all."""
 
         return AbandonedRunSweeper(session, self.settings)
+
+    def abandoned_project_sweeper(self, session: AsyncSession) -> AbandonedProjectSweeper:
+        """Withdraw projects nobody ever came back to, and hand the credit back (PRD §21, §12.7).
+
+        No capability port either. It cancels and refunds, which are both things this codebase
+        already knows how to do; what the sweep adds is noticing that nobody is coming.
+        """
+
+        return AbandonedProjectSweeper(session, self.settings)
 
     def entitlement_sweeper(self, session: AsyncSession) -> AbandonedReservationSweeper:
         """Release credit holds whose work can no longer settle them.

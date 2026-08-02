@@ -53,8 +53,10 @@ from app.modules.content.lifecycle import (
     normalize_scene_tag,
 )
 from app.modules.content.models import (
+    ContentApproval,
     ContentProject,
     ContentProjectTransition,
+    ContentRevision,
     ContentScript,
     ContentTimeline,
     PromptTemplate,
@@ -109,8 +111,10 @@ class ContentRepository:
 
     def add(
         self,
-        value: ContentProject
+        value: ContentApproval
+        | ContentProject
         | ContentProjectTransition
+        | ContentRevision
         | ContentScript
         | ContentTimeline
         | RenderOutput
@@ -371,6 +375,110 @@ class ContentRepository:
             .limit(1)
         )
         return cast(ContentProject | None, await self._session.scalar(statement))
+
+    # --- approvals and revisions (PRD §21) --------------------------------------------------
+
+    async def list_approvals(self, business_id: UUID, project_id: UUID) -> list[ContentApproval]:
+        """Every decision made about one project, in order. Bounded by the revision quota."""
+
+        statement: Select[tuple[ContentApproval]] = (
+            select(ContentApproval)
+            .where(
+                ContentApproval.business_id == business_id,
+                ContentApproval.project_id == project_id,
+            )
+            .order_by(ContentApproval.sequence)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def latest_approval(self, business_id: UUID, project_id: UUID) -> ContentApproval | None:
+        """The decision a revision request is answering, if there is one."""
+
+        statement: Select[tuple[ContentApproval]] = (
+            select(ContentApproval)
+            .where(
+                ContentApproval.business_id == business_id,
+                ContentApproval.project_id == project_id,
+            )
+            .order_by(ContentApproval.sequence.desc())
+            .limit(1)
+        )
+        return cast(ContentApproval | None, await self._session.scalar(statement))
+
+    async def next_approval_sequence(self, business_id: UUID, project_id: UUID) -> int:
+        statement = select(func.max(ContentApproval.sequence)).where(
+            ContentApproval.business_id == business_id,
+            ContentApproval.project_id == project_id,
+        )
+        return (await self._session.scalar(statement) or 0) + 1
+
+    async def list_project_revisions(
+        self, business_id: UUID, project_id: UUID
+    ) -> list[ContentRevision]:
+        """§21.3's revision requests. Named apart from `list_revisions`, which is a *timeline*
+        lineage: two different things are called a revision in this module and conflating the
+        queries would be worse than the longer name."""
+
+        statement: Select[tuple[ContentRevision]] = (
+            select(ContentRevision)
+            .where(
+                ContentRevision.business_id == business_id,
+                ContentRevision.project_id == project_id,
+            )
+            .order_by(ContentRevision.sequence)
+        )
+        return list((await self._session.scalars(statement)).all())
+
+    async def next_revision_sequence(self, business_id: UUID, project_id: UUID) -> int:
+        statement = select(func.max(ContentRevision.sequence)).where(
+            ContentRevision.business_id == business_id,
+            ContentRevision.project_id == project_id,
+        )
+        return (await self._session.scalar(statement) or 0) + 1
+
+    async def delivered_project_count(self, business_id: UUID, *, excluding: UUID) -> int:
+        """How many of this tenant's projects have already produced a preview.
+
+        The dimension §21.1's `first_n_contents` counts along. Counted from
+        `preview_delivered_at` rather than from the state, because a project that was delivered
+        and then cancelled still happened — "the first three contents" is about how much of this
+        business's output a person has seen, not about how many projects are currently open.
+
+        The project being judged is excluded: it has just set its own stamp, and counting itself
+        would make `first_n_contents = 1` never ask for anything.
+        """
+
+        statement = select(func.count()).where(
+            ContentProject.business_id == business_id,
+            ContentProject.id != excluding,
+            ContentProject.preview_delivered_at.is_not(None),
+        )
+        return int(await self._session.scalar(statement) or 0)
+
+    async def claim_abandoned_projects(
+        self, *, states: Sequence[ProjectState], older_than: datetime, limit: int
+    ) -> list[ContentProject]:
+        """Projects parked on a person since before `older_than`, locked for update.
+
+        Not tenant-scoped, and that is the exception this class documents rather than hides: a
+        maintenance sweep runs in a worker with no user and no business behind it, so scoping it
+        to a tenant would mean it could only ever reconcile a tenant somebody named. Every other
+        statement here takes `business_id`.
+
+        `SKIP LOCKED` and a bounded batch, following the two sweeps already in this codebase.
+        """
+
+        statement: Select[tuple[ContentProject]] = (
+            select(ContentProject)
+            .where(
+                ContentProject.state.in_(tuple(states)),
+                ContentProject.state_entered_at < older_than,
+            )
+            .order_by(ContentProject.state_entered_at, ContentProject.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
+        return list((await self._session.scalars(statement)).all())
 
     # --- abandoned provider runs -----------------------------------------------------------
 

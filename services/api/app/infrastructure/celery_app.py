@@ -64,11 +64,17 @@ def create_celery_app(settings: Settings) -> Celery:
                 "task": "content.project.drain",
                 "schedule": settings.celery_beat_media_drain_interval_seconds,
             },
-            # The one entry here with no event behind it, and it cannot have one: nothing emits
-            # "a process died mid-call", which is the condition this sweep exists to notice.
+            # The two entries here with no event behind them, and neither can have one: nothing
+            # emits "a process died mid-call" or "a customer stopped caring", which are exactly
+            # the conditions these sweeps exist to notice. A tick is the only thing that can
+            # observe an absence.
             "sweep-abandoned-runs": {
                 "task": "content.pending.sweep",
                 "schedule": settings.celery_beat_pending_sweep_interval_seconds,
+            },
+            "sweep-abandoned-projects": {
+                "task": "content.project.sweep",
+                "schedule": settings.celery_beat_project_sweep_interval_seconds,
             },
             # Reconciliation over a settlement that is already atomic: the transaction that ends
             # a project also closes its credit hold, so this tick exists for the one case that

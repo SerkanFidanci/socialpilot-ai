@@ -44,6 +44,21 @@ transition table beside it is §20's closing sentence — every transition recor
 why — kept as its own queryable surface rather than folded into the audit log, because the
 question it exists to answer ("where did this project get stuck?") is a walk over one project's
 history while the audit log is a stream over everything a tenant did.
+
+Slice 2F adds `content_approvals` and `content_revisions` (PRD §21, migration `0018`). They are
+two tables rather than one because they are two acts by two roles: an approver decides, and an
+editor then says what should be different. Folding the rejection reason and the changed fields
+into one row would force both to happen at once and would put an approver's judgement and an
+editor's request behind the same authorization.
+
+`content_approvals.note` is the one column in this module that holds a **tenant's own prose**.
+§21.2 allows a free note beside the closed reason and makes it mandatory for `other`. It is
+stored and it is never logged, never put in an error body, never merged into a prompt, and never
+scanned by the fabrication detector — that detector exists to stop a *model* inventing a price,
+and a customer writing what the price should be is telling us something true about their own
+catalogue. §21.2's closing sentence ("kullanıcıya özel kalmalıdır") is why the row carries
+`business_id` even though `project_id` already implies it: any future aggregation has to be
+expressible as a tenant-scoped query, and this slice performs none.
 """
 
 from __future__ import annotations
@@ -70,6 +85,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.modules.content.approval import (
+    ApprovalDecision,
+    ApprovalPolicy,
+    RejectionReason,
+    RevisionClass,
+    RevisionScope,
+)
 from app.modules.content.lifecycle import ProjectEvent, ProjectState
 from app.modules.content.qc import QcRunStatus, QcVerdict, RemediationPath
 from app.modules.content.render import AiDisclosureState, ProvenanceState, RenderProfile
@@ -436,7 +458,7 @@ class ContentProject(Base):
             "ix_content_projects_due",
             "next_check_at",
             "id",
-            postgresql_where=text("state NOT IN ('preview_ready', 'failed')"),
+            postgresql_where=text("state NOT IN ('approved', 'failed', 'cancelled')"),
         ),
     )
 
@@ -493,9 +515,36 @@ class ContentProject(Base):
 
     render_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     step_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Set when QC said `needs_review`, or when the project failed and a person has to look. Slice
-    # 2F's approval flow reads it; nothing in this slice acts on it.
+    # Set when QC said `needs_review`, or when the project failed and a person has to look. It is
+    # also `never_within_guardrails`' guardrail signal: a project nobody could verify is exactly
+    # the one that policy refuses to let through unseen.
     requires_human_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # --- approval and revision (PRD §21, slice 2F) ------------------------------------------
+    # The §21.1 policy this project was opened under, captured rather than looked up. A tenant
+    # that loosens its policy next month must not retroactively change what was required of a
+    # preview produced today — the same reason a reservation stores the point-table version it
+    # was priced at. §12.2 puts this on a subscription item; that arrives with Phase 3, and
+    # until then the value comes from the request or the deployment default.
+    approval_policy: Mapped[ApprovalPolicy] = mapped_column(
+        _enum(ApprovalPolicy, "content_approval_policy")
+    )
+    # §12.3's "üç revizyon", frozen onto the project for the same reason as the policy above.
+    revision_quota: Mapped[int] = mapped_column(Integer, nullable=False)
+    # How many revisions were asked for, and what they cost. Two numbers rather than one because
+    # they answer different questions: the count is what makes each revision's sub-calls
+    # idempotently distinct, and the weighted total is what §12.3's allowance is spent from
+    # (a major revision costs two, because it buys a fresh script generation).
+    revisions_requested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revision_quota_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # When this project first reached `preview_ready` — i.e. the moment PRD §12.7 says the credit
+    # is consumed. It is a stored fact rather than a state test because `preview_ready` is no
+    # longer terminal: a project that got its preview and then failed a revision must still
+    # settle as delivered, or the ledger would be asked to refund a preview the customer already
+    # has and would refuse the contradiction.
+    preview_delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # What slice 2D suggested, recorded even when this slice cannot carry it out. A project that
     # failed with `alternative_scene` is a queryable backlog for 2F/2G rather than a lost note.
     recommended_path: Mapped[RemediationPath] = mapped_column(
@@ -562,6 +611,118 @@ class ContentProjectTransition(Base):
     reason: Mapped[str | None] = mapped_column(String(96), nullable=True)
     actor_user_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ContentApproval(Base):
+    """One decision about one preview (PRD §21.1, §21.2).
+
+    Rows are appended, never updated: an approval that was later withdrawn is two rows, and a
+    project rejected twice has two reasons. The table is the answer to "who let this out, and
+    under which policy" — which is a question an automatic approval has to answer too, so
+    `AUTO_APPROVED` is a decision here with a null actor rather than an absent row.
+
+    `note` is the tenant's own words (§21.2's free text, mandatory when the reason is `other`).
+    Three constraints below say what may accompany what, so a row that claims a reason without a
+    rejection, or `other` without an explanation, cannot exist even if a service forgot to check.
+    """
+
+    __tablename__ = "content_approvals"
+    __table_args__ = (
+        UniqueConstraint("project_id", "sequence", name="uq_content_approval_sequence"),
+        Index("ix_content_approvals_project", "business_id", "project_id", "sequence"),
+        Index("ix_content_approvals_business_created", "business_id", "created_at", "id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    project_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    decision: Mapped[ApprovalDecision] = mapped_column(
+        _enum(ApprovalDecision, "content_approval_decision")
+    )
+    # The policy that asked for this decision — or, for an automatic approval, the policy that
+    # decided nobody had to be asked. Stored per decision because a project can be rejected,
+    # revised and judged again, and the policy is read afresh each time.
+    policy: Mapped[ApprovalPolicy] = mapped_column(_enum(ApprovalPolicy, "content_approval_policy"))
+    rejection_reason: Mapped[RejectionReason | None] = mapped_column(
+        _enum(RejectionReason, "content_rejection_reason"), nullable=True
+    )
+    # Untrusted tenant prose. Never logged, never in an error body, never in a prompt.
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The render this decision was made about. `RESTRICT`, like every produced artefact: an
+    # approval whose subject is gone is a claim nobody can check.
+    render_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("render_outputs.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    # Null exactly when the decision was automatic. PRD §4's approver is the only role that can
+    # fill it, which the service enforces and the constraint below makes structurally visible.
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ContentRevision(Base):
+    """One revision request (PRD §21.3): what should change, what it cost, where it restarts.
+
+    `fields` is a JSONB list of `RevisionField` values rather than a child table for the same
+    reason a voiceover's segments are: it is written and read as a set inside one transaction and
+    its shape is a contract, not a query surface. What is *not* in JSONB is everything a later
+    question filters on — the class, the scope and the quota arithmetic.
+
+    `quota_used_after` is a running total stored beside the delta on purpose, and it is the one
+    place this module keeps a derived number. The entitlement ledger deliberately does not
+    (ADR-017): its balance is a sum over entries, and a stored total that disagreed with them
+    could not be adjudicated. Here the opposite holds — the quota is a small per-project counter
+    whose authority is the project row itself, and this column is the receipt showing what the
+    counter read after each request, so "which revision used up the allowance" is answerable
+    without replaying the classifier over historical field sets.
+    """
+
+    __tablename__ = "content_revisions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "sequence", name="uq_content_revision_sequence"),
+        Index("ix_content_revisions_project", "business_id", "project_id", "sequence"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    business_id: Mapped[UUID] = _business_id()
+    project_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The approval this revision answers. Nullable only because the decision row could in
+    # principle be absent for a project revised outside the reject path; today it is always set.
+    approval_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("content_approvals.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    revision_class: Mapped[RevisionClass] = mapped_column(
+        _enum(RevisionClass, "content_revision_class")
+    )
+    scope: Mapped[RevisionScope] = mapped_column(_enum(RevisionScope, "content_revision_scope"))
+    quota_cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    quota_used_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

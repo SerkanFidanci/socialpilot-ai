@@ -1006,12 +1006,13 @@ def test_only_content_producing_roles_may_generate() -> None:
             tenant.generate(headers=auth("s-approver", "approver@example.com")).status_code == 403
         )
 
-        # A viewer may still read what an editor produced; an approver holds no permission yet.
+        # A viewer may still read what an editor produced, and so may an approver: slice 2F
+        # gave that role `business.read` because it has to see the words it is signing off.
         script_id = editor.json()["id"]
         path = f"/v1/businesses/{tenant.business_id}/scripts/{script_id}"
         assert client.get(path, headers=auth("s-viewer", "viewer@example.com")).status_code == 200
         assert (
-            client.get(path, headers=auth("s-approver", "approver@example.com")).status_code == 403
+            client.get(path, headers=auth("s-approver", "approver@example.com")).status_code == 200
         )
 
 

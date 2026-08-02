@@ -101,7 +101,166 @@ Gerçek karar çıkarsa `ADR-XXX-<konu>.md`; numarayı PM verir.
 
 ## Rapor
 
-_(yürüten oturum doldurur — şablon: [README.md](README.md))_
+## Rapor — 2026-08-02 · Opus 5 / high
+
+**Dal:** `slice/2f-approval-revision` · **Commit'ler:** TBD · **Durum:** tamamlandı
+
+### Yapılanlar
+
+**§21 onay sistemi.** Yedi politika `content_projects.approval_policy`'de **veri** olarak duruyor;
+`approval.requires_approval(politika, bağlam)` saf ve total, ve her politika **yalnızca kendi
+boyutunu** okuyor. Her politikanın guardrail ihlalinde de tetiklemesi kulağa güvenli geliyordu ve
+değildi: VLM disabled olduğu için her render `needs_review`, dolayısıyla evrensel bir guardrail
+kaçışı yedi politikayı birbirinin aynısı yapar ve müşterinin ayarını süse çevirirdi. Politika
+canlı okunmuyor — projeye yazılıyor, çünkü gelecek ay gevşetilen bir ayar bugünkü ön izlemede
+neyin gerektiğini geriye dönük değiştirmemeli.
+
+**§21.2 ret nedenleri.** On neden kapalı enum; `other` notu zorunlu kılıyor, nedensiz bir ret
+`APPROVAL_REASON_REQUIRED` ile reddediliyor. Not iki yere gidiyor: satır ve aynı tenant'ın okuması.
+Dört check constraint neyin neye eşlik edebileceğini şemada tekrarlıyor.
+
+**§21.3 revizyon.** Sınıf ve yeniden başlangıç noktası **iki ayrı** total fonksiyon (aşağıda
+"Açıkça belirtmem gerekenler" 2). Kota küçük 1 / büyük 2, allowance projeye yazılıyor; bitince
+`REVISION_QUOTA_EXHAUSTED`. Revizyon `render_attempts`'i sıfırlıyor ve adım idempotency anahtarı
+revizyonu adlandırıyor (`project:{id}:r{n}:script`) — aksi hâlde ikinci `scripting` koşusu ilk
+senaryoyu yeniden oynatır, yani müşteriye reddettiği şeyi geri verirdi.
+
+**Durum makinesi.** `WAITING_APPROVAL`, `REVISION_REQUESTED` + iki belgeli genişletme
+(`APPROVED`, `CANCELLED`). `PREVIEW_READY` **artık terminal değil** ama hâlâ ücretlendirme
+noktası: `preview_delivered_at` §12.7'nin anını damgalıyor ve ondan sonraki her sonuç
+`DELIVERED`. Bu damga olmasaydı, iyi bir ön izlemeden sonra düşen bir revizyon zaten teslim
+edilmiş ön izleme için iade isterdi; defter bunu çelişki sayıp reddeder ve proje kilitlenirdi.
+
+**W20'nin açığı kapandı.** İptal terminal olmayan her durumdan yapılabiliyor ve sıralayıcının
+çağırdığı **aynı** `settle`'ı çağırıyor — `entitlement/service.py` hiç değişmedi, çünkü W20'nin
+`released` yolu tam olarak bunun için yazılmıştı. Ayrıca `content.project.sweep`: yalnızca
+`WAITING_MEDIA`'daki yaşlanmış projeleri geri çekiyor, çünkü bir kişiyi bekleyen üç durumdan
+sadece o hâlâ tüketilmemiş kredi tutuyor.
+
+**Yetki.** `Permission.CONTENT_APPROVE` eklendi; `approver` rolü W10'dan beri boş duran yetki
+kümesini aldı (`business.read` + `content.approve`). PRD §4'ün çizgisi: editor üretir ve
+imzalayamaz, approver imzalar ve üretemez. **Kendi ürettiğini onaylama kısıtı yok** (PM kararı 7).
+
+### Kapsam dışı bıraktıklarım ve nedeni
+
+- `SCHEDULED` ve sonrası, planlayıcı, mağaza/ödeme — 2G / Phase 3 / Phase 4.
+- `script.py`, `text_normalization.py`, `qc.py` — dokunulmadı.
+- Ret nedenlerinden model eğitimi / çapraz-tenant toplama — **yapılmadı** (PM kararı 3). Satırlar
+  `business_id` taşıyor ki ileride tenant-kapsamlı sorgu olarak yazılabilsin.
+- `docs/index.md`, `docs/adr/README.md` — indekse eklenmedi (aşağıda 8).
+- **ADR yazılmadı.** Bu slice'ın kararlarının hepsi ya PRD §21'in doğrudan uygulanması ya da
+  `lifecycle.py`/`approval.py` docstring'lerinde ve `content-render.md`'de gerekçesiyle yazılmış
+  yerel tasarım kararları. PM ADR'lık bir karar görürse numarayı verir; aday: "onay politikası
+  projeye yazılır, canlı okunmaz" ve "`PREVIEW_READY` terminal değil ama ücretlendirme noktası".
+
+### İlan dışı dokunuşlar (protokol gereği bildiriliyor)
+
+| Dosya | Neden |
+|---|---|
+| `app/modules/businesses/policy.py` | Kabul kriteri 8 (`approver` onaylar) `Permission` enum'una satır eklemeden **karşılanamaz**; modülün kendi `CLAUDE.md`'si "yeni yetki eklemek `Permission` enum'una satır eklemektir, politika tablosu tek yerde" diyor. W20'nin aynı dosyaya ilan dışı dokunuşunun emsali var. Değişiklik iki satır + `approver` kümesi. |
+| `app/modules/businesses/CLAUDE.md`, `app/worker/CLAUDE.md` | AGENTS.md: "modülün dosyaları değişince o modülün `CLAUDE.md`'si aynı değişiklikte güncellenir". |
+| `docs/generated/openapi.json`, `docs/api/endpoints.md` | Kabul kriteri 9 (`make generate-docs` + commit). Üretilmiş dosyalar. |
+
+Uçuşta başka WO olmadığı için çakışma riski yok. `entitlement/service.py` ilan edilmişti ama
+**değiştirilmedi** — gerek kalmadı.
+
+### Doğrulama
+
+Araç zinciri (hepsi `sp-w21` konteynerinde, Linux): Python 3.13.14 · mypy 2.3.0 · ruff 0.16.0 ·
+pytest 9.1.1 · FFmpeg 7.1.5 · PostgreSQL 17 + MinIO (compose, `COMPOSE_PROJECT_NAME=sp-w21`,
+host portları ayrı).
+
+| Kontrol | Sonuç |
+|---|---|
+| `ruff check` (app/tests/migrations/scripts) | ✅ All checks passed |
+| `ruff format --check` | ✅ 222 files already formatted |
+| `mypy .` (strict) | ✅ 209 dosya, 0 hata |
+| `pytest` (RUN_INTEGRATION_TESTS=1, STORAGE_ADAPTER=s3) | ✅ **1375 passed, 0 failed, 0 skipped** (832 s) |
+| migration `0018` up → down → up | ✅ tek head (`0018_approval_and_revision`) |
+| `make check-openapi` (kontrat yeniden üretildi ve commit'li) | ✅ 45 → **50 endpoint** |
+
+Kabul kriterleri:
+
+1. **Migration up/down/up, tek head** ✅. `content_project_state`/`content_project_event`
+   **değiştirilerek** (rename→create→cast→drop) genişletildi, `ADD VALUE` ile değil: Alembic
+   migration'ı tek transaction'da koşuyor ve PostgreSQL aynı transaction'da eklenen enum değerinin
+   *kullanılmasını* reddediyor — yeni check constraint'ler ve index predicate'i tam olarak bunu
+   yapıyor. `state::text` ile kaçmak claim'in kısmi index'ini işe yaramaz hâle getirirdi (W19'un
+   ölçtüğü şey). Downgrade veri kaybedecekse **reddediyor** (0011 deseni).
+2. **Uçtan uca** ✅ `test_a_preview_is_rejected_revised_re_rendered_and_then_approved`: gerçek
+   PostgreSQL + MinIO + FFmpeg üzerinde `PLANNED` → … → `WAITING_APPROVAL` → ret (neden + not) →
+   küçük revizyon → **ikinci render** → onay. Her geçiş kayıtlı; iki `approval_required`, bir
+   `rejected`, bir `revision_scoped_to_timeline`, son `approved`.
+3. **Politika total** ✅ 7 politika × 32 bayrak kombinasyonu × 4 sayaç = 896 kombinasyon
+   tüketiliyor; her politikanın yalnızca kendi boyutunu okuduğu ayrıca test ediliyor.
+   `low_confidence_only`'nin bugün hep onay istemesi **gerekçesiyle** pinli (birim + entegrasyon).
+4. **Revizyon sınıflandırması total** ✅ alan sözlüğünün **1024 alt kümesinin tamamı**; boş küme
+   `MAJOR` + `SCRIPT`.
+5. **Kota** ✅ küçük 1, büyük 2, bitince 409; **kredi hiç hareket etmiyor** — uçtan uca testte
+   iki render + iki ön izleme için tek `consume`, iade yok, tek rezervasyon `consumed`.
+   `approval_service.py` içinde `EntitlementService` **yok** (K4 yapısal).
+6. **İptal + iade** ✅ `WAITING_MEDIA`'da iptal → rezervasyon `released`, bakiye eski hâline;
+   defterde `consume` + `refund`, toplam 0. İkinci iptal 409 ve **hiçbir şey yazılmıyor**.
+   Terk edilmiş proje süpürücüsü yaşlanmışı iptal edip sağlıklıyı bırakıyor, ikinci geçişte
+   `None` dönüyor.
+7. **Not gizliliği** ✅ sentinel not, süreçteki **herhangi bir handler'ın** render edebileceği tüm
+   log kayıtlarında, `audit_logs.metadata`, `content_project_transitions.reason`,
+   `idempotency_keys.response_body` ve `outbox_events.payload` içinde **yok**; `content_approvals`
+   satırında var ve sahibi API'den okuyabiliyor. AST testi `note`'un yalnızca doğrulamaya ve satır
+   yazımına gittiğini, tokenize testi modülde `prompt`/`input_data` sözcüğünün geçmediğini zorluyor.
+8. **Roller** ✅ approver onaylar/reddeder; editor revizyon ister ve **onaylayamaz** (403); viewer
+   yalnızca okur; başka tenant **404** (varlık ifşası yok). Idempotency kanonik gövdeden: aynı
+   gövde replay, farklı gövde 409 — hem karar hem revizyon için.
+9. `make verify` yeşil; **1375 test** (taban 1325, +50); kontrat yeniden üretilip commit'li ve
+   yeniden üretim deterministik (ikinci koşu aynı diff'i veriyor); modül `CLAUDE.md`'leri güncel.
+10. Bu rapor. **Merge edilmedi, dalda.**
+
+### Açıkça belirtmem gerekenler
+
+1. **§20'nin çizmediği iki durum eklendi ve 2G'nin kenarı değişiyor.** `APPROVED`: §20
+   `WAITING_APPROVAL → SCHEDULED` çiziyor ama planlayıcı 2G'de, ve onaylanmış bir proje
+   `WAITING_APPROVAL`'da beklerse "karar bekleyenler" listesi kararı zaten verilmişleri içerir —
+   ürünün sorduğu soru cevapsız kalır. **2G `APPROVED → SCHEDULED` kenarını eklemeli**, §20'nin
+   oku bu durumun adlandırıldığı hâli. `CANCELLED`: müşterinin vazgeçmesini `FAILED` saymak
+   `failure_code`'u (iadeyi sınıflandıran alan) yalanlardı.
+2. **PM kararı 4'ün ifadesine bir düzeltme.** "Küçük revizyon → senaryo yeniden üretilmez" CTA ve
+   başlık için **doğru değil**: ikisinin metni senaryo dokümanına çözülüyor ve seslendirme onu
+   konuşuyor, dolayısıyla timeline'dan başlamak hâlâ eski sözü söyleyen bir videonun yeni
+   kurgusunu üretirdi. Uygulamada **sınıf** (§21.3: küçük, kota 1) ile **yeniden başlangıç**
+   (senaryo) ayrı iki total fonksiyon; ikisi de veri tablosu, PM katılmazsa `_FIELD_SCOPES`'ta tek
+   satır. Ses → `VOICE_GENERATION`, kesit/müzik/altyazı → `TIMELINE_BUILDING` PM'in dediği gibi.
+3. **`ads_only` bugün hiçbir şeye onay istemiyor**, çünkü §14 henüz reklam senaryosu açmadı.
+   `_ADVERTISING_SCENARIOS` tabloyu `ScenarioCode`'un tamamı üzerinde yazıyor ve totalliği import
+   anında zorluyor, yani ilk reklam senaryosu eklendiğinde cevap **unutularak** verilemez.
+4. **Onay politikası proje bazında saklanıyor, işletme bazında değil.** PM "işletme başına ayar"
+   dedi; §12.2 onu abonelik kalemine koyuyor ve o Phase 3. Bugün: varsayılan config'de
+   (`CONTENT_APPROVAL_POLICY_DEFAULT=always`), create isteği override edebiliyor, ve seçilen değer
+   projeye yazılıyor. Projede saklamak zaten daha iyi provenance (sonradan gevşetilen bir politika
+   geçmişi değiştiremez); eksik olan yalnızca "işletmenin varsayılanı" katmanı ve o Phase 3'ün
+   abonelik kalemiyle geliyor.
+5. **`PROJECT_CANCELLED` / `PROJECT_ABANDONED` defterde `UNCLASSIFIED`.** `FAILURE_CLASSES`
+   `entitlement/ledger.py`'de ve bu WO onu ilan etmedi. Bugünkü davranış **doğru** (üç sınıf da
+   iade ediyor, ön izleme teslim edilmediyse iade doğru cevap). Müşteri vazgeçmesine kendi
+   `FailureClass`'ını vermek o dosyada tek satır ve bir sonraki sahibinin işi; bugün hiçbir
+   davranışı değiştirmez.
+6. **Büyük revizyonun 2 kotası bir tahmindir.** Gerekçe senaryo yeniden üretiminin gerçek sağlayıcı
+   maliyeti doğurması; sayı W08 benchmark'ı ölçünce yeniden değerlendirilmeli. Config'de olmasının
+   sebebi bu (`REVISION_QUOTA_MAJOR_COST`).
+7. **Terk edilmiş proje süpürücüsü tek durum tarıyor: `WAITING_MEDIA`.** Bir kişiyi bekleyen üç
+   durumdan yalnızca o **tüketilmemiş kredi tutuyor**; `WAITING_APPROVAL` ve `REVISION_REQUESTED`
+   teslim edilmiş bir ön izlemenin arkasında ve orada otomatik iptal, müşterinin zaten sahip
+   olduğu işi yok edip hiçbir şey geri kazandırmazdı. Onları da süpürmek istenirse ürün kararı.
+8. **`docs/index.md` ve `docs/adr/README.md` indekslerine eklenmedi** (kapsam dışı, PM'e bildiriliyor).
+   Eklenecekler: `approval.py`/`approval_service.py` yeni dosyalar, `content-render.md` yeni bölüm.
+9. **Bekleyen bir durumun yoklama aralığı uzatıldı.** `WAITING_MEDIA`/`WAITING_APPROVAL`/
+   `REVISION_REQUESTED`'da hiçbir şey değişmeyecek — değiştiğinde outbox olayı yazılıyor —
+   dolayısıyla `_due_after` bu durumlarda `LIFECYCLE_POLL_SECONDS` yerine `LIFECYCLE_LEASE_SECONDS`
+   kullanıyor. Öncesinde `WAITING_MEDIA`'daki bir proje aylarca 15 saniyede bir claim harcıyordu.
+10. **Uygulama sırasında bulunan bir hata** (test yakaladı, düzeltildi): `_settle` durum
+    değiştirdikten *sonra* sorgu atıyordu; satır o an geçici olarak
+    `ck_content_project_due_matches_state` ile çelişiyor (terminal durum, hâlâ eski due time) ve
+    autoflush onu doğrudan kısıta yolluyordu. Onay sırası artık döngüden önce okunuyor. Bu, 2E'de
+    de vardı ama `PREVIEW_READY` terminal olduğu için tetiklenemiyordu.
 
 ## Doğrulama
 
