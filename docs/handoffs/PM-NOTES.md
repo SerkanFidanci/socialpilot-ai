@@ -12,7 +12,16 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**2026-08-02 · W21 merge edildi — Phase 2'nin 2A–2F'si tamam. head `0018`, dal koşusu 1375 pytest (PM tam koşusu sürüyor).**
+**2026-08-02 · W22 merge edildi — 🎉 PHASE 2 TAMAM (2A–2G). head `0019`, dal koşusu 1459 pytest (PM tam koşusu sürüyor).**
+
+**⚠️ EN ÖNEMLİ AÇIK: W20, W21, W22 bağımsız doğrulanmadı.** Codex turu **iki kez** tetiklendi, iki kez de hiçbir çıktı bırakmadı (dosyaların "Doğrulama" bölümleri hâlâ boş şablon, hiçbir dalda kayıt yok). Bu üç dilim kredi defterini (para), onay/revizyon akışını ve planlayıcıyı kapsıyor — yani **Phase 2'nin en riskli üç parçası kendi yazarından başka kimse tarafından denenmedi.** Codex çalışmıyorsa alternatif: aynı düşman prompt'unu **ayrı bir Claude oturumuna** ver (farklı oturum = farklı bağlam; "testin yazarı denetleyicisi olamaz" ilkesi korunur). Bu kapanmadan Phase 3'e geçmek doğru olmaz.
+
+**W22 (planlayıcı):** planlama **para harcayamıyor** — `ObligationPlanningService`'in yapıcısında entitlement portu yok, yani kural sınıf imzasıyla korunuyor. Obligation→proje tek kredi harcayan adım. Sıralayıcı her adayın gerekçesini döndürüyor ("neden bu içerik?"). Obligation *yaratan* veya *dönüştüren* HTTP ucu bilerek yok: ikisi de saatin ve worker'ın işi, ikinci bir yol §13.2'nin sırasıyla er geç çelişirdi.
+
+**Sıradaki kuyruk:** doğrulama turu (yukarıdaki üç dilim) → **W06** (PG18+Valkey+backup runner, D1 kapısını kapatır) → **Phase 3** (mağaza/ödeme — **K1 kullanıcı kararı gerekiyor**) → **Phase 4 yayınlama** (Meta App Review başvurusunu **erken aç**, haftalarla ölçülen dış süreç). Ayrıca bekleyen: W08 benchmark'ının gerçek sağlayıcılarla koşulması (kullanıcının API anahtarları), puan tablosunun ve büyük-revizyon kotasının o ölçüme göre kalibrasyonu.
+
+<!-- arşiv -->
+**~~2026-08-02 · W21 merge edildi (1375 pytest, head 0018).~~**
 
 **⚠️ Codex'in W20 turu tetiklendi ama HİÇBİR ÇIKTI BIRAKMADI** — W20 dosyasının "Doğrulama" bölümü hâlâ boş şablon, hiçbir dalda da yok. Yani W20 (kredi defteri) **bağımsız doğrulanmamış** durumda ve para muhasebesi tutan tek modül o. Bir sonraki turda mutlaka koşulmalı.
 
