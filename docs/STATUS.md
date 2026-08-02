@@ -6,7 +6,7 @@
 |---|---|
 | `main` | W01→W19 + düzeltme turu 4 merge edildi. **Codex W19 turu temiz döndü** (bulgu yok). Sırada: **W20 (kredi defteri + hak tüketimi)** ve 2F onay/revizyon |
 | Alembic head | `0016_content_projects` (tek head; zincir 0001→0016, up/down/up doğrulandı) |
-| Backend doğrulama | **1237 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu sürüyor, dal koşusu 1237) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
+| Backend doğrulama | **1237 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu, temiz ortamda teyit edildi) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |
 | Compose | api + postgres + redis + minio healthy · **servis bazlı CPU/RAM limitleri ve öncelik sırası** (ADR-013) · proje adı `COMPOSE_PROJECT_NAME` ile ayrılabilir |
 | Açık dal | `main` + aktif work order dalları (başka dal bırakılmaz) |
