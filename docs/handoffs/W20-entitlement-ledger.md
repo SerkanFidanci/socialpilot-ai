@@ -388,3 +388,10 @@ davranmasına bırakıyor. Bu test oturumu uygulama veya test kaynak kodunu değ
 | Saldırı | Sonuç | Kanıt / sınır |
 |---|---|---|
 | İki gerçek HTTP `create_project` transaction'ı ile son kredi yarışı | **Tamamlanamadı** | Yeni tenant/marka/ürün verisi API ile üretildi ve `asyncio.gather` için iki bağımsız POST hazırlandı; bu sürümde brand GET yanıtından CTA kimliğini alma varsayımı geçersiz çıktı (`string indices must be integers`). Project POST'ları ve istenen create-project sonucu çalışmadı. Önceki `reserve` seviyesi yarışı bu kayıt için kanıt sayılmadı. |
+
+### Saldırı 2 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| Teknik hata sonrası paralel çifte iade | Servis yolunda engellendi | Yeni tenantta 5 kredi → reserve → `ABANDONED/PROJECT_RENDER_FAILED` ile `released`; ardından aynı `settle(RELEASE)` iki ayrı transaction'dan `asyncio.gather` ile tekrarlandı. SQL sonucu: `refunds=1`, defter toplamı `5` — verilen krediyi aşmadı. |
+| İptal ucu + süpürücüyle aynı reservation'a ikinci iade | **Tamamlanamadı** | Bu çapraz yol gerçek `content_project` ve onun iptal/süpürücü bağlamını gerektirir. Saldırı 1'deki proje oluşturma HTTP veri hazırlığı tamamlanamadığından bu alt yol çalıştırılmadı; yukarıdaki servis-replay sonucu onun yerine kanıt sayılmaz. |
