@@ -2,7 +2,7 @@
 
 **Kapsam:** append-only kredi defteri, rezervasyon yaşam döngüsü, PRD §12.4'ün sürümlenmiş puan
 tablosu, bakiye türetimi, eşzamanlılık kilidi ve tüketimin içerik projesine bağlandığı nokta.
-Slice 2E'nin ikinci yarısı (W20) getirdi.
+Slice 2E'nin ikinci yarısı (W20) getirdi; **W23 bütünlüğü çağırandan şemaya taşıdı.**
 **İlgili:** PRD §12.4, §12.7, §12.8, §32.1, §32.4 →
 [50-subscription-entitlement.md](../product/requirements/50-subscription-entitlement.md) ·
 [90a-database-design.md](../product/requirements/90a-database-design.md) §28.6/§28.9 ·
@@ -64,8 +64,9 @@ index'i altında. Sistemde `balance` adında bir sütun yoktur ve entegrasyon te
 sorgunun farklı yazabileceği bir `CASE` yoktur.
 
 PRD §32.4'ün taslağındaki `balance_after` **uygulanmadı** — gerekçe ADR-017'de. §32.4'ün asıl
-talebi ("Negatif bakiye oluşmamalıdır") kaybolmadı: `trg_credit_ledger_non_negative` her negatif
-satırda toplamı yeniden hesaplar ve reddeder.
+talebi ("Negatif bakiye oluşmamalıdır") kaybolmadı: `trg_credit_ledger_insert_guard` her negatif
+satırda toplamı yeniden hesaplar ve reddeder — **ve W23'ten beri bunu eşzamanlı yazarlara karşı
+da yapıyor** (aşağıda).
 
 ## Açık rezervasyon bakiyeyi şimdiden düşürür
 
@@ -93,6 +94,50 @@ işletmeye yapılan alakasız her yazmayı da bloke ederdi.
 Ölçüm yerine kanıt: son krediyi hedefleyen iki eşzamanlı `create_project`'ten tam olarak biri
 başarılı oluyor, üç kredilik bakiyeye giden on eşzamanlı istekten tam üçü — gerçek PostgreSQL,
 gerçek paralel transaction (`tests/integration/test_entitlement.py`).
+
+## Bütünlük çağıranda değil şemada (W23)
+
+Yukarıdaki her şey **`EntitlementService` üzerinden gidildiğinde** doğruydu. Bağımsız doğrulama
+turu (2026-08-03) servisten geçmeyen üç yol buldu ve üçü de para yazabiliyordu. W23 korumayı
+şemaya taşıdı; mantık değişmedi.
+
+**Defterin insert muhafızı** (`trg_credit_ledger_insert_guard`) her *tahsilat* satırında sırayla:
+
+1. `pg_advisory_xact_lock(20020, hashtext(business_id))` — **uygulamanın aldığı kilidin aynısı**.
+   Servis yolunda zaten tutulduğu için bedelsiz (advisory lock transaction içinde yeniden
+   girilebilir); kilidi hiç duymamış bir yazar için gerçek bir bariyer.
+2. `entitlement_ledger_anchors` satırını damgalar. **Kilidi beklemek snapshot'ı ilerletmez:**
+   `REPEATABLE READ` bir yazar snapshot'ını `INSERT` başlarken alır, kuyrukta bekler, sonra
+   kazananı hâlâ içermeyen bir küme toplardı — kilit tek başına yetmiyor. Kazananın güncellediği
+   bir satırı güncellemek her izolasyon seviyesinin gördüğü tek çakışmadır: `READ COMMITTED`
+   bekler ve yeniden okur, katı seviyeler `40001` ile düşer.
+3. `SUM(delta_credits)` ve negatiflik kontrolü.
+
+Grant ve iade bu üçünü **atlar**: kredi ekleyen bir satır bakiyeyi negatife düşüremez, dolayısıyla
+sıraya sokulması gerekmez.
+
+Anchor satırı **veri tutmaz** — `last_write_at` hiçbir yerde okunmaz, bakiye değildir, sayaç
+değildir. ADR-017'nin "bakiye yalnızca girdilerde" kararı olduğu gibi duruyor; satırın tek işi
+*yazılmak*.
+
+**Tekillikler:**
+
+| Kısıt | Ne diyor | Neden |
+|---|---|---|
+| `uq_credit_ledger_reservation_entry` | rezervasyon başına her tipten **bir** satır | `uq_credit_ledger_idempotency` bir *tekrarı* eler; uydurulmuş anahtarlı ikinci iade para yaratırdı |
+| `ck_credit_ledger_refund_reserved` | iade bir rezervasyon adlandırır | rezervasyonsuz iade hem açıklanamaz hem de kısmi index'in NULL deliği |
+| iade tutarı = rezervasyonun tuttuğu (trigger) | tekillik *sayıyı*, bu *miktarı* sınırlar | kısmi iade bugün yok; toplam-formu üreticisi olmayan bir makine olurdu |
+| `uq_usage_reservations_standing_source` | iş birimi başına **ayakta bir** hak | `released` ayakta değil (iptal → yeniden başlatılabilir), `consumed` ayakta (K4 şemada) |
+| rezervasyon aynı tenant'ta (trigger) | defter satırı komşunun hakkını gösteremez | tenant izolasyonu sorguların değil tablonun özelliği |
+
+**Kilit sırası artık istisnasız:** önce tenant advisory lock, sonra rezervasyon satır kilidi.
+Süpürücü de buna uyuyor — adaylarını kilitsiz okur, sonra tenant tenant (sabit sırayla) önce
+kilidi sonra satırları alır. Eski sırası (önce satır) muhafız kilidi aldığı andan itibaren
+sonuçlandırmayla kilitlenebilirdi.
+
+**Bilinen sınır:** muhafız bir *trigger*'dır. `session_replication_role = replica` diyebilen bir
+**superuser** negatif bakiye korumasını kapatabilir (ölçüldü). Kısıtlar ve unique index'ler
+bundan etkilenmez — aynı denemede tetiklendiler. Üretimde uygulama rolü superuser olmamalıdır.
 
 ## Puan tablosu (§12.4)
 

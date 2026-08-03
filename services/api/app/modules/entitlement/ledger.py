@@ -222,6 +222,10 @@ ERROR_INSUFFICIENT_CREDITS = "ENTITLEMENT_INSUFFICIENT_CREDITS"
 ERROR_RESERVATION_CONFLICT = "ENTITLEMENT_RESERVATION_CONFLICT"
 ERROR_RESERVATION_NOT_FOUND = "ENTITLEMENT_RESERVATION_NOT_FOUND"
 ERROR_LEDGER_WOULD_GO_NEGATIVE = "ENTITLEMENT_LEDGER_WOULD_GO_NEGATIVE"
+# One unit of work carries one standing hold. Distinct from a replay, which is a success: the same
+# request asking again names the same idempotency key and gets the hold it already opened. This is
+# a *different* request asking to charge for work that is already paid for.
+ERROR_SOURCE_ALREADY_RESERVED = "ENTITLEMENT_SOURCE_ALREADY_RESERVED"
 
 # The failure code a swept reservation carries. Distinct from every settled failure above for the
 # same reason slice 2E's abandoned-run codes are: nobody observed this one end.
@@ -234,6 +238,7 @@ __all__ = [
     "ERROR_LEDGER_WOULD_GO_NEGATIVE",
     "ERROR_RESERVATION_CONFLICT",
     "ERROR_RESERVATION_NOT_FOUND",
+    "ERROR_SOURCE_ALREADY_RESERVED",
     "FAILURE_CLASSES",
     "REFUND_POLICY",
     "RESERVATION_ABANDONED",

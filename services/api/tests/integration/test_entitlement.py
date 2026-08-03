@@ -15,6 +15,14 @@ the lock.
 The constraint tests go through raw SQL on purpose. Their claim is that the *database* refuses
 these writes, so routing them through the service would only prove the service does not attempt
 them.
+
+The last section is slice W23, and it is the same idea taken to the end. Nobody sends raw SQL at
+our database; what those tests pin is what the *next* writer gets — Phase 3's store webhook,
+Phase 5's advertising accounting, a maintenance script written at two in the morning. None of
+them will know that a balance must be read under a tenant advisory lock, or that a refund's
+idempotency key has to be derived from the reservation it compensates. The three attacks an
+independent round landed on 2026-08-03 are reproduced there the way that round set them up: real
+parallel transactions, a barrier, and rows that satisfy every constraint slice W20 wrote.
 """
 
 from __future__ import annotations
@@ -55,6 +63,7 @@ from app.modules.entitlement.points import (
     ContentPointKind,
     PointTable,
 )
+from app.modules.entitlement.repository import ADVISORY_LOCK_NAMESPACE
 from app.modules.entitlement.service import AbandonedReservationSweeper, EntitlementService
 
 pytestmark = pytest.mark.integration
@@ -1105,3 +1114,522 @@ def test_the_sweep_ignores_a_hold_that_is_younger_than_the_threshold() -> None:
 
     assert sweep(settings) is None
     assert reservations_of(tenant.business_id)[0][1] == ReservationStatus.RESERVED.value
+
+
+# --- W23: the invariants belong to the schema ---------------------------------------------------
+
+
+CHARGE_SQL = (
+    "INSERT INTO credit_ledger (id, business_id, entry_type, delta_credits, points_table_version,"
+    " source_type, source_id, reservation_id, correlation_id, created_at)"
+    " VALUES (gen_random_uuid(), CAST(:b AS uuid), 'consume', :delta, 1, 'content_project',"
+    " CAST(:s AS uuid), CAST(:r AS uuid), 'hostile', now())"
+)
+
+REFUND_SQL = (
+    "INSERT INTO credit_ledger (id, business_id, entry_type, delta_credits, points_table_version,"
+    " source_type, source_id, reservation_id, idempotency_key, correlation_id, created_at)"
+    " VALUES (gen_random_uuid(), CAST(:b AS uuid), 'refund', :delta, 1, 'content_project',"
+    " CAST(:s AS uuid), CAST(:r AS uuid), :key, 'hostile', now())"
+)
+
+
+def raw_hold(tenant: Tenant, *, credits: int, source_id: str | None = None) -> tuple[str, str]:
+    """A reservation written straight into the table, satisfying every W20 constraint.
+
+    This is what the attacks need and what the service would never produce: a hold with no ledger
+    entry behind it, so the credit it names is still spendable. Returns `(reservation_id,
+    source_id)`.
+    """
+
+    reservation_id = str(uuid.uuid4())
+    source = source_id or str(uuid.uuid4())
+    execute(
+        "INSERT INTO usage_reservations (id, business_id, status, credits, points_table_version,"
+        " point_kind, source_type, source_id, idempotency_key, requested_by_user_id,"
+        " correlation_id, created_at, updated_at) VALUES (CAST(:id AS uuid), CAST(:b AS uuid),"
+        " 'reserved', :credits, 1, :kind, 'content_project', CAST(:s AS uuid), :key,"
+        " CAST(:u AS uuid), 'hostile', now(), now())",
+        id=reservation_id,
+        b=tenant.business_id,
+        credits=credits,
+        kind=ContentPointKind.STANDARD_REELS.value,
+        s=source,
+        key=f"raw-{reservation_id}",
+        u=tenant.user_id,
+    )
+    return reservation_id, source
+
+
+def charge_at_a_barrier(
+    charges: list[dict[str, Any]], *, isolation: str | None = None
+) -> list[Any]:
+    """Run every charge in its own real transaction, all released at the same instant.
+
+    One engine and one connection per charge, `BEGIN` before the barrier and `COMMIT` after the
+    insert, so the writes genuinely overlap. Returns one entry per charge: `None` for a commit,
+    the exception for a refusal.
+    """
+
+    async def one(barrier: asyncio.Barrier, charge: dict[str, Any]) -> Any:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        try:
+            async with engine.connect() as connection:
+                if isolation is not None:
+                    await connection.execution_options(isolation_level=isolation)
+                transaction = await connection.begin()
+                await barrier.wait()
+                try:
+                    await connection.execute(text(CHARGE_SQL), charge)
+                except Exception as error:  # noqa: BLE001 - the refusal is the result
+                    await transaction.rollback()
+                    return error
+                await transaction.commit()
+                return None
+        finally:
+            await engine.dispose()
+
+    async def run() -> list[Any]:
+        barrier = asyncio.Barrier(len(charges))
+        return list(await asyncio.gather(*(one(barrier, charge) for charge in charges)))
+
+    return asyncio.run(run())
+
+
+@requires_postgres
+def test_two_concurrent_raw_charges_cannot_drive_the_balance_below_zero() -> None:
+    """W20-F2, closed. The trigger's sum was right; what it lacked was an order to sum in.
+
+    Two separate transactions, both holding a valid reservation, both charging the whole balance,
+    both released at a barrier. Before W23 both committed and the derived balance was `-5`,
+    because a `BEFORE INSERT` trigger reading under READ COMMITTED cannot see the other
+    transaction's uncommitted row. It still cannot — it no longer has to, because the second
+    writer does not get to run its sum until the first has committed.
+    """
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-30", "owner30@entitlement.test"), "Barrier")
+        tenant.grant(REEL_CREDITS)
+    first, first_source = raw_hold(tenant, credits=REEL_CREDITS)
+    second, second_source = raw_hold(tenant, credits=REEL_CREDITS)
+
+    results = charge_at_a_barrier(
+        [
+            {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": first_source, "r": first},
+            {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": second_source, "r": second},
+        ]
+    )
+    refusals = [item for item in results if item is not None]
+    assert len(refusals) == 1, results
+    assert "negative" in str(refusals[0])
+    assert summed_balance(tenant.business_id) == 0
+
+
+@requires_postgres
+def test_eight_concurrent_raw_charges_spend_only_the_credit_that_exists() -> None:
+    """The same claim with the width turned up: the trigger's lock is a queue, not a coin flip."""
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-31", "owner31@entitlement.test"), "Stampede")
+        tenant.grant(REEL_CREDITS * 3)
+    holds = [raw_hold(tenant, credits=REEL_CREDITS) for _ in range(8)]
+
+    results = charge_at_a_barrier(
+        [
+            {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": source, "r": reservation}
+            for reservation, source in holds
+        ]
+    )
+    assert len([item for item in results if item is None]) == 3, results
+    assert len([item for item in results if item is not None]) == 5, results
+    assert summed_balance(tenant.business_id) == 0
+
+
+@requires_postgres
+@pytest.mark.parametrize("isolation", ["REPEATABLE READ", "SERIALIZABLE"])
+def test_a_stricter_isolation_level_is_not_a_way_around_the_guard(isolation: str) -> None:
+    """Attacking the fix: a snapshot older than the winner's commit must not become a licence.
+
+    Under `REPEATABLE READ` the loser's snapshot predates the winner's entry entirely, so a sum
+    taken from that snapshot could read the pre-charge balance. It does not, because the sum runs
+    in a trigger that only starts once the winner has committed — and a snapshot older than that
+    commit turns the write into a serialisation failure rather than a second charge. Either
+    refusal is a refusal; what must never happen is two commits.
+    """
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth(f"ent-o-{isolation[:4]}", f"{isolation[:4]}@ent.test"), "Snap")
+        tenant.grant(REEL_CREDITS)
+    first, first_source = raw_hold(tenant, credits=REEL_CREDITS)
+    second, second_source = raw_hold(tenant, credits=REEL_CREDITS)
+
+    results = charge_at_a_barrier(
+        [
+            {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": first_source, "r": first},
+            {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": second_source, "r": second},
+        ],
+        isolation=isolation,
+    )
+    assert len([item for item in results if item is None]) == 1, results
+    assert summed_balance(tenant.business_id) == 0
+
+
+@requires_postgres
+def test_neither_a_savepoint_nor_a_bulk_insert_smuggles_an_overdraft_past_the_guard() -> None:
+    """Attacking the fix from inside one transaction: batching, savepoints, and a rolled-back try.
+
+    A `BEFORE INSERT` row trigger sees each row on its own and sees the rows this transaction has
+    already written, so a batch is exactly as safe as the same rows one at a time — and a
+    savepoint that rolls a legal charge away gives the credit back rather than leaving a hole for
+    the next charge to fall through.
+    """
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-32", "owner32@entitlement.test"), "Batch")
+        tenant.grant(REEL_CREDITS)
+    first, first_source = raw_hold(tenant, credits=REEL_CREDITS)
+    second, second_source = raw_hold(tenant, credits=REEL_CREDITS)
+    one = {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": first_source, "r": first}
+    two = {"b": tenant.business_id, "delta": -REEL_CREDITS, "s": second_source, "r": second}
+
+    async def run() -> None:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        try:
+            async with engine.connect() as connection:
+                async with connection.begin():
+                    # Two charges in one statement: the second one's sum already contains the
+                    # first one's row, committed or not.
+                    with pytest.raises(DBAPIError, match="negative"):
+                        await connection.execute(text(CHARGE_SQL), [one, two])
+                async with connection.begin():
+                    savepoint = await connection.begin_nested()
+                    await connection.execute(text(CHARGE_SQL), one)
+                    await savepoint.rollback()
+                    with pytest.raises(DBAPIError, match="negative"):
+                        await connection.execute(
+                            text(CHARGE_SQL), two | {"delta": -REEL_CREDITS * 2}
+                        )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+    assert summed_balance(tenant.business_id) == REEL_CREDITS
+
+
+@requires_postgres
+def test_the_trigger_locks_the_same_thing_the_application_locks() -> None:
+    """The constant in the trigger body and the constant in Python are one fact in two places.
+
+    A trigger that locked a *different* key would serialise raw writers against each other and
+    against nobody else, and the whole fix would be a comment. There is no way to import Python
+    into a `plpgsql` body, so the next best thing is to read the installed definition back.
+    """
+
+    definition = query(
+        "SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = 'credit_ledger_guard_insert'"
+    )[0][0]
+    assert (
+        f"pg_advisory_xact_lock({ADVISORY_LOCK_NAMESPACE}, hashtext(NEW.business_id::text))"
+        in definition
+    )
+
+
+@requires_postgres
+def test_two_tenants_never_wait_on_each_other_to_spend() -> None:
+    """The lock is per tenant, and a busy neighbour must not be able to stall anybody.
+
+    Both charges are released at the same barrier, against different businesses. If the trigger
+    locked something global rather than the tenant, one of these would have to wait for the
+    other; both commit, and each balance lands where its own arithmetic puts it.
+    """
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        left = Tenant(client, auth("ent-owner-33", "owner33@entitlement.test"), "Left")
+        right = Tenant(client, auth("ent-owner-34", "owner34@entitlement.test"), "Right")
+        left.grant(REEL_CREDITS)
+        right.grant(REEL_CREDITS)
+    left_hold, left_source = raw_hold(left, credits=REEL_CREDITS)
+    right_hold, right_source = raw_hold(right, credits=REEL_CREDITS)
+
+    results = charge_at_a_barrier(
+        [
+            {"b": left.business_id, "delta": -REEL_CREDITS, "s": left_source, "r": left_hold},
+            {"b": right.business_id, "delta": -REEL_CREDITS, "s": right_source, "r": right_hold},
+        ]
+    )
+    assert results == [None, None]
+    assert summed_balance(left.business_id) == 0
+    assert summed_balance(right.business_id) == 0
+
+
+@requires_postgres
+def test_a_second_refund_cannot_be_written_under_an_invented_key() -> None:
+    """W20-F1, closed. Deduplicating on the key deduplicates retries; it does not stop invention.
+
+    The canonical key `refund:<reservation>` already made a *replay* harmless. What it could not
+    do is refuse the same refund under a key nobody had seen before, which is money created from
+    nothing. Uniqueness now names the reservation and the entry type, so a second refund has
+    nowhere to go regardless of what the writer calls it.
+    """
+
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-35", "owner35@entitlement.test"), "Twice")
+        tenant.grant(50)
+        project_id = tenant.create_project().json()["id"]
+    settle(
+        settings,
+        business_id=tenant.business_id,
+        source_id=project_id,
+        outcome=SourceOutcome.ABANDONED,
+        failure_code="PROJECT_STATE_TIMEOUT",
+    )
+    reservation_id = str(reservations_of(tenant.business_id)[0][0])
+    assert summed_balance(tenant.business_id) == 50
+
+    with pytest.raises(IntegrityError, match="uq_credit_ledger_reservation_entry"):
+        execute(
+            REFUND_SQL,
+            b=tenant.business_id,
+            s=project_id,
+            r=reservation_id,
+            delta=REEL_CREDITS,
+            key=f"whatever-{uuid.uuid4().hex}",
+        )
+    assert summed_balance(tenant.business_id) == 50
+
+    # And the canonical replay still behaves the way slice W20 built it: no new row, no error.
+    settle(
+        settings,
+        business_id=tenant.business_id,
+        source_id=project_id,
+        outcome=SourceOutcome.ABANDONED,
+        failure_code="PROJECT_STATE_TIMEOUT",
+    )
+    assert len([entry for entry in entries(tenant.business_id) if entry[0] == "refund"]) == 1
+    assert summed_balance(tenant.business_id) == 50
+
+
+@requires_postgres
+def test_a_refund_gives_back_what_the_hold_holds_and_nothing_else() -> None:
+    """Uniqueness alone bounds the *count* of refunds. This bounds the amount of the one."""
+
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-36", "owner36@entitlement.test"), "Inflated")
+        tenant.grant(50)
+        project_id = tenant.create_project().json()["id"]
+    reservation_id = str(reservations_of(tenant.business_id)[0][0])
+
+    with pytest.raises(DBAPIError, match="must return the"):
+        execute(
+            REFUND_SQL,
+            b=tenant.business_id,
+            s=project_id,
+            r=reservation_id,
+            delta=REEL_CREDITS * 100,
+            key=f"inflated-{uuid.uuid4().hex}",
+        )
+    assert summed_balance(tenant.business_id) == 50 - REEL_CREDITS
+
+
+@requires_postgres
+def test_a_refund_that_names_no_reservation_is_not_a_refund() -> None:
+    """The `NULL` that would have let the uniqueness above be satisfied a second time.
+
+    A partial unique index over `reservation_id` counts nothing where the column is null, so a
+    refund with no hold behind it would be both unlimited and unexplainable. Only a grant creates
+    credit from nowhere, and a grant says so in its type.
+    """
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-37", "owner37@entitlement.test"), "Unbacked")
+        tenant.grant(50)
+
+    with pytest.raises(IntegrityError, match="ck_credit_ledger_refund_reserved"):
+        execute(
+            "INSERT INTO credit_ledger (id, business_id, entry_type, delta_credits, source_type,"
+            " correlation_id, created_at) VALUES (gen_random_uuid(), CAST(:b AS uuid), 'refund',"
+            " 999, 'content_project', 'hostile', now())",
+            b=tenant.business_id,
+        )
+    assert summed_balance(tenant.business_id) == 50
+
+
+@requires_postgres
+def test_an_entry_cannot_borrow_another_tenants_reservation() -> None:
+    """Tenant isolation stops being a property of the queries and becomes one of the table.
+
+    Every repository statement is tenant-scoped, so this shape has no producer. It is refused
+    anyway: a refund pointing at a neighbour's hold would be credit in one ledger authorised by
+    another, and the query that would have caught it is the one a future writer forgets.
+    """
+
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        mine = Tenant(client, auth("ent-owner-38", "owner38@entitlement.test"), "MineW23")
+        theirs = Tenant(client, auth("ent-owner-39", "owner39@entitlement.test"), "TheirsW23")
+        mine.grant(50)
+        theirs.grant(50)
+        their_project = theirs.create_project().json()["id"]
+    their_hold = str(reservations_of(theirs.business_id)[0][0])
+
+    with pytest.raises(DBAPIError, match="another business"):
+        execute(
+            REFUND_SQL,
+            b=mine.business_id,
+            s=their_project,
+            r=their_hold,
+            delta=REEL_CREDITS,
+            key=f"borrowed-{uuid.uuid4().hex}",
+        )
+    assert summed_balance(mine.business_id) == 50
+
+
+def reserve_directly(
+    settings: Settings, tenant: Tenant, *, source_id: str, idempotency_key: str
+) -> Any:
+    """Call `reserve` the way a future module would, with no project route in the way."""
+
+    async def run() -> Any:
+        async with factory()() as session:
+            async with session.begin():
+                return await EntitlementService(session, settings).reserve(
+                    business_id=uuid.UUID(tenant.business_id),
+                    user_id=uuid.UUID(tenant.user_id),
+                    scenario_code=ScenarioCode.PRODUCT_REELS,
+                    profile=RenderProfile.INSTAGRAM_REELS_1080X1920,
+                    source_type=SOURCE_CONTENT_PROJECT,
+                    source_id=uuid.UUID(source_id),
+                    idempotency_key=idempotency_key,
+                    correlation_id="w23",
+                )
+
+    return asyncio.run(run())
+
+
+@requires_postgres
+def test_one_unit_of_work_cannot_be_charged_twice() -> None:
+    """W20-F3, closed, in the service and under it.
+
+    `create_project` derives the reservation's key from the project, so the external route never
+    asked for this. `reserve` itself did not refuse it, and "the caller happens not to do that" is
+    exactly the guarantee this slice exists to replace: a second key aimed at work that is already
+    paid for is a second charge for one delivery.
+    """
+
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-40", "owner40@entitlement.test"), "Once")
+        tenant.grant(50)
+        project_id = tenant.create_project().json()["id"]
+
+    with pytest.raises(ProblemException) as refused:
+        reserve_directly(
+            settings, tenant, source_id=project_id, idempotency_key=f"new-{uuid.uuid4().hex}"
+        )
+    assert refused.value.status == 409
+    assert refused.value.code == "ENTITLEMENT_SOURCE_ALREADY_RESERVED"
+    assert len(reservations_of(tenant.business_id)) == 1
+    assert summed_balance(tenant.business_id) == 50 - REEL_CREDITS
+
+    # And under the service, where the next writer will be.
+    with pytest.raises(IntegrityError, match="uq_usage_reservations_standing_source"):
+        raw_hold(tenant, credits=REEL_CREDITS, source_id=project_id)
+    assert len(reservations_of(tenant.business_id)) == 1
+
+
+@requires_postgres
+def test_work_whose_hold_was_refunded_can_be_charged_again() -> None:
+    """The other half of the same rule: `released` is not standing.
+
+    A cancelled project gives its credit back, and work that was never charged for in the end has
+    to be chargeable again — otherwise cancelling would be a one-way door. The settlement that
+    follows must find the *new* hold, not the refunded one it already finished with.
+    """
+
+    settings = config()
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-41", "owner41@entitlement.test"), "Restart")
+        tenant.grant(50)
+        project_id = tenant.create_project().json()["id"]
+    settle(
+        settings,
+        business_id=tenant.business_id,
+        source_id=project_id,
+        outcome=SourceOutcome.ABANDONED,
+        failure_code="PROJECT_STATE_TIMEOUT",
+    )
+    assert summed_balance(tenant.business_id) == 50
+
+    reopened = reserve_directly(
+        settings, tenant, source_id=project_id, idempotency_key=f"restart-{uuid.uuid4().hex}"
+    )
+    assert reopened.status is ReservationStatus.RESERVED
+    assert len(reservations_of(tenant.business_id)) == 2
+    assert summed_balance(tenant.business_id) == 50 - REEL_CREDITS
+
+    # The settlement is about the hold that stands, not the one that was handed back.
+    settle(
+        settings,
+        business_id=tenant.business_id,
+        source_id=project_id,
+        outcome=SourceOutcome.DELIVERED,
+        failure_code=None,
+    )
+    assert sorted(row[1] for row in reservations_of(tenant.business_id)) == [
+        ReservationStatus.CONSUMED.value,
+        ReservationStatus.RELEASED.value,
+    ]
+    assert summed_balance(tenant.business_id) == 50 - REEL_CREDITS
+
+
+@requires_postgres
+def test_the_sweep_releases_holds_for_several_tenants_in_one_pass() -> None:
+    """The sweep takes the tenant lock first and the rows second, and still sweeps everybody.
+
+    That order is what keeps it from deadlocking against a settlement now that the ledger's insert
+    trigger takes the same tenant lock. Doing it one tenant at a time must not quietly turn a
+    cross-tenant sweep into a single-tenant one, so this drives three at once.
+    """
+
+    settings = config()
+    fleet = []
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        for index in range(3):
+            tenant = Tenant(
+                client,
+                auth(f"ent-fleet-{index}", f"fleet{index}@entitlement.test"),
+                f"Fleet{index}",
+            )
+            tenant.grant(50)
+            fleet.append((tenant, tenant.create_project().json()["id"]))
+
+    for _, project_id in fleet:
+        execute("DELETE FROM content_projects WHERE id = CAST(:id AS uuid)", id=project_id)
+    execute("UPDATE usage_reservations SET created_at = now() - interval '30 days'")
+
+    assert sweep(settings) == {"examined": 3, "released": 3, "batch_full": 0}
+    for tenant, _ in fleet:
+        assert reservations_of(tenant.business_id)[0][1] == ReservationStatus.RELEASED.value
+        assert summed_balance(tenant.business_id) == 50
+    assert sweep(settings) is None
+
+
+@requires_postgres
+def test_a_grant_larger_than_any_integer_the_ledger_holds_is_refused_before_the_ledger() -> None:
+    """Criterion 8's overflow case: the refusal is a contract, not a driver exception.
+
+    `delta_credits` is a 32-bit integer. A number past that boundary has to come back as the same
+    request-validation answer every other malformed field gets — never as a database error, and
+    never as a row.
+    """
+
+    with TestClient(create_app(config()), raise_server_exceptions=False) as client:
+        tenant = Tenant(client, auth("ent-owner-44", "owner44@entitlement.test"), "Overflow")
+        for amount in (2**31, 2**63, 10**30):
+            refused = tenant.grant(amount)
+            assert refused.status_code == 400, refused.text
+            assert refused.json()["code"] == "REQUEST_VALIDATION_FAILED"
+        assert entries(tenant.business_id) == []
+        assert summed_balance(tenant.business_id) == 0

@@ -342,6 +342,7 @@ belongs with whoever next owns it; it would not change any behaviour now.
 |---:|---|---|
 | 402 | `ENTITLEMENT_INSUFFICIENT_CREDITS` | The tenant's derived balance is below what this generation costs, so the work is **not created**. `meta` carries `required_credits`, `available_credits`, `points_table_version` and `point_kind` — the price list in force is part of the answer, because "why did this cost five" has to be answerable after the prices move. Never another tenant's numbers: the balance is read under the authorized tenant. |
 | 409 | `ENTITLEMENT_RESERVATION_CONFLICT` | A settlement was applied to a reservation that had already settled **the other way** — one caller says the work delivered and another says it did not. Applying the *same* outcome twice is a replay and succeeds silently without writing an entry; only the contradiction is an error, because in an append-only ledger a second refund is permanent. |
+| 409 | `ENTITLEMENT_SOURCE_ALREADY_RESERVED` | A reservation was asked for work that already carries a hold that stands (slice W23). Not the replay case: a replay names the same idempotency key and is answered with the hold it already opened. This is a *different* key aimed at work already paid for, and answering it with a second charge is how decision K4 — a re-render buys nothing new — would quietly stop being true. `meta` carries the standing `reservation_id` and its status. A hold that was **refunded** does not stand, so cancelled work can be started again. |
 | 422 | `ENTITLEMENT_GRANT_INVALID` | A manual grant outside `ENTITLEMENT_MAX_GRANT_CREDITS`. Amounts that are not whole positive numbers are rejected earlier, by the request schema, as `REQUEST_VALIDATION_FAILED` (400) — a JSON float is refused rather than coerced, for the reason `core.money` documents. |
 
 Failure codes recorded on `usage_reservations.failure_code`, which is why a hold was released.
@@ -353,13 +354,23 @@ about the reason without either one restating it:
 | A content project's `failure_code` | The project failed and its hold was released in the same transaction. Every `PROJECT_*` code above appears here unchanged. |
 | `ENTITLEMENT_RESERVATION_ABANDONED` | The reconciliation sweep released a hold whose source no longer exists. Distinct from every settled failure for the same reason slice 2E's abandoned-run codes are: **nobody observed this one end**. In a healthy system this code is never written — settlement is atomic with the project's terminal transition — so its presence is a signal, not noise. |
 
-Two constraint violations reach the client as `500 INTERNAL_ERROR` and are listed here because
-they are the last line rather than an expected path. Both mean a code path bypassed the service:
+The constraint violations below reach the client as `500 INTERNAL_ERROR` and are listed here
+because they are the last line rather than an expected path. Every one of them means a code path
+bypassed the service — which, after slice W23, is a thing the database notices rather than a thing
+the caller is trusted not to do:
 
 | Constraint | What it refuses |
 |---|---|
-| `trg_credit_ledger_non_negative` | An entry that would take the tenant's balance below zero (PRD §32.4). The mechanism that normally prevents this is the tenant advisory lock; the trigger makes forgetting it fatal rather than expensive. |
+| `trg_credit_ledger_insert_guard` | An entry that would take the tenant's balance below zero (PRD §32.4). Before summing, a charge takes the tenant advisory lock the application takes *and* stamps the tenant's `entitlement_ledger_anchors` row — the lock orders concurrent writers, and the stamp makes that order visible to a writer whose snapshot predates it. The same guard refuses a refund that does not return exactly what its hold holds, and an entry naming another tenant's reservation. |
 | `trg_credit_ledger_append_only` | Any `UPDATE` or `DELETE` on `credit_ledger`. Corrections are new entries. |
+| `uq_credit_ledger_reservation_entry` | A second entry of the same type for one reservation — a second refund is money created from nothing. `uq_credit_ledger_idempotency` already refused a *replay*; this refuses the same write under a key the caller invented. |
+| `ck_credit_ledger_refund_reserved` | A refund that names no reservation: unexplainable, and the `NULL` that would let the uniqueness above be satisfied twice. |
+| `uq_usage_reservations_standing_source` | A second standing hold for one unit of work. The service answers this as `ENTITLEMENT_SOURCE_ALREADY_RESERVED` (409); reaching the index means the service was bypassed. |
+
+**Known limit.** The guard is a trigger, so a **superuser** can switch it off with
+`SET session_replication_role = replica` and write an overdraft; the constraints and unique
+indexes above are unaffected and still fire. There is no constraint form for a cross-row sum, so
+this is inherent — the answer is that the application's database role must not be a superuser.
 
 ## Content planner (PRD §13 — slice 2G)
 
