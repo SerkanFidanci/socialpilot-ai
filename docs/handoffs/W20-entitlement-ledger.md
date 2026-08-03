@@ -387,7 +387,7 @@ davranmasına bırakıyor. Bu test oturumu uygulama veya test kaynak kodunu değ
 
 | Saldırı | Sonuç | Kanıt / sınır |
 |---|---|---|
-| İki gerçek HTTP `create_project` transaction'ı ile son kredi yarışı | **Tamamlanamadı** | Yeni tenant/marka/ürün verisi API ile üretildi ve `asyncio.gather` için iki bağımsız POST hazırlandı; bu sürümde brand GET yanıtından CTA kimliğini alma varsayımı geçersiz çıktı (`string indices must be integers`). Project POST'ları ve istenen create-project sonucu çalışmadı. Önceki `reserve` seviyesi yarışı bu kayıt için kanıt sayılmadı. |
+| İki gerçek HTTP `create_project` transaction'ı ile son kredi yarışı | Engellendi | Yeni tenant, marka, ürün, CTA ve tam 5 krediyle iki ayrı `Idempotency-Key` altında gerçek Uvicorn HTTP isteği `asyncio.gather` ile gönderildi: HTTP `[201, 402]`; ikinci gövde `ENTITLEMENT_INSUFFICIENT_CREDITS`. Doğrudan SQL: `consume_count=1`, türetilen bakiye `0` (negatif değil). Önceki `reserve`-seviyesi yarışı bu sonucun yerine sayılmadı. |
 
 ### Saldırı 2 — 2026-08-03, `sp-verify`
 
@@ -395,3 +395,42 @@ davranmasına bırakıyor. Bu test oturumu uygulama veya test kaynak kodunu değ
 |---|---|---|
 | Teknik hata sonrası paralel çifte iade | Servis yolunda engellendi | Yeni tenantta 5 kredi → reserve → `ABANDONED/PROJECT_RENDER_FAILED` ile `released`; ardından aynı `settle(RELEASE)` iki ayrı transaction'dan `asyncio.gather` ile tekrarlandı. SQL sonucu: `refunds=1`, defter toplamı `5` — verilen krediyi aşmadı. |
 | İptal ucu + süpürücüyle aynı reservation'a ikinci iade | **Tamamlanamadı** | Bu çapraz yol gerçek `content_project` ve onun iptal/süpürücü bağlamını gerektirir. Saldırı 1'deki proje oluşturma HTTP veri hazırlığı tamamlanamadığından bu alt yol çalıştırılmadı; yukarıdaki servis-replay sonucu onun yerine kanıt sayılmaz. |
+
+### Saldırı 3 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| Doğrudan büyük negatif `consume` | Engellendi | Yeni tenantın 5 kredisine karşı, geçerli reservation FK'siyle `consume -99` ham SQL yazısı `IntegrityError` verdi; SQL toplamı `5` kaldı. Trigger devre dışı bırakılmadı. |
+| Append-only satırı `UPDATE` veya `DELETE` | Engellendi | Mevcut grant satırını güncelleme ve silme denemelerinin ikisi de `IntegrityError`; bakiye değişmedi. |
+| Aynı transaction'da çoklu negatif satır / `COPY` | Engellendi | Yeni iki geçerli `reserved` reservation ve ham `grant +5` ile aynı transaction içinde iki `consume -5` yazıldı: ikinci satırda `IntegrityError`, transaction geri alındı. Aynı iki kayıt `asyncpg.copy_records_to_table` ile `COPY` olarak da denendi: `CheckViolationError`. Son SQL: bakiye `5`, mevcut `consume` sayısı yalnız önceki gerçek proje tüketimi olan `1`; toplu yazım yeni harcama bırakmadı. |
+
+### Saldırı 4 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt |
+|---|---|---|
+| İkinci tokenla gerçek başka-tenant balance / ledger / reservations / grant | Engellendi — PM kararıyla kapandı | Dört uç da `404 BUSINESS_NOT_FOUND` verdi; uydurma business_id ile status ve hata kodu birebir aynı, gerçek `reservation_id` dönmedi. RFC 9457 `instance` içindeki istek URI'si ve saldırganın zaten gönderdiği `business_id`, PM kararına göre varlık ifşası/sızıntı değildir. |
+| Gerçek reservation kimliği sızıntısı | Engellendi | Aynı hata gövdelerinde gerçek `reservation_id` bulunmadı. |
+
+### Saldırı 5 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| Değişmeyen timeline ile saf yeniden render ve sürekli QC-failed otomatik retry | **Tamamlanamadı** | Gerçek `PREVIEW_READY` projesi, geçerli timeline ve render/QC artefakt zinciri bu turda kurulamadı. SQL'de ikinci consume/reservation veya retry başına kredi sonucu ölçülmedi; önceki iç-servis bulgusu bu saldırının kanıtı değildir. |
+
+### Saldırı 6 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| Proje rezervasyonu sonrası puan sürümü değişimi, iade ve fiyatlanmamış kombinasyon | **Tamamlanamadı** | Bu saldırının gerçek `create_project` + `PREVIEW_READY`/iade akışı için gerekli CTA/timeline verisi kurulamadı. Eski/yeni sürüm bakiyesi veya iade fiyatı bu turda ölçülmedi. |
+
+### Saldırı 7 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| Owner olmayan editor/approver/viewer grant'i ve dolaylı grant varyantları | **Kısmen tamamlandı** | `admin` rolüyle yapılan bağımsız grant denemesi önceki bu oturum kaydında `403 INSUFFICIENT_PERMISSION` verdi. Editor/approver/viewer token matrisi ile replay, negatif/sıfır/aşırı/ondalıklı grant varyantları bu turda henüz çalıştırılmadı; tamamlanmış sayılmaz. |
+
+### Saldırı 8 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| `PREVIEW_READY` sonrası iptal, süpürücü ve doğrudan settled-reservation iadesi | **Tamamlanamadı** | Gerçek başarılı proje/`PREVIEW_READY` zinciri kurulamadığından iptal ve süpürücü yolları ölçülmedi. Saldırı 2'deki `released` reservation replay'i, settled reservation için kanıt değildir. |
