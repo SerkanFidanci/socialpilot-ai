@@ -25,14 +25,38 @@ revizyon kotası (→ 2F), HTTP taşıma (→ `../../api/routes/entitlement.py`)
   transaction'ını açmaz**. Kontrolün ayrı commit edilmesi, iki isteğin de kontrolden geçmesi
   demektir; iş ile hakkın aynı transaction'da olması "işi var ama hakkı yok" anını
   ifade edilemez kılar.
-- **Sıralama: önce tenant kilidi, sonra satır kilidi.** `lock_tenant` transaction ömürlü bir
-  advisory lock'tur ve **bakiye okunmadan önce** alınır. Sonra alınırsa hiçbir şeyi kilitlemez.
-  Aynı sıra hem `reserve` hem `settle` içindedir, bu yüzden ikisi birbirini bekleyemez.
-  PostgreSQL varsayılan izolasyonu bunu yakalamaz: iki transaction da diğerinin okuduğu satırı
-  değiştirmiyor, tespit edilecek çakışma yok.
-- **Negatif bakiye veritabanında da imkânsız.** `trg_credit_ledger_non_negative` mekanizma değil
-  **yedektir**: kilidi unutan bir kod yolunu pahalı değil ölümcül yapar. Trigger yalnızca commit
-  edilmiş satırları görür; kesinliği kilitten gelir.
+- **Sıralama: önce tenant kilidi, sonra satır kilidi — istisnasız.** `lock_tenant` transaction
+  ömürlü bir advisory lock'tur ve **bakiye okunmadan önce** alınır. Sonra alınırsa hiçbir şeyi
+  kilitlemez. Aynı sıra `reserve`, `settle` **ve süpürücüde**dir; süpürücü adaylarını kilitsiz
+  okur, sonra tenant tenant (sabit sırayla) önce kilidi sonra satırları alır. Ters sırayla
+  çalışan bir yol, defterin insert trigger'ı da aynı kilidi aldığı için sonuçlandırmayla
+  kilitlenirdi. PostgreSQL varsayılan izolasyonu bunların hiçbirini yakalamaz: iki transaction da
+  diğerinin okuduğu satırı değiştirmiyor, tespit edilecek çakışma yok.
+- **Negatif bakiye veritabanında da imkânsız — ve bu artık yedek değil, mekanizma (W23).**
+  `trg_credit_ledger_insert_guard` her *tahsilat* satırında (a) `lock_tenant`'ın aldığı **aynı**
+  advisory lock'u alır, (b) tenant'ın `entitlement_ledger_anchors` satırını damgalar, (c) toplamı
+  hesaplar. (a) yazarları sıraya sokar; (b) sırayı, kilitten *önce* alınmış bir snapshot'a da
+  görünür kılar — beklemek snapshot'ı ilerletmez, bu yüzden `REPEATABLE READ` bir yazar aksi
+  hâlde kuyrukta bekleyip kazananı içermeyen bir toplam okurdu. Grant ve iade bu üç adımı
+  atlar: kredi ekleyen bir satır bakiyeyi negatife düşüremez.
+- **Anchor satırı veri tutmaz.** `entitlement_ledger_anchors.last_write_at` hiçbir yerde
+  okunmaz ve bakiye değildir (ADR-017 duruyor). Satırın tek işi *yazılmak*: append'i aynı zamanda
+  bir `UPDATE` yapmak, çünkü her izolasyon seviyesinin gördüğü tek çakışma budur.
+- **Bir rezervasyona her tipten en fazla bir satır** (`uq_credit_ledger_reservation_entry`), ve
+  **iade tam olarak rezervasyonun tuttuğu kadardır**. `uq_credit_ledger_idempotency` bir
+  *tekrarı* eler; uydurulmuş bir anahtarla yazılan ikinci iade para yaratırdı.
+  `ck_credit_ledger_refund_reserved` de bunun parçası: rezervasyonsuz iade hem açıklanamaz hem de
+  kısmi index'in NULL deliği olurdu.
+- **Bir iş biriminin ayakta en fazla bir hakkı vardır** (`uq_usage_reservations_standing_source`).
+  `released` ayakta değildir — iade edilmiş hak yerini boşaltır, yoksa iptal edilen proje bir daha
+  başlatılamazdı. `consumed` ayaktadır: K4 ("saf yeniden render yeni hak tüketmez") çağırana
+  bırakılmak yerine şemada. Servis tarafındaki dokümante karşılığı
+  `ENTITLEMENT_SOURCE_ALREADY_RESERVED` (409).
+- **Defter satırı komşunun rezervasyonunu gösteremez.** Trigger `reservation_id`'nin aynı
+  tenant'a ait olduğunu doğrular; tenant izolasyonu sorguların değil tablonun özelliği olur.
+- **Bilinen sınır:** trigger bir *trigger*'dır. `session_replication_role = replica` diyebilen bir
+  **superuser** negatif bakiye korumasını devre dışı bırakabilir; kısıtlar ve unique index'ler
+  bundan etkilenmez (ölçüldü, W23 raporu). Üretimde uygulama rolü superuser olmamalıdır.
 - **İşaret tipin özelliğidir.** `signed_credits` tek dönüşüm noktasıdır ve `ck_credit_ledger_delta_sign`
   aynı kuralı şemada tekrar eder. Ters işaretli satır **eklenemez**; bakiye tek bir ifadedir,
   ikinci bir `CASE` yazılamaz.
@@ -81,10 +105,10 @@ tek rezervasyon tüm adımları ve tüm render denemelerini kapsar.
 |---|---|
 | `points.py` | PRD §12.4 puan tablosu **sürümlü veri** olarak: `ContentPointKind` (§12.4 satırları), `PointTable` (import anında totallik zorlaması), `POINT_TABLES` sürüm kaydı, `point_table()` |
 | `ledger.py` | Saf yarı: `CreditEntryType`/`ReservationStatus`/`SourceOutcome`/`SettlementOutcome`/`SettlementAction`/`FailureClass`, `ENTRY_SIGNS` + `signed_credits`, `FAILURE_CLASSES` + `REFUND_POLICY` + `classify_failure`, total `settlement_outcome` ve `resolve_settlement`, `SETTLED_STATUS`/`SETTLEMENT_ENTRY`, dokümante hata kodları |
-| `models.py` | `UsageReservation` (durum, krediler, sürüm, kaynak, idempotency, sahip, kısıtlar) + `CreditLedgerEntry` (işaretli `delta_credits`, sürüm/rezervasyon kısıtları, kısmi tekil idempotency index'i) + `SOURCE_*` sabitleri |
-| `repository.py` | `EntitlementRepository` — tenant-kapsamlı okuma/yazma, `lock_tenant` (advisory lock), `balance` (tek `SUM`), `reserved_credits`, rezervasyon aramaları, cursor sayfalama, süpürücü claim'i (`SKIP LOCKED`) |
+| `models.py` | `UsageReservation` (durum, krediler, sürüm, kaynak, idempotency, kısıtlar + ayakta-hak tekilliği) + `CreditLedgerEntry` (işaretli `delta_credits`, sürüm/rezervasyon kısıtları, kısmi tekil idempotency index'i, rezervasyon×tip tekilliği) + `LedgerAnchor` (veri tutmaz, yazılmak için var) + `SOURCE_*` sabitleri |
+| `repository.py` | `EntitlementRepository` — tenant-kapsamlı okuma/yazma, `lock_tenant` (advisory lock; sabiti trigger da kullanır), `balance` (tek `SUM`), `reserved_credits`, rezervasyon aramaları (`reservation_for_source` ayakta olanı seçer, `standing_reservation_for_source`), cursor sayfalama, süpürücünün iki adımı: `stale_open_reservations` (kilitsiz aday) + `claim_reservations` (önce tenant kilidi, sonra `SKIP LOCKED` satır kilidi) |
 | `policy.py` | `EntitlementAction` → merkezî `Permission` eşlemesi (okuma `business.read`, grant `entitlement.grant`) |
-| `service.py` | `EntitlementService` — `reserve`/`settle` (çağıranın transaction'ında), `grant` (kendi transaction'ı, idempotent, audit), bakiye/defter/rezervasyon okumaları · `ReservationSourceProbe` protokolü · `AbandonedReservationSweeper` |
+| `service.py` | `EntitlementService` — `reserve` (çağıranın transaction'ında; tekrar → var olan hak, ayakta hak → `409`), `settle` (aynı transaction), `grant` (kendi transaction'ı, idempotent, audit), bakiye/defter/rezervasyon okumaları · `ReservationSourceProbe` protokolü · `AbandonedReservationSweeper` (kilitsiz aday okuması → tenant tenant claim) |
 
 ## Gereksinim, karar, mimari
 
@@ -95,7 +119,9 @@ tek rezervasyon tüm adımları ve tüm render denemelerini kapsar.
   [00-vision-principles.md](../../../../../docs/product/requirements/00-vision-principles.md)
   (madde 4: hakkın kaynağı backend defteridir)
 - `ADR-017-entitlement-ledger.md` — append-only defter, türetilen bakiye, rezervasyon +
-  sonuçlandırma, §32.4'ün `balance_after`'ının neden uygulanmadığı
+  sonuçlandırma, §32.4'ün `balance_after`'ının neden uygulanmadığı ·
+  `ADR-XXX-ledger-integrity-in-the-schema.md` (numara PM'de) — ADR-017'ye ek: bütünlük çağıranda
+  değil şemada; kilit + anchor + kısmi tekillikler, ve neden anchor bakiye tutmuyor
 - Mimari: [entitlement.md](../../../../../docs/architecture/entitlement.md) ·
   [error-handling.md](../../../../../docs/architecture/error-handling.md) (`ENTITLEMENT_*` kataloğu)
 

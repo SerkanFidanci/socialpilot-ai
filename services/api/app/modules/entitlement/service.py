@@ -32,6 +32,7 @@ from app.modules.content.script import ScenarioCode
 from app.modules.entitlement.ledger import (
     ERROR_INSUFFICIENT_CREDITS,
     ERROR_RESERVATION_CONFLICT,
+    ERROR_SOURCE_ALREADY_RESERVED,
     RESERVATION_ABANDONED,
     SETTLED_STATUS,
     SETTLEMENT_ENTRY,
@@ -104,6 +105,13 @@ class EntitlementService:
         entry" is atomic with respect to every other reservation for the same tenant. Two requests
         aiming at the same last credit therefore serialise, and the second one sees the first
         one's `consume` entry rather than the balance that existed before it.
+
+        Raises `409` when the work already carries a hold that stands. That is not the replay
+        case: a replay names the same idempotency key and is answered above with the hold it
+        already opened. This is a second key aimed at work that has already been charged for, and
+        answering it with a second charge is how decision K4 — a re-render buys nothing new —
+        would quietly stop being true. `uq_usage_reservations_standing_source` refuses it in the
+        database as well; this is the documented error rather than a constraint violation.
         """
 
         await self._repository.lock_tenant(business_id)
@@ -112,6 +120,21 @@ class EntitlementService:
             # The same unit of work asking again. Returning the existing hold is what makes the
             # creating request safe to retry: a second reservation would be a second charge.
             return replay
+        standing = await self._repository.standing_reservation_for_source(
+            business_id, source_type, source_id
+        )
+        if standing is not None:
+            raise ProblemException(
+                status=409,
+                code=ERROR_SOURCE_ALREADY_RESERVED,
+                title="This work already holds credit",
+                detail="A reservation for this work already stands; it cannot be charged twice.",
+                meta={
+                    "reservation_id": str(standing.id),
+                    "status": standing.status.value,
+                    "source_type": source_type,
+                },
+            )
 
         table = point_table(self._settings.entitlement_points_version)
         kind = table.kind_for(scenario_code, profile)
@@ -524,6 +547,13 @@ class AbandonedReservationSweeper:
 
     It follows slice 2E's `AbandonedRunSweeper`: an age cutoff, a bounded batch, `SKIP LOCKED`,
     and `None` when there was nothing to do so the drain stops.
+
+    It claims in two steps, and the split is not cosmetic. Since W23 the ledger's insert trigger
+    takes the tenant advisory lock, so writing a refund needs that lock — and a sweep that had
+    already locked reservation rows would be asking for the two in the opposite order from every
+    settlement, which is a deadlock waiting for the right pair of timings. So the candidates are
+    read unlocked, and then, tenant by tenant in a fixed order, the lock is taken *before* the
+    rows are. Two sweepers walking tenants in the same order cannot form a cycle either.
     """
 
     def __init__(
@@ -540,19 +570,30 @@ class AbandonedReservationSweeper:
             seconds=self._settings.entitlement_reservation_sweep_age_seconds
         )
         async with self._session.begin():
-            candidates = await self._repository.claim_open_reservations(
+            candidates = await self._repository.stale_open_reservations(
                 source_type=SOURCE_CONTENT_PROJECT, older_than=cutoff, limit=self._settings_batch
             )
             if not candidates:
                 return None
             closed = await self._probe.closed_sources(
-                tuple(reservation.source_id for reservation in candidates)
+                tuple(candidate.source_id for candidate in candidates)
             )
+            by_tenant: dict[UUID, list[UUID]] = {}
+            for candidate in candidates:
+                if candidate.source_id in closed:
+                    by_tenant.setdefault(candidate.business_id, []).append(candidate.id)
             released = 0
             now = datetime.now(UTC)
-            for reservation in candidates:
-                if reservation.source_id not in closed:
-                    continue
+            # Sorted so that two sweepers acquire tenant locks in the same order and therefore
+            # cannot wait on each other in a cycle.
+            claimed = [
+                reservation
+                for business_id in sorted(by_tenant)
+                for reservation in await self._repository.claim_reservations(
+                    business_id, by_tenant[business_id]
+                )
+            ]
+            for reservation in claimed:
                 reservation.status = ReservationStatus.RELEASED
                 reservation.settled_at = now
                 reservation.updated_at = now

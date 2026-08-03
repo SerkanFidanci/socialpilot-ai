@@ -21,6 +21,13 @@ entry exists before the second request's sum runs. Releasing a reservation write
 
 `usage_reservations` is the mutable half, and it is mutable in exactly one dimension: the status
 walks `reserved → consumed | released` once and stops. Nothing about the amount can move.
+
+**None of the above is a rule the writer keeps.** Slice W23 moved the remainder into the schema
+after a verification round wrote money into the ledger three ways without going through
+`EntitlementService`: one entry of each type per reservation, one standing hold per unit of work,
+a refund that returns exactly what its hold holds, and — in the insert trigger — the tenant lock
+that makes the non-negative check exact under concurrency. Migration 0020 carries the reasoning;
+what is declared here is the same set, so a model-to-database comparison sees no drift.
 """
 
 from __future__ import annotations
@@ -98,6 +105,18 @@ class UsageReservation(Base):
         # the shape of the index is the same.
         Index("ix_usage_reservations_business_status", "business_id", "status"),
         Index("ix_usage_reservations_source", "business_id", "source_type", "source_id"),
+        # One *standing* hold per unit of work (W23). `released` is excluded on purpose: a hold
+        # that was refunded no longer stands, so a cancelled project can be started again. A
+        # consumed one still stands, which is decision K4 — a pure re-render buys nothing new —
+        # stated in the schema instead of trusted to whoever calls `reserve` next.
+        Index(
+            "uq_usage_reservations_standing_source",
+            "business_id",
+            "source_type",
+            "source_id",
+            unique=True,
+            postgresql_where=text("status <> 'released'"),
+        ),
         # The reconciliation sweep's claim. Partial over open reservations: a tenant's settled
         # history contributes nothing to it, however long that history gets.
         Index(
@@ -179,6 +198,13 @@ class CreditLedgerEntry(Base):
             "entry_type <> 'consume' OR reservation_id IS NOT NULL",
             name="ck_credit_ledger_consume_reserved",
         ),
+        # And so does every refund (W23). Not symmetry for its own sake: a refund is credit going
+        # back, so one that names no hold is credit appearing from nowhere — and it would also be
+        # the `NULL` that lets the uniqueness below be satisfied a second time.
+        CheckConstraint(
+            "entry_type <> 'refund' OR reservation_id IS NOT NULL",
+            name="ck_credit_ledger_refund_reserved",
+        ),
         # Covers both reads this table serves: the cursor-paginated history and the balance sum.
         Index("ix_credit_ledger_business_created", "business_id", "created_at", "id"),
         Index("ix_credit_ledger_reservation", "reservation_id"),
@@ -188,6 +214,17 @@ class CreditLedgerEntry(Base):
             "idempotency_key",
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        # One entry of each kind per reservation: one charge, one refund, no second of either
+        # (W23). The idempotency index above refuses a *replay* — the same write under the key it
+        # derives from the reservation. This refuses the same write under a key somebody made up,
+        # which is the difference between deduplicating a retry and being unable to create money.
+        Index(
+            "uq_credit_ledger_reservation_entry",
+            "reservation_id",
+            "entry_type",
+            unique=True,
+            postgresql_where=text("reservation_id IS NOT NULL"),
         ),
     )
 
@@ -218,10 +255,45 @@ class CreditLedgerEntry(Base):
     )
 
 
+class LedgerAnchor(Base):
+    """One row per tenant that exists in order to be written, and holds nothing (W23).
+
+    `last_write_at` is not data. Nothing reads it, no balance is derived from it, and it is not a
+    counter of anything — ADR-017's decision that the balance lives only in the entries is
+    untouched. What the row is for is that `credit_ledger`'s insert guard stamps it, which turns
+    every append into an *update* as well.
+
+    That distinction is the whole reason the table is here. A tenant advisory lock orders the
+    writers, but waiting for a lock does not move a transaction's snapshot: a `REPEATABLE READ`
+    writer takes its snapshot when its `INSERT` starts, queues behind the winner, and then sums a
+    ledger that still does not contain the winner's row. Updating a row the winner already updated
+    is the one conflict every isolation level sees — `READ COMMITTED` waits and re-reads, the
+    stricter levels abort with a serialisation failure.
+
+    Declared here rather than left to the migration so `Base.metadata` stays a complete picture of
+    the schema; no Python code queries it, and none should. The one thing this declaration cannot
+    carry is the table's `fillfactor` — SQLAlchemy has no table-level storage-parameter option, so
+    migration 0020 sets it with `ALTER TABLE`, and it matters: this row is updated in place and
+    never widened, so the spare page room is what keeps those updates HOT.
+    """
+
+    __tablename__ = "entitlement_ledger_anchors"
+
+    business_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    last_write_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 __all__ = [
     "RESERVATION_RESOURCE_TYPE",
     "SOURCE_CONTENT_PROJECT",
     "SOURCE_MANUAL_GRANT",
     "CreditLedgerEntry",
+    "LedgerAnchor",
     "UsageReservation",
 ]
