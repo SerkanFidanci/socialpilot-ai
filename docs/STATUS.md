@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| `main` | W01→W22 merge edildi — **PHASE 2 TAMAM (2A–2G)**, 1459 test yeşil. **Bağımsız doğrulama turu döndü:** W21 ve W22 temiz (7/7, 7/7); **W20'de 3 defter bütünlüğü açığı → W23** (negatif bakiye ham yazarla aşılıyor, ikinci iade yazılabiliyor, kaynak başına çift rezervasyon) |
+| `main` | W01→W22 merge edildi — **PHASE 2 TAMAM (2A–2G)**, 1459 test yeşil. **Bağımsız doğrulama turu kapandı:** W21 ve W22 temiz (7/7, 7/7); W20'de **3 defter bütünlüğü açığı → W23** (hepsi ham-yazar sınırında, servis yolu güvenli). Sırada W23 → W06 → Phase 3 |
 | Alembic head | `0019_content_planner` (tek head; zincir 0001→0019, up/down/up doğrulandı) |
 | Backend doğrulama | **1459 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |

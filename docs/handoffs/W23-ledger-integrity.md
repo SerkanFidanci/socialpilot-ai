@@ -11,7 +11,7 @@ Bu, projenin başka her yerinde uyguladığımız ilkeyle çelişiyor: QC'de "bi
 
 | # | Bulgu | Şiddet | Kanıt |
 |---|---|---|---|
-| **W20-F2** | **Eşzamanlı ham defter yazıları negatif bakiye trigger'ını aşıyor.** İki ayrı gerçek transaction bariyerde eşzamanlı `consume -5` yazıp commit etti; türetilen bakiye **`-5`**. Trigger diğer transaction'ın commit edilmemiş satırını göremiyor (READ COMMITTED'ın doğal sonucu). | **Yüksek** | Servis yolu güvenli kaldı (bir başarı + bir `402`); açık ham yazar sınırında |
+| **W20-F2** | **Eşzamanlı ham defter yazıları negatif bakiye trigger'ını aşıyor.** İki ayrı gerçek transaction bariyerde eşzamanlı `consume -5` yazıp commit etti; türetilen bakiye **`-5`**. Trigger diğer transaction'ın commit edilmemiş satırını göremiyor (READ COMMITTED'ın doğal sonucu). | **Yüksek** | Servis yolu güvenli kaldı (gerçek HTTP yarışı `[201, 402]`, bakiye `0`). **Kapsam ikinci turda daraldı:** tek transaction içinde çoklu `consume` ve `COPY` ile toplu yazım **engelleniyor** (`IntegrityError` / `CheckViolationError`); açık yalnızca **iki ayrı eşzamanlı transaction** yolunda. Yani çözüm kilit/serileştirme tarafında — kısıt tarafı zaten çalışıyor |
 | **W20-F1** | **Aynı rezervasyona ikinci `refund` yazılabiliyor.** Farklı idempotency anahtarıyla, şema açısından geçerli ikinci iade commit edildi: refund sayısı `1→2`, bakiye `5→10`. Yani **para yaratılabiliyor.** | **Yüksek** | Kanonik `refund:<reservation_id>` replay'i doğru davranıyor; şema tekilleştirmiyor |
 | **W20-F3** | **`reserve` aynı `(business_id, source_type, source_id)` için ikinci rezervasyon açıyor** (yeni idempotency anahtarıyla). Dış parametrik-render rotası bunu yapmıyor ama servis kendini korumuyor. | Orta | Kaynak başına 2 rezervasyon / 10 kredi |
 
@@ -66,7 +66,8 @@ docs/architecture/entitlement.md · error-handling.md
 5. **Ölçüm tablosu:** öncesi/sonrası yazma gecikmesi, N=1/10/50 paralel rezervasyon, tek tenant ve karışık tenant.
 6. **Regresyon:** 1459 testin tamamı geçiyor, hiçbiri düzenlenmeden; `make verify` yeşil.
 7. **Kendi düzeltmene saldır:** kilit/kısıt eklendikten sonra aynı üç açığı başka yollardan tekrar dene (farklı entry_type sıraları, `COPY`, tek transaction'da çok satır, iç içe savepoint, farklı izolasyon seviyeleri) ve tabloyu rapora yaz.
-8. Rapor + araç zinciri sürümleri. **Merge etme, dalda bırak.**
+8. **Grant girdi doğrulaması** (doğrulama turunda tamamlanamayan tek ucuz kalem — buraya alındı): `grant` ucu negatif miktarı, sıfırı, ondalıklı sayıyı ve taşacak kadar büyük değeri reddediyor; `editor`/`approver`/`viewer` rollerinin üçü de `403` alıyor (owner dışı rol matrisi tam). Testli.
+9. Rapor + araç zinciri sürümleri. **Merge etme, dalda bırak.**
 
 ## ADR numara kuralı
 
