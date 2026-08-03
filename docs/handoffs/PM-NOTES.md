@@ -12,7 +12,18 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**2026-08-02 · W22 merge edildi — 🎉 PHASE 2 TAMAM (2A–2G). head `0019`, dal koşusu 1459 pytest (PM tam koşusu sürüyor).**
+**2026-08-03 · W23 merge edildi — Phase 2 tamam ve bağımsız doğrulaması kapandı. head `0020`, dal koşusu 1474 pytest (PM tam koşusu sürüyor). ADR-018 yazıldı.**
+
+**Doğrulama turu (2026-08-03) nasıl gitti:** W21 ve W22 **temiz** (7/7, 7/7). W20'de **3 açık** — hepsi ham-yazar sınırında, dış yüzey güvenli (gerçek HTTP kredi yarışı `[201, 402]`, bakiye `0`). W23 üçünü de kapattı. **Doğrulama kanalı bulundu:** oturum kendi harness'ını repo dışında kurdu, mevcut testleri kanıt saymadı, yapamadığını "yapamadım" diye yazdı. Bundan sonraki doğrulama turları böyle verilecek — **ve saldırılar tek tek gönderilecek** (toplu verince bağlam yetmiyor; bu turda 8 saldırı sırayla gönderilerek tamamlandı).
+
+**PM'in iki hatası kayda geçti:** (1) doğrulama turunu üç dilim × 19 saldırı olarak tek seferde verdim, sığmadı — doğrulama WO'su da kapsam sınırı ister. (2) "mevcut testleri koşmak doğrulama değildir" cümlem "test yardımcılarına dokunma" diye anlaşıldı ve oturum proje kurulumunu sıfırdan HTTP'yle yapmaya çalışıp takıldı. Doğru ayrım: **kurulum için fixture serbest, kanıt için kendi girdin zorunlu.**
+
+**W23'ün en değerli anı:** oturum kendi ilk çözümünü kırdı. Yalnızca advisory lock yetmiyor — `REPEATABLE READ` yazarın snapshot'ını `INSERT` başlarken alıyor, yani kilidi bekleyip kazananı hâlâ göremiyor. Çözüm: kazananın **güncellediği bir satırı güncellemek** (anchor), çünkü bu her izolasyon seviyesinde çakışma üretir. Ölçüm: yazma yolu +%13–27, tenantlar birbirini bloke etmiyor (aynı tenant 1908 ms bekledi, başka tenant 55 ms).
+
+**Sıradaki: W06** (PG18 + Valkey + `pg_dump` taşıyan backup-runner compose profili — **D1 dağıtım kapısını kapatır**). Sonra **Phase 3** ve orada **K1 kullanıcı kararı** gerekiyor (IAP mı web-first mi). Ayrıca hâlâ bekleyen: **W08 benchmark'ının gerçek sağlayıcılarla koşulması** (kullanıcının API anahtarları) — puan tablosu ve büyük-revizyon kotası o ölçüme göre kalibre edilecek; Phase 4 öncesi **Meta App Review başvurusu erken açılmalı**.
+
+<!-- arşiv -->
+**~~2026-08-02 · W22 merge edildi — PHASE 2 TAMAM (2A–2G), head 0019.~~**
 
 **⚠️ EN ÖNEMLİ AÇIK: W20, W21, W22 bağımsız doğrulanmadı.** Codex turu **iki kez** tetiklendi, iki kez de hiçbir çıktı bırakmadı (dosyaların "Doğrulama" bölümleri hâlâ boş şablon, hiçbir dalda kayıt yok). Bu üç dilim kredi defterini (para), onay/revizyon akışını ve planlayıcıyı kapsıyor — yani **Phase 2'nin en riskli üç parçası kendi yazarından başka kimse tarafından denenmedi.** Codex çalışmıyorsa alternatif: aynı düşman prompt'unu **ayrı bir Claude oturumuna** ver (farklı oturum = farklı bağlam; "testin yazarı denetleyicisi olamaz" ilkesi korunur). Bu kapanmadan Phase 3'e geçmek doğru olmaz.
 
