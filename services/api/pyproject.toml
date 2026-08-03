@@ -19,7 +19,7 @@ dependencies = [
     # Storage client: the S3-compatible adapter signs SigV4 requests over httpx rather than
     # adding a synchronous vendor SDK to an async request path.
     "httpx>=0.28",
-    # OpenTelemetry (W05, ADR-XXX). Trace + metric, default-OFF: the SDK is only wired to an
+    # OpenTelemetry (W05, ADR-014). Trace + metric, default-OFF: the SDK is only wired to an
     # exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set, so importing these adds no runtime cost
     # on the single server (ADR-013) when telemetry is disabled. The OTLP exporter uses the
     # http/protobuf transport deliberately, to avoid pulling grpcio into the image. The `api`

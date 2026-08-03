@@ -109,6 +109,7 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-014](adr/ADR-014-opentelemetry-observability-foundation.md) OpenTelemetry temeli ·
 [ADR-015](adr/ADR-015-parametric-editing-model.md) parametrik düzenleme ·
 [ADR-016](adr/ADR-016-render-port.md) RenderPort sınırı
+[ADR-017](adr/ADR-017-entitlement-ledger.md) Kredi defteri · [ADR-018](adr/ADR-018-ledger-integrity-in-the-schema.md) Defter bütünlüğü şemada
 
 ## Kontratlar, planlar, runbook'lar
 

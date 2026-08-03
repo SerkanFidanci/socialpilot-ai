@@ -120,7 +120,7 @@ tek rezervasyon tüm adımları ve tüm render denemelerini kapsar.
   (madde 4: hakkın kaynağı backend defteridir)
 - `ADR-017-entitlement-ledger.md` — append-only defter, türetilen bakiye, rezervasyon +
   sonuçlandırma, §32.4'ün `balance_after`'ının neden uygulanmadığı ·
-  `ADR-XXX-ledger-integrity-in-the-schema.md` (numara PM'de) — ADR-017'ye ek: bütünlük çağıranda
+  `ADR-018-ledger-integrity-in-the-schema.md` (numara PM'de) — ADR-017'ye ek: bütünlük çağıranda
   değil şemada; kilit + anchor + kısmi tekillikler, ve neden anchor bakiye tutmuyor
 - Mimari: [entitlement.md](../../../../../docs/architecture/entitlement.md) ·
   [error-handling.md](../../../../../docs/architecture/error-handling.md) (`ENTITLEMENT_*` kataloğu)

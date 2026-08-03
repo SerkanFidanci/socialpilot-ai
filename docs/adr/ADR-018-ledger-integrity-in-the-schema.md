@@ -1,4 +1,4 @@
-# ADR-XXX: Defterin bütünlüğü çağıranın disiplininde değil şemada
+# ADR-018: Defterin bütünlüğü çağıranın disiplininde değil şemada
 
 **Status:** Accepted
 **Date:** 2026-08-03

@@ -71,7 +71,7 @@ docs/architecture/entitlement.md · error-handling.md
 
 ## ADR numara kuralı
 
-Bu karar ADR-017'ye (append-only defter) **ek** olarak yazılmalı: "bütünlük çağıranda değil şemada". Numarayı PM verir; sen `ADR-XXX` yaz.
+Bu karar ADR-017'ye (append-only defter) **ek** olarak yazılmalı: "bütünlük çağıranda değil şemada". Numarayı PM verir; sen `ADR-018` yaz.
 
 ## Rapor — 2026-08-03 · yürüten oturum (Opus 5 / high)
 
@@ -104,7 +104,7 @@ sonuçlandırmanın iade edilmişi bulması yanlış olurdu. Süpürücü kilit 
 kilitsiz okuyor, sonra tenant tenant ve sabit sırayla önce tenant kilidini sonra satırları
 alıyor.
 
-**ADR-XXX** yazıldı (`docs/adr/ADR-XXX-ledger-integrity-in-the-schema.md`), ADR-017'ye ek.
+**ADR-018** yazıldı (`docs/adr/ADR-018-ledger-integrity-in-the-schema.md`), ADR-017'ye ek.
 
 ### Kendi düzeltmeme saldırı — ilk uygulama yetersizdi
 
@@ -179,7 +179,7 @@ bu güncellemeler HOT kalsın.
   negatif bakiye muhafızına takılır, ve rezervasyon başına tek `consume` kuralı zaten var.
 - **`docs/index.md`, `docs/adr/README.md`** — iş emri kapsam dışı bıraktı, eklenmedi.
 - **ADR-017'nin son sonuç maddesi** ("trigger mekanizma değil yedektir") artık eskimiş: trigger
-  mekanizmanın kendisi. ADR-017 dosya listemde olmadığı için **dokunmadım**; ADR-XXX bunu açıkça
+  mekanizmanın kendisi. ADR-017 dosya listemde olmadığı için **dokunmadım**; ADR-018 bunu açıkça
   yazıyor, düzeltme PM'de.
 - **Uygulama rolünün superuser olmaması** bir compose/dağıtım değişikliği; dosya listemde yok.
 
@@ -214,7 +214,7 @@ seviyesiyle parametrik). Değişen mevcut dosya yok.
 
 ### Açıkça belirtmem gerekenler
 
-1. **ADR numarası PM'de.** `ADR-XXX-ledger-integrity-in-the-schema.md` yazıldı, indekse
+1. **ADR numarası PM'de.** `ADR-018-ledger-integrity-in-the-schema.md` yazıldı, indekse
    eklenmedi. ADR-017'ye **ek**, hiçbir kararını geri almıyor.
 2. **ADR-017'nin son sonuç maddesi eskidi** — "negatif bakiye trigger'ı mekanizma değil yedektir"
    artık doğru değil. ADR-017 dosya listemde olmadığı için dokunmadım; tek satırlık düzeltme PM'de.
@@ -233,7 +233,7 @@ seviyesiyle parametrik). Değişen mevcut dosya yok.
    "iade sonrası yeniden rezerve edilebilir" senaryosunda ise eski sıralama iade edilmiş hakkı
    bulup yanlış olanı sonuçlandırırdı.
 6. **`entitlement_ledger_anchors` şemaya bir tablo daha ekledi ve hiçbir şey tutmuyor.** Bunun
-   *neden* böyle olması gerektiği yalnızca ADR-XXX'te, migration docstring'inde ve
+   *neden* böyle olması gerektiği yalnızca ADR-018'te, migration docstring'inde ve
    `models.LedgerAnchor` docstring'inde yazılı — okunmadan silinirse F2 geri gelir, ve testte
    `REPEATABLE READ` satırı bunu yakalar.
 7. **Ölçüm ortamı tek makine, konteyner içi.** Mutlak sayılar üretim donanımını temsil etmez;

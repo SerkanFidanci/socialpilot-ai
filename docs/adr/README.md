@@ -29,6 +29,8 @@ resolve an ADR identifier.
 | [ADR-014](ADR-014-opentelemetry-observability-foundation.md) | OpenTelemetry Observability Foundation | Accepted | 2026-07-30 |
 | [ADR-015](ADR-015-parametric-editing-model.md) | Parametrik Düzenleme Veri Modeli | Accepted | 2026-07-30 |
 | [ADR-016](ADR-016-render-port.md) | RenderPort ve Render Adapter Sınırı | Accepted | 2026-07-30 |
+| [ADR-017](ADR-017-entitlement-ledger.md) | Append-only kredi defteri ve rezervasyon | Accepted | 2026-08-02 |
+| [ADR-018](ADR-018-ledger-integrity-in-the-schema.md) | Defter bütünlüğü çağıranda değil şemada (ADR-017 eki) | Accepted | 2026-08-03 |
 
 Paralel work order'lar bu katalogu ve router'i degistirmeden daha yuksek numarali ADR
 dosyalari ekleyebilir; merge eden bu dizini tarar ve satirlari merge commit'inde ekler. Var
