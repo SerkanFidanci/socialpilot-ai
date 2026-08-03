@@ -264,4 +264,51 @@ Kabul kriterleri:
 
 ## Doğrulama
 
-_(test eden oturum: **kendi girdilerini üret; mevcut testleri koşmak doğrulama değildir.** Özellikle: kotayı aşarak revizyon iste, saf yeniden render'ı kotadan düşürt, iptal edilmiş projeyi tekrar iptal et / iptalden sonra ilerlet, iade edilmiş krediyi ikinci kez iade ettir, `editor` ile onayla, başka tenant'ın projesini onayla, ret notunu log'a/prompt'a sızdır, büyük revizyonu küçük saydırıp senaryo yeniden üretimini atlat)_
+Bağımsız test oturumu: **2026-08-02 · Codex**. Worktree kökünden
+`COMPOSE_PROJECT_NAME=sp-verify` ile, migration head `0019_content_planner` üzerinde çalışıldı.
+Mevcut test fixture'ları saldırı kanıtı olarak kullanılmadı: çalıştırma kimliği `b2d8650722` olan
+geçici harness repo dışında tutuldu ve her saldırı için yeni UUID'ler, kullanıcılar, tenantlar,
+projeler, onaylar ve defter satırları üretti.
+
+| # | Saldırı | Sonuç | Kendi girdimizle kanıt | Durum |
+|---|---|---|---|---|
+| W21-A1 | Revizyon kotasını aş | Engellendi | Küçük revizyon `cost=1`, büyük revizyon `cost=2`; kullanılan kota `3` olduktan sonra üçüncü istek `409 REVISION_QUOTA_EXHAUSTED`. Yalnız ilk iki revizyon satırı oluştu. | Geçti |
+| W21-A2 | Saf yeniden render'ı kotadan ve krediden düşürt | Engellendi | Gerçek parametrik patch + revision render sonrasında `revision_quota_used=0`; ilk proje için kalan kredi `7` olarak değişmeden kaldı ve yeni entitlement kaydı oluşmadı. | Geçti |
+| W21-A3 | İptal edilmiş projeyi tekrar iptal et, ilerlet veya ikinci kez iade ettir | Engellendi | İlk iptal rezervasyonu `released` yaptı; ikinci iptal ve `attach-media` ayrı ayrı `409`; settle replay'i yeni satır yazmadı. Defter tam olarak `consume -5` + `refund +5`. | Geçti |
+| W21-A4 | `editor` rolüyle onayla | Engellendi | Editor kararı `403 INSUFFICIENT_PERMISSION`; aynı projeyi `approver` başarıyla `approved` yaptı. | Geçti |
+| W21-A5 | Başka tenant'ın projesini onayla | Engellendi | Saldırgan tenant'ın approver'ı kurban proje için `404` aldı; kurbanın durumu değişmedi. | Geçti |
+| W21-A6 | Ret notunu log'a veya prompt girdisine sızdır | Sızıntı görülmedi | Benzersiz sentinel yalnız `content_approvals` satırında kaldı. İstek sırasında yakalanan uygulama loglarında ve `audit_logs.metadata`, transition reason, idempotency response, outbox payload, `content_scripts.document` yüzeylerinde eşleşme sayısı `0`; proje cevabı notu taşımadı. | Geçti |
+| W21-A7 | Büyük revizyonu küçük gösterip senaryo yeniden üretimini atla | Engellendi | İstemcinin eklediği `revision_class=minor` alanı `400 REQUEST_VALIDATION_FAILED`; geçerli `product + caption_style` isteği sunucuda `(major, script, cost=2)` türetti ve proje `scripting` durumundan yeniden başladı. | Geçti |
+
+| Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|
+| Açık W21 ürün/kod bulgusu yok | — | Yukarıdaki yedi saldırı, gerçek PostgreSQL transaction'ları ve dış API rotalarıyla yeni veri üzerinde uygulandı. | Kapalı |
+
+### Araç zinciri
+
+| Araç | Sürüm |
+|---|---|
+| Docker Engine (client/server) | 25.0.3 |
+| Docker Compose | v2.24.6-desktop.1 |
+| Python | 3.13.14 |
+| pytest / pluggy / pytest-asyncio / anyio | 9.1.1 / 1.6.0 / 1.4.0 / 4.14.2 |
+| Ruff / mypy | 0.16.0 / 2.3.0 |
+| Alembic | 1.18.5 |
+| PostgreSQL | 16.14 (Alpine) |
+| Redis | 7.4.10 (jemalloc 5.3.0) |
+| MinIO | RELEASE.2025-04-22T22-12-26Z (Go 1.24.2) |
+| FFmpeg / ffprobe | 7.1.5-0+deb13u1 |
+
+### Ortak kapılar
+
+| Kontrol | Sonuç |
+|---|---|
+| Migration zinciri | İzole test verisi temizlendikten sonra `downgrade base` → `upgrade head`; current/head `0019_content_planner`. Veri varken 0018 downgrade guard'ı beklendiği gibi işlemi reddetti. |
+| Ruff | `check` temiz; `format --check`: 233 dosya biçimli. |
+| mypy | `no issues found in 219 source files`. |
+| Tam test paketi | MinIO bucket ilk kurulumundan sonra **1459 passed**, 1 Starlette deprecation uyarısı, 986.96 sn. İlk koşudaki 43 hata eksik test bucket'ının 404 vermesiydi; `minio-init` sonrası aynı kodla kayboldu. |
+| OpenAPI | Kontrat ve endpoint indeksi yeniden üretildi; commit'li dosyalarla içerik farkı yok. |
+| `make verify` eşdeğeri | API imajında `make` bulunmadığı için hedef doğrudan açılamadı; Makefile'daki Ruff, format, mypy, tam pytest ve OpenAPI adımları tek tek aynen çalıştırıldı ve geçti. |
+
+**Karar: teslim edilebilir.** W21 saldırı listesinde açık bulgu kalmadı. Bu oturum uygulama veya
+test kaynak kodunu değiştirmedi.

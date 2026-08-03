@@ -289,4 +289,51 @@ sekiz kuralın *altına* koyuyor.
 
 ## Doğrulama
 
-_(test eden oturum: **kendi girdilerini üret; mevcut testleri koşmak doğrulama değildir.** Özellikle: aynı pencerede çift obligation ürettir, sessiz saate yayın kaydırt/kaydırtma, yetersiz bakiyeyle proje açtır, onaylanmamış projeyi `SCHEDULED` yaptır, başka tenant'ın obligation'ını planlat, planlayıcıyı sonsuz obligation üretmeye zorla, timezone sınırında (yerel gece yarısı, DST) yanlış pencere ürettir)_
+Bağımsız test oturumu: **2026-08-02 · Codex**. Worktree kökünden
+`COMPOSE_PROJECT_NAME=sp-verify` ile, migration head `0019_content_planner` üzerinde çalışıldı.
+Mevcut test fixture'ları saldırı kanıtı olarak kullanılmadı: çalıştırma kimliği `b2d8650722` olan
+geçici harness repo dışında tutuldu ve her saldırı için yeni UUID'ler, tenantlar, standing item'lar,
+obligation'lar, projeler ve saat dilimi girdileri üretti.
+
+| # | Saldırı | Sonuç | Kendi girdimizle kanıt | Durum |
+|---|---|---|---|---|
+| W22-A1 | Aynı pencerede çift obligation üret | Engellendi | İki ayrı eşzamanlı plan transaction'ından biri `planned=1`, diğeri kayıt üretmeden tamamlandı; zorunlu replay `planned=0`; satır sayısı `1`. Aynı doğal anahtarla ham ikinci INSERT `UniqueViolation`. | Geçti |
+| W22-A2 | Sessiz saate yayın kaydırt veya sessiz saat dışını gereksiz kaydır | Doğru sınırlandı | `20:15–06:45` penceresinde `23:17` slotu ertesi gün `06:45 +03`'e kaydı (`shifted=true`); `12:34` aynen kaldı (`shifted=false`). | Geçti |
+| W22-A3 | Yetersiz bakiyeyle proje aç | Engellendi | Dispatch sonucu `converted=0, blocked=1`; obligation `blocked / ENTITLEMENT_INSUFFICIENT_CREDITS`, `project_id=NULL`. Proje, rezervasyon ve defter satırı sayıları ayrı ayrı `0`; kayıt API'de `status=blocked` ile görünür. | Geçti |
+| W22-A4 | Onaylanmamış projeyi `SCHEDULED` yap | Engellendi | `waiting_approval` projesi için dört ayrı scheduling drain'i iş üretmedi; durum ve `scheduled_publish_at=NULL` kaldı, scheduled transition sayısı `0`. | Geçti |
+| W22-A5 | Başka tenant'ın obligation'ını oku, iptal et veya planına kat | Engellendi | Kurban obligation için saldırgan tenant'ın GET ve cancel çağrıları `404`; kurban UUID'si saldırganın plan listesinde yoktu. | Geçti |
+| W22-A6 | Planlayıcıyı sonsuz obligation üretmeye zorla | Engellendi | Aynı aktif item/pencere 40 defa zorlandı; ilk çağrı `planned=1`, sonrakiler `planned=0`; toplam obligation `1`. | Geçti |
+| W22-A7 | Yerel gece yarısı veya DST'de yanlış pencere üret | Doğru hesaplandı | Bağımsız 2027 girdilerinde Berlin bahar günü `23 saat`, sonbahar günü `25 saat`; İstanbul periyodu yerel `00:00`'da başladı. Var olmayan Berlin `02:45` quiet-end anı `03:45+02`'ye taşındı ve pencere dışına çıktı. | Geçti |
+
+| Bulgu | Şiddet | Yeniden üretim | Durum |
+|---|---|---|---|
+| Açık W22 ürün/kod bulgusu yok | — | Yukarıdaki yedi saldırı, gerçek PostgreSQL transaction'ları, API rotaları ve `zoneinfo` girdileriyle yeni veri üzerinde uygulandı. | Kapalı |
+
+### Araç zinciri
+
+| Araç | Sürüm |
+|---|---|
+| Docker Engine (client/server) | 25.0.3 |
+| Docker Compose | v2.24.6-desktop.1 |
+| Python | 3.13.14 |
+| pytest / pluggy / pytest-asyncio / anyio | 9.1.1 / 1.6.0 / 1.4.0 / 4.14.2 |
+| Ruff / mypy | 0.16.0 / 2.3.0 |
+| Alembic | 1.18.5 |
+| PostgreSQL | 16.14 (Alpine) |
+| Redis | 7.4.10 (jemalloc 5.3.0) |
+| MinIO | RELEASE.2025-04-22T22-12-26Z (Go 1.24.2) |
+| FFmpeg / ffprobe | 7.1.5-0+deb13u1 |
+
+### Ortak kapılar
+
+| Kontrol | Sonuç |
+|---|---|
+| Migration zinciri | İzole test verisi temizlendikten sonra `downgrade base` → `upgrade head`; current/head `0019_content_planner`. Veri varken 0018 downgrade guard'ı beklendiği gibi işlemi reddetti. |
+| Ruff | `check` temiz; `format --check`: 233 dosya biçimli. |
+| mypy | `no issues found in 219 source files`. |
+| Tam test paketi | MinIO bucket ilk kurulumundan sonra **1459 passed**, 1 Starlette deprecation uyarısı, 986.96 sn. İlk koşudaki 43 hata eksik test bucket'ının 404 vermesiydi; `minio-init` sonrası aynı kodla kayboldu. |
+| OpenAPI | Kontrat ve endpoint indeksi yeniden üretildi; commit'li dosyalarla içerik farkı yok. |
+| `make verify` eşdeğeri | API imajında `make` bulunmadığı için hedef doğrudan açılamadı; Makefile'daki Ruff, format, mypy, tam pytest ve OpenAPI adımları tek tek aynen çalıştırıldı ve geçti. |
+
+**Karar: teslim edilebilir.** W22 saldırı listesinde açık bulgu kalmadı. Bu oturum uygulama veya
+test kaynak kodunu değiştirmedi.

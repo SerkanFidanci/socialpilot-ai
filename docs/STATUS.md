@@ -1,10 +1,10 @@
 # Proje Durumu
 
-**Son güncelleme:** 2026-07-31 · **Sahip:** PM oturumu
+**Son güncelleme:** 2026-08-02 · **Sahip:** PM oturumu
 
 | | |
 |---|---|
-| `main` | W01→W22 merge edildi — **PHASE 2 TAMAM (2A–2G)**. Sırada W06 (PG18+Valkey, D1) → Phase 3. ⚠️ **W20, W21, W22 bağımsız doğrulanmadı** — Codex turu iki kez tetiklendi, iki kez de çıktı bırakmadı |
+| `main` | W01→W22 merge edildi — **PHASE 2 TAMAM (2A–2G)**. Sırada W06 (PG18+Valkey, D1) → Phase 3. 2026-08-02 bağımsız saldırı doğrulaması: **W21/W22 teslim edilebilir; W20 düzeltme gerekiyor** — iç servis/DB-yazarı sınırında üç açık entitlement bütünlüğü bulgusu ilgili work order'a kaydedildi. |
 | Alembic head | `0019_content_planner` (tek head; zincir 0001→0019, up/down/up doğrulandı) |
 | Backend doğrulama | **1459 pytest** (gerçek PostgreSQL + MinIO + FFmpeg; merge sonrası PM koşusu) · lint + format + mypy strict temiz · py313 / mypy 2.3 / ruff 0.16 |
 | Mobil doğrulama | `flutter analyze` temiz · 45 test · Flutter 3.44.8 / Dart 3.12.2 |

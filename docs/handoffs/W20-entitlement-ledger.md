@@ -319,4 +319,72 @@ girdi eklendi. Başka hiçbir mevcut test dosyası değişmedi (yukarıdaki "yan
 
 ## Doğrulama
 
-_(test eden oturum: **kendi girdilerini üret, mevcut testleri koşmak doğrulama değildir.** Özellikle: aynı krediyi iki kez harcatmaya çalış (yarış), iade edilmiş rezervasyonu tekrar iade ettir, negatif bakiye üret, başka tenant'ın defterine yaz, saf yeniden render'ı ücretlendirt, puan tablosu sürümünü değiştirip eski satırları yeniden yorumlat)_
+Test eden oturumu — `COMPOSE_PROJECT_NAME=sp-verify`, şema `0019_content_planner`.
+Saldırı kanıtı mevcut testlerden alınmadı; yeni kullanıcılar, tenantlar, reservations ve defter
+satırları bu oturumda oluşturuldu. Mevcut paket yalnız ortak regresyon kapısı olarak ayrıca
+çalıştırıldı. Araç zinciri: Docker Engine 25.0.3 · Docker Compose
+v2.24.6-desktop.1 · Python 3.13.14 · PostgreSQL 16.14 · SQLAlchemy 2.0.51 ·
+Alembic 1.18.5 · pytest 9.1.1 · FFmpeg 7.1.5.
+
+| Saldırı | Sonuç | Kanıt |
+|---|---|---|
+| Aynı son 5 krediyi iki gerçek transaction ile harcama | Servis yolunda engellendi | Ayrı PostgreSQL PID'leri `876`/`877`: bir `reserve` başarılı, diğeri `ENTITLEMENT_INSUFFICIENT_CREDITS`. Xact advisory lock'u `pg_advisory_unlock` ile açma denemesi `false`. |
+| İade edilmiş reservation'ı tekrar iade etme | **Ham SQL ile başarılı — bulgu** | Servis replay'i ilk iade satırını korudu; aynı `reservation_id` için farklı anahtarlı ham `refund` kabul edildi: refund sayısı `1 → 2`. Şema reservation başına refund'ı tekilleştirmiyor. |
+| Negatif bakiye / trigger atlatma | **Başarılı — bulgu** | Aynı 5 krediye karşı iki eşzamanlı, geçerli FK/kısıtlı ham `consume -5` transaction'ı commit edildi; toplam **`-5`**. Trigger diğer transaction'ın commit edilmemiş satırını görmedi. |
+| Başka tenant'ın defterini okuma veya yazma | Engellendi | Doğrudan servis çağrıları: okuma ve grant `404 BUSINESS_NOT_FOUND`. |
+| Saf yeniden render'ı yeniden ücretlendirme | **İç servis sınırı bulgusu** | Aynı `source_id`, yeni idempotency anahtarıyla ikinci `reserve` kabul edildi: iki reservation, ikinci `5` kredi. Dış render rotasının bunu çağırdığı kanıtlanmadı; `reserve` tek başına kaynak-tekrarını engellemiyor. |
+| Puan tablosu değişince geçmişi yeniden yorumlama | Engellendi | V1 reservation `(5, 1)` kaldı; yeni V97 tablosu yalnız yeni reservation'ı `(15, 97)` fiyatladı. |
+| Owner olmayan rolle grant | Engellendi | `admin` rolü `403 INSUFFICIENT_PERMISSION`. |
+| Sonuçlandırılmış reservation'ı iade ettirme | Servis yolunda engellendi | Aynı release replay'i idempotent; ters `DELIVERED` sonuçlandırması servis karar tablosunda çatışmadır. Ham SQL ikinci-iade bulgusu yukarıda ayrı kaydedildi. |
+
+### Bağımsız yeniden üretim bulguları
+
+İlk tablodaki açıklar ikinci bir bağımsız veri setiyle de yeniden üretildi. `b2d8650722` dış/API
+yüzeyini; `b642ad5d48` iç servis ve ham DB-yazarı sınırını hedefledi. Her iki harness repo dışında
+tutuldu ve repo test fixture'larını kullanmadı.
+
+| # | Bulgu | Şiddet | Kendi girdimizle yeniden üretim | Durum |
+|---|---|---|---|---|
+| W20-F1 | Aynı reservation'a farklı idempotency anahtarıyla ikinci refund yazılabiliyor | Yüksek (iç DB yazarı) | Normal cancel sonrası tek `refund` ve bakiye `5` idi. Aynı `reservation_id` için farklı anahtarlı, şema açısından geçerli ham refund commit edildi; refund sayısı `2`, bakiye `10` oldu. Kanonik `refund:<reservation_id>` replay'i ise yeni satır yazmadı. | Açık |
+| W20-F2 | Eşzamanlı ham defter yazıları negatif toplam trigger'ını aşabiliyor | Yüksek (iç DB yazarı) | `grant +5` ve iki geçerli reserved reservation hazırlandı. İki ayrı gerçek PostgreSQL transaction'ı bariyerde eşzamanlı `consume -5` yazıp commit etti; ikisi de başarılı oldu ve türetilen bakiye `-5` oldu. Normal `ContentProjectService` yarışı ise bir başarı + bir `402` ile güvenli kaldı. | Açık |
+| W20-F3 | `reserve`, aynı `(business_id, source_type, source_id)` için yeni idempotency anahtarını kabul ediyor | Orta (iç servis çağrısı) | Bir gerçek proje rezervasyonundan sonra aynı kaynak kimliğiyle doğrudan `EntitlementService.reserve` çağrısı ikinci reservation'ı açtı: kaynak için `2` reservation / `10` kredi. Dış parametric-rerender rotası ayrıca sınandı ve ikinci rezervasyon/defter satırı üretmedi. | Açık |
+
+Geçen ek saldırılar: dış API'de son 5 kredi yarışı tek rezervasyonla ve bakiye `0` ile bitti;
+cross-tenant grant `404` verdi; tek ham `expire -1` check/trigger ile reddedildi; eski puan tablosu
+satırı `(5, v1)` kalırken yeni v77 yalnız yeni rezervasyonu `(15, v77)` fiyatladı.
+
+### Araç zinciri
+
+| Araç | Sürüm |
+|---|---|
+| Docker Engine (client/server) | 25.0.3 |
+| Docker Compose | v2.24.6-desktop.1 |
+| Python | 3.13.14 |
+| pytest / pluggy / pytest-asyncio / anyio | 9.1.1 / 1.6.0 / 1.4.0 / 4.14.2 |
+| Ruff / mypy | 0.16.0 / 2.3.0 |
+| Alembic | 1.18.5 |
+| PostgreSQL | 16.14 (Alpine) |
+| Redis | 7.4.10 (jemalloc 5.3.0) |
+| MinIO | RELEASE.2025-04-22T22-12-26Z (Go 1.24.2) |
+| FFmpeg / ffprobe | 7.1.5-0+deb13u1 |
+
+### Ortak kapılar
+
+| Kontrol | Sonuç |
+|---|---|
+| Migration zinciri | İzole test verisi temizlendikten sonra `downgrade base` → `upgrade head`; current/head `0019_content_planner`. Veri varken 0018 downgrade guard'ı beklendiği gibi işlemi reddetti. |
+| Ruff | `check` temiz; `format --check`: 233 dosya biçimli. |
+| mypy | `no issues found in 219 source files`. |
+| Tam test paketi | MinIO bucket ilk kurulumundan sonra **1459 passed**, 1 Starlette deprecation uyarısı, 986.96 sn. İlk koşudaki 43 hata eksik test bucket'ının 404 vermesiydi; `minio-init` sonrası aynı kodla kayboldu. |
+| OpenAPI | Kontrat ve endpoint indeksi yeniden üretildi; commit'li dosyalarla içerik farkı yok. |
+| `make verify` eşdeğeri | API imajında `make` bulunmadığı için hedef doğrudan açılamadı; Makefile'daki Ruff, format, mypy, tam pytest ve OpenAPI adımları tek tek aynen çalıştırıldı ve geçti. |
+
+**Karar: düzeltme gerekiyor.** HTTP rotaları ve kurallı servis akışları saldırıları engelliyor;
+ancak W20-F1–F3 entitlement bütünlüğünü iç servis/DB-yazarı sınırında yalnız çağıran kodun doğru
+davranmasına bırakıyor. Bu test oturumu uygulama veya test kaynak kodunu değiştirmedi.
+
+### Saldırı 1 — 2026-08-03, `sp-verify`
+
+| Saldırı | Sonuç | Kanıt / sınır |
+|---|---|---|
+| İki gerçek HTTP `create_project` transaction'ı ile son kredi yarışı | **Tamamlanamadı** | Yeni tenant/marka/ürün verisi API ile üretildi ve `asyncio.gather` için iki bağımsız POST hazırlandı; bu sürümde brand GET yanıtından CTA kimliğini alma varsayımı geçersiz çıktı (`string indices must be integers`). Project POST'ları ve istenen create-project sonucu çalışmadı. Önceki `reserve` seviyesi yarışı bu kayıt için kanıt sayılmadı. |
