@@ -37,8 +37,25 @@ from scripts.backup_db import (
 )
 
 # Core tables that must survive a restore. Not exhaustive — a representative slice spanning
-# identity, media, and the durable job machinery, enough to prove the schema and data loaded.
-_ROW_COUNT_TABLES = ("businesses", "media_assets", "jobs")
+# identity, media, the durable job machinery, and the credit ledger, enough to prove the schema
+# and data loaded.
+#
+# The three entitlement tables are here because they are the ones a restore is most able to break
+# quietly (W06). `credit_ledger` carries an insert guard that takes an advisory lock, stamps
+# `entitlement_ledger_anchors` and refuses an entry naming a reservation it cannot see
+# (migration 0020); `usage_reservations` sorts *after* `credit_ledger` in a plain dump, so if
+# those triggers were live during the data load the ledger rows would be rejected for naming a
+# reservation that has not been restored yet. `pg_dump` emits triggers in the post-data section,
+# after the COPYs, which is what makes the restore work — counting these tables is how that stays
+# true rather than being a fact somebody once checked.
+_ROW_COUNT_TABLES = (
+    "businesses",
+    "media_assets",
+    "jobs",
+    "credit_ledger",
+    "usage_reservations",
+    "entitlement_ledger_anchors",
+)
 
 log = structlog.get_logger("restore_check")
 

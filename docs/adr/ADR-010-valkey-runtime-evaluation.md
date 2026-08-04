@@ -1,13 +1,14 @@
 # ADR-010: Valkey as the Redis-Compatible Runtime
 
-**Status:** Proposed (recommendation only — not implemented in this slice)
-**Date:** 2026-07-30
-**Relates to [ADR-009](ADR-009-dependency-and-runtime-baseline.md). Implementation, if
-accepted, belongs to W06 (PostgreSQL 18 + runtime images), which owns `compose.yaml`.**
+**Status:** Accepted (2026-08-04, W06) — proposed 2026-07-30 by W02
+**Date:** 2026-07-30 · **Accepted:** 2026-08-04
+**Relates to [ADR-009](ADR-009-dependency-and-runtime-baseline.md). Implemented by W06
+alongside [ADR-019](ADR-019-runtime-image-baseline-and-backup-runner.md), which owns
+`compose.yaml`.**
 
-> This ADR records a recommendation for a later decision. It changes no runtime here: W02
-> deliberately does not touch `compose.yaml` (owned by W01) and does not migrate the broker or
-> cache image. The Python client is unchanged.
+> The text below is the recommendation as written on 2026-07-30 and is left intact. What W06
+> did with it is recorded under "Acceptance" at the end: the three checks this ADR made
+> conditions of acceptance were run, and all three held.
 
 ## Context
 
@@ -56,3 +57,28 @@ If any check fails, stay on a BSD-era Redis line and re-open this ADR.
   avoid the license move — trades one risk for a worse one.
 - **Swap the client library too:** unnecessary; `redis-py` is wire-compatible with Valkey, so
   changing it would add churn and risk for no benefit.
+
+## Acceptance (W06, 2026-08-04)
+
+Adopted. `redis:7-alpine` → `valkey/valkey:9.1.1-alpine` in `compose.yaml` and in the CI service
+matrix. The three checks this ADR made conditions of acceptance:
+
+1. **Version and licence.** 9.1.1 is the current stable line on the registry (an `unstable` tag
+   exists and was not taken), and `99-external-platform-facts.md` records Valkey 9.1 as BSD-3
+   against a 2026-07-30 verification date. The running server reports
+   `valkey_version:9.1.1`, `server_name:valkey`.
+2. **Wire compatibility with the frozen client set.** `redis-py 8.1.0`, `celery 5.6.3` and kombu
+   as pinned in `uv.lock`, unchanged. Broker, result backend, beat schedule and the outbox
+   publisher's Celery hop were all exercised against the running server: a beat tick reached the
+   worker, `AsyncResult.get()` round-tripped through the result backend, and an outbox row went
+   `pending → published` by way of a real `media.technical_analysis.drain` message. The full
+   1474-test suite passes with `REDIS_URL` pointed at Valkey.
+3. **Healthcheck and readiness.** `valkey-cli ping` replaces `redis-cli ping`. The image ships
+   `redis-cli` as a compatibility alias, so the old probe would also have worked; naming the
+   real binary keeps the file honest about what it runs. The readiness probe is unchanged —
+   it goes through `redis-py`, which never knew the difference.
+
+Application-side names (`REDIS_URL`, `REDIS_PORT`, `REDIS_HOST_PORT`, `redis-py`) are deliberately
+**not** renamed: they are application config owned by `app/core/config.py`, the client library
+really is `redis-py`, and the URL scheme really is `redis://`. Only the Compose service — the
+thing that is a server — is named `valkey`.
