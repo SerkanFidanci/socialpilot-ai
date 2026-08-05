@@ -16,9 +16,11 @@ env:
 jobs:
   backend:
     runs-on: ubuntu-24.04
+    # Service images track compose.yaml exactly (W06). CI running a different server version
+    # than development would make a green build mean less than it looks like it means.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18.4-alpine
         env:
           POSTGRES_DB: socialpilot
           POSTGRES_USER: socialpilot
@@ -30,12 +32,14 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
-      redis:
-        image: redis:7-alpine
+      # Valkey (BSD-3), not Redis 8 (AGPL) — ADR-010. The image ships `redis-cli` as a
+      # compatibility alias, but the healthcheck names the binary the server actually is.
+      valkey:
+        image: valkey/valkey:9.1.1-alpine
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "valkey-cli ping"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
@@ -138,12 +142,33 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # `--target` is mandatory, not tidiness: the Dockerfile has a later `backup` stage and an
+      # unpinned build takes the last one, which would scan a different image than the one the
+      # API actually runs.
       - name: Build the API image
-        run: docker build -f services/api/Dockerfile -t socialpilot-api:${{ github.sha }} .
-      - name: Scan the image for OS and library vulnerabilities (trivy)
+        run: >-
+          docker build -f services/api/Dockerfile --target runtime
+          -t socialpilot-api:${{ github.sha }} .
+      # The backup runner is the D1 deployment gate (W06); it adds PostgreSQL's apt repository
+      # and postgresql-client-18 on top of the API image. Building it here is what turns "the
+      # backup image still builds" into a CI fact rather than something discovered at 02:17.
+      - name: Build the backup runner image
+        run: >-
+          docker build -f services/api/Dockerfile --target backup
+          -t socialpilot-backup:${{ github.sha }} .
+      - name: Scan the API image for OS and library vulnerabilities (trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: socialpilot-api:${{ github.sha }}
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+      - name: Scan the backup runner image (trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: socialpilot-backup:${{ github.sha }}
           scanners: vuln
           severity: CRITICAL
           ignore-unfixed: true

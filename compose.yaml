@@ -5,7 +5,7 @@ name: ${COMPOSE_PROJECT_NAME:-socialpilot-ai}
 # relative CPU weight (`cpu_shares`) that arbitrates *only* when the box is saturated. Ceilings
 # are deliberately oversubscribed — their sum exceeds the host's cores — because a ceiling caps
 # a single service's burst while `cpu_shares` decides who yields under contention. The priority
-# order the shares encode is postgres > api > redis > workers: the system of record and the API
+# order the shares encode is postgres > api > valkey > workers: the system of record and the API
 # must never starve, and a render/analysis burst on the workers is the first thing to brake.
 # Numbers below target the low end of the intended host (6 cores / 32 GB); a 6-core box keeps
 # ~1 core and the hard-limit sum (~15.6 GB) leaves the rest of 32 GB for PostgreSQL's own cache
@@ -13,7 +13,11 @@ name: ${COMPOSE_PROJECT_NAME:-socialpilot-ai}
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 18.4 — the current stable line (19 is beta at the time of writing, and this
+    # repository does not run beta database servers). The Alpine variant is kept from the 16
+    # line deliberately: a major-version bump already changes enough, and staying on musl keeps
+    # the libc collation provider identical, so no text index changes ordering underneath us.
+    image: postgres:18.4-alpine
     environment:
       POSTGRES_DB: socialpilot
       POSTGRES_USER: socialpilot
@@ -21,7 +25,11 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # PostgreSQL 18's official image moved PGDATA from /var/lib/postgresql/data to
+      # /var/lib/postgresql/18/docker and declares the VOLUME one level up. The mount point
+      # follows it: mounting the old path against an 18 image gives an empty, silently
+      # re-initialised database rather than an error.
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U socialpilot -d socialpilot"]
       interval: 5s
@@ -37,21 +45,25 @@ services:
     cpu_shares: 2048
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "no", "--maxmemory", "384mb", "--maxmemory-policy", "noeviction"]
+  # Valkey, not Redis (ADR-010, decided here in W06): Redis 8 is AGPL and this is a hosted SaaS,
+  # while Valkey 9.1 is BSD-3 and wire-compatible with the RESP protocol `redis-py`, kombu and
+  # Celery speak. The service is named for what it runs; the application-side variable names
+  # (REDIS_URL, REDIS_HOST_PORT) are app config owned by app/core/config.py and stay as they are.
+  valkey:
+    image: valkey/valkey:9.1.1-alpine
+    command: ["valkey-server", "--appendonly", "no", "--maxmemory", "384mb", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-56379}:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
     networks: [backend, edge]
     # Broker and cache: light and CPU-cheap, but ranked above the workers so queue traffic keeps
-    # flowing under contention. `maxmemory` (384mb) sits below the 512m container ceiling so Redis
-    # rejects new writes with OOM *inside* its budget instead of being SIGKILLed by the cgroup;
-    # `noeviction` keeps the Celery broker from silently dropping queued jobs.
+    # flowing under contention. `maxmemory` (384mb) sits below the 512m container ceiling so the
+    # server rejects new writes with OOM *inside* its budget instead of being SIGKILLed by the
+    # cgroup; `noeviction` keeps the Celery broker from silently dropping queued jobs.
     cpus: 0.5
     mem_limit: 512m
     mem_reservation: 128m
@@ -124,6 +136,10 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
+      # Named explicitly, not left to default. `backup` is a later stage in the same Dockerfile,
+      # and an unpinned build takes the *last* stage — which would quietly put a database client
+      # into the API image and break ADR-013's "the stateless API image carries none".
+      target: runtime
       args:
         INSTALL_DEV: "true"
     environment: &application_environment
@@ -134,13 +150,13 @@ services:
       POSTGRES_PORT: 5432
       DATABASE_POOL_SIZE: 5
       DATABASE_MAX_OVERFLOW: 10
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://valkey:6379/0
       REDIS_PORT: 6379
       DATABASE_CONNECT_TIMEOUT_SECONDS: 5
       REDIS_CONNECT_TIMEOUT_SECONDS: 5
       REQUEST_TIMEOUT_SECONDS: 10
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CELERY_BROKER_URL: redis://valkey:6379/1
+      CELERY_RESULT_BACKEND: redis://valkey:6379/2
       CELERY_TASK_TIMEOUT_SECONDS: 960
       CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: 900
       LOCAL_IDENTITY_SIGNING_KEY: development-local-identity-key-not-for-production
@@ -179,7 +195,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       minio:
         condition: service_healthy
@@ -198,6 +214,7 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
+      target: runtime
     environment: *application_environment
     # Concurrency 2 caps heavy FFmpeg jobs to two at a time so they fit the 2-core ceiling
     # (~1 core each) and cannot swamp the box. §38.2's per-queue profiles (a separate,
@@ -208,7 +225,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       minio:
         condition: service_healthy
@@ -242,6 +259,7 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
+      target: runtime
     environment: *application_environment
     command: ["celery", "-A", "app.infrastructure.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
     profiles: ["worker"]
@@ -249,7 +267,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     networks: [backend]
     # Beat only emits schedule ticks — near-zero CPU and RAM. Lowest weight alongside the workers;
@@ -264,6 +282,121 @@ services:
       - /tmp:rw,noexec,nosuid,size=64m
     stop_grace_period: 15s
     restart: on-failure
+
+  # --- backup profile (W06, closes deployment gate D1) ---------------------------------------
+  #
+  # ADR-013 wrote the backup *procedure*; nothing ran it. These two services are the runner.
+  # They are deliberately **one-shot, profile-gated containers, not an always-on scheduler**:
+  # on a 6-core single server another resident process would duplicate a scheduler the host
+  # already has (systemd timers / cron), with worse failure semantics. A one-shot container
+  # exits with the script's status, so `OnFailure=` on a systemd timer sees a failed backup —
+  # a sleeping loop inside a container would swallow it. The host timer unit is in
+  # docs/runbooks/operations.md.
+  #
+  #   docker compose run --rm backup                    # take one backup
+  #   docker compose run --rm restore-check             # back up, then restore that backup
+  #   docker compose run --rm --no-deps restore-check   # restore the newest object already stored
+  #   docker compose --profile backup up -d             # both, in order (backup, then rehearsal)
+  #
+  # Use `-d` for the third form: plain `up` also attaches to postgres/minio, which never exit,
+  # so the command would not return. Read the result with `docker compose logs backup`.
+  #
+  # The image is the API image plus pg_dump/psql/openssl (`backup` build target). The API image
+  # itself still ships none of them — ADR-013's "the stateless API image carries no database
+  # client" holds, because this is a different image built from a later stage.
+  backup:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      target: backup
+    environment:
+      <<: *application_environment
+      # Development passphrase only. Production reads this from the server's secret manager;
+      # it is never committed. See .env.example.
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-socialpilot_local_only_backup_passphrase}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-backups/}
+      BACKUP_RETENTION_DAILY_DAYS: ${BACKUP_RETENTION_DAILY_DAYS:-14}
+      BACKUP_RETENTION_WEEKLY_WEEKS: ${BACKUP_RETENTION_WEEKLY_WEEKS:-8}
+      BACKUP_S3_TIMEOUT_SECONDS: ${BACKUP_S3_TIMEOUT_SECONDS:-300}
+    command: ["python", "-m", "scripts.backup_db"]
+    profiles: ["backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    # `edge` is not optional in production: the whole point is that the ciphertext leaves the
+    # box, and R2/S3 is reached over the internet. `backend` is how it reaches PostgreSQL.
+    networks: [backend, edge]
+    # Lowest CPU weight, alongside beat and minio-init: gzip and openssl are CPU-bound, and a
+    # nightly backup must never be the reason an API request or a query waits. The ceiling is
+    # one core because the pipeline is single-threaded end to end. The dump is streamed through
+    # a temporary directory that the script removes in `finally`, so /tmp is the only writable
+    # surface it needs; 1 GB covers a dump far larger than anything this system has.
+    cpus: 1.0
+    mem_limit: 512m
+    cpu_shares: 128
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    restart: "no"
+
+  # An untested backup is not a backup (ADR-013). This rehearses the real thing: newest object
+  # from storage → decrypt → gunzip → load into a throwaway database → assert the Alembic head
+  # and core row counts.
+  #
+  # The scratch database is recreated in the entrypoint rather than inside restore_check.py, on
+  # purpose. `DROP DATABASE` is a verb that must be visible where it is wired, not hidden behind
+  # an environment flag that someone could set on a production host. The database *name* is a
+  # literal here and cannot be redirected by any variable; only the server it is created on
+  # follows the DSN.
+  restore-check:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+      target: backup
+    environment:
+      <<: *application_environment
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-socialpilot_local_only_backup_passphrase}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-backups/}
+      BACKUP_S3_TIMEOUT_SECONDS: ${BACKUP_S3_TIMEOUT_SECONDS:-300}
+      RESTORE_CHECK_DATABASE_URL: postgresql://socialpilot:socialpilot_local_only@postgres:5432/socialpilot_restore_check
+      RESTORE_CHECK_ADMIN_DSN: postgresql://socialpilot:socialpilot_local_only@postgres:5432/postgres
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        psql "$$RESTORE_CHECK_ADMIN_DSN" -v ON_ERROR_STOP=1 -q \
+          -c 'DROP DATABASE IF EXISTS socialpilot_restore_check WITH (FORCE)'
+        psql "$$RESTORE_CHECK_ADMIN_DSN" -v ON_ERROR_STOP=1 -q \
+          -c 'CREATE DATABASE socialpilot_restore_check'
+        exec python -m scripts.restore_check
+    profiles: ["backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      # The whole loop in order: take a backup, then restore that same backup. `run` starts
+      # dependencies too, so this holds for `run --rm restore-check` as well; `--no-deps`
+      # rehearses whatever is already newest in storage instead.
+      backup:
+        condition: service_completed_successfully
+    networks: [backend, edge]
+    # Same budget and the same reasoning as `backup`; the rehearsal additionally loads a dump
+    # into PostgreSQL, and that work is charged to the postgres service's own ceiling.
+    cpus: 1.0
+    mem_limit: 512m
+    cpu_shares: 128
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    restart: "no"
 
 networks:
   edge:

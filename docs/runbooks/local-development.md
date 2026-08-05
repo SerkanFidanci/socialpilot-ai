@@ -9,9 +9,49 @@ docker compose up -d --build
 docker compose ps
 ```
 
-By default, the API is published on `http://localhost:8000`; set `API_HOST_PORT` to use a different host port. PostgreSQL and Redis share the internal `backend` network with the API and also join `edge` solely so Docker Desktop can publish their loopback-only development ports on `127.0.0.1:55432` and `127.0.0.1:56379`; override those ports with `POSTGRES_HOST_PORT` and `REDIS_HOST_PORT`.
+By default, the API is published on `http://localhost:8000`; set `API_HOST_PORT` to use a different host port. PostgreSQL and Valkey share the internal `backend` network with the API and also join `edge` solely so Docker Desktop can publish their loopback-only development ports on `127.0.0.1:55432` and `127.0.0.1:56379`; override those ports with `POSTGRES_HOST_PORT` and `REDIS_HOST_PORT`.
+
+The broker/cache service is **`valkey`**, not `redis` (ADR-010) — use that name with `docker compose exec`, `logs` and `ps`. The application-side variable names (`REDIS_URL`, `REDIS_PORT`, `REDIS_HOST_PORT`) and the `redis://` URL scheme are unchanged: the client library really is `redis-py` and it speaks to Valkey without knowing the difference.
 
 Continue once `docker compose ps` reports each service as `healthy`; immediately after a forced recreate, Docker Desktop can still be attaching the internal network aliases.
+
+> **If a service is healthy but another container cannot resolve its name**, check the network attachments before anything else. `postgres`, `valkey` and `minio` each declare `[backend, edge]`, and Docker Desktop sometimes attaches only one of them — usually to whichever container it starts first. The API hides it (it is on both networks, so it reaches the service over `edge`); the symptom surfaces on `backend`-only services, i.e. the worker and beat crash-looping with `Temporary failure in name resolution`. It has hit both `valkey` and `postgres` in this repository. Diagnose and fix:
+>
+> ```powershell
+> docker inspect <project>-postgres-1 --format '{{json .NetworkSettings.Networks}}'
+> ```
+>
+> ```powershell
+> docker compose up -d --force-recreate postgres
+> ```
+>
+> Recreating is safe: the data is in a named volume. Restart `celery-worker` and `celery-beat` afterwards so they stop backing off.
+
+## Runtime images
+
+| Service | Image |
+|---|---|
+| postgres | `postgres:18.4-alpine` |
+| valkey | `valkey/valkey:9.1.1-alpine` |
+| minio | `minio/minio:RELEASE.2025-04-22T22-12-26Z` |
+| api / celery-worker / celery-beat | built from `services/api/Dockerfile`, **`runtime`** target |
+| backup / restore-check | built from `services/api/Dockerfile`, **`backup`** target |
+
+The Dockerfile has two stages and Docker builds the *last* one when no target is named, so every
+Compose service that uses it pins `target:` explicitly. Never drop those lines: without them the
+API, worker and beat images silently pick up the backup runner's database client, which ADR-013
+forbids.
+
+PostgreSQL 18 moved `PGDATA` to `/var/lib/postgresql/18/docker` and the volume mount follows it.
+A stale volume from an older checkout mounted at the 16-era `/var/lib/postgresql/data` does not
+error — it gives an empty database. If a checkout that used to work comes up with no data,
+recreate the volume:
+
+```powershell
+docker compose down -v
+docker compose up -d --build
+docker compose exec -T api alembic upgrade head
+```
 
 ## Check health endpoints
 
@@ -113,6 +153,27 @@ docker compose exec -T api alembic upgrade head
 docker compose exec -T api alembic current
 docker compose exec -T api alembic heads
 ```
+
+## Take a backup and rehearse a restore
+
+Both live in the `backup` Compose profile and both are one-shot: they run, print a structured
+result and exit. MinIO stands in for the production R2 bucket, so no extra configuration is
+needed locally — `BACKUP_ENCRYPTION_KEY` falls back to a development passphrase.
+
+```powershell
+docker compose run --rm backup
+```
+
+```powershell
+docker compose run --rm restore-check
+```
+
+The first prints `db_backup_succeeded` with the object key, ciphertext size and sha256. The
+second takes a backup and then restores that backup into a throwaway `socialpilot_restore_check`
+database, printing `db_restore_check_succeeded` with the restored Alembic head and core row
+counts; add `--no-deps` to skip taking a new backup and rehearse the newest stored object
+instead. Details and the production schedule are in
+[operations.md](operations.md).
 
 ## Generate and verify OpenAPI
 

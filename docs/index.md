@@ -102,14 +102,14 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 [ADR-007](adr/ADR-007-media-analysis-provider-routing.md) analiz sağlayıcı yönlendirme ·
 [ADR-008](adr/ADR-008-s3-compatible-storage-adapter.md) S3-uyumlu storage adapter ·
 [ADR-009](adr/ADR-009-dependency-and-runtime-baseline.md) bağımlılık ve runtime temeli ·
-[ADR-010](adr/ADR-010-valkey-runtime-evaluation.md) Valkey değerlendirmesi (önerildi) ·
+[ADR-010](adr/ADR-010-valkey-runtime-evaluation.md) Valkey runtime (kabul edildi, W06) ·
 [ADR-011](adr/ADR-011-real-media-materializer.md) gerçek medya materializer ·
 [ADR-012](adr/ADR-012-remove-n8n-from-mvp.md) n8n MVP'den çıkarıldı (ADR-003 supersede) ·
 [ADR-013](adr/ADR-013-single-server-deployment-topology.md) tek sunucu dağıtım topolojisi ·
 [ADR-014](adr/ADR-014-opentelemetry-observability-foundation.md) OpenTelemetry temeli ·
 [ADR-015](adr/ADR-015-parametric-editing-model.md) parametrik düzenleme ·
 [ADR-016](adr/ADR-016-render-port.md) RenderPort sınırı
-[ADR-017](adr/ADR-017-entitlement-ledger.md) Kredi defteri · [ADR-018](adr/ADR-018-ledger-integrity-in-the-schema.md) Defter bütünlüğü şemada
+[ADR-017](adr/ADR-017-entitlement-ledger.md) Kredi defteri · [ADR-018](adr/ADR-018-ledger-integrity-in-the-schema.md) Defter bütünlüğü şemada · [ADR-019](adr/ADR-019-runtime-image-baseline-and-backup-runner.md) Çalışma zamanı imajları ve yedek runner'ı (ADR-013 eki)
 
 ## Kontratlar, planlar, runbook'lar
 
@@ -119,6 +119,7 @@ değil. Katalog, statüler ve numaralandırma kuralı: [ADR kataloğu](adr/READM
 | [plans/active/](plans/active/) | Açık slice planı, ≤150 satır |
 | [plans/completed/](plans/completed/) | Kapanmış planlar ve faz doğrulama kayıtları |
 | [runbooks/local-development.md](runbooks/local-development.md) | Yerel geliştirme |
-| [runbooks/operations.md](runbooks/operations.md) | Tek sunucu operasyonu: kaynak bütçesi, yedek, geri yükleme provası |
+| [runbooks/operations.md](runbooks/operations.md) | Tek sunucu operasyonu: kaynak bütçesi, yedek runner'ı (`--profile backup`), geri yükleme provası |
+| [runbooks/postgres-major-upgrade.md](runbooks/postgres-major-upgrade.md) | Üretimde PostgreSQL major sürüm yükseltmesi — dump/restore, kesinti, geri dönüş |
 | [reviews/README.md](reviews/README.md) | İnceleme adlandırma kuralı ve mevcut incelemeler |
 | [../apps/mobile/README.md](../apps/mobile/README.md) | Mobil analiz demosu |

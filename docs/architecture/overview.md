@@ -10,7 +10,7 @@ SocialPilot AI starts as a modular monolith: one FastAPI codebase and one Postgr
 flowchart LR
     Client["Mobile / Admin clients"] --> API["FastAPI modular monolith"]
     API --> DB[("PostgreSQL")]
-    API --> Redis[("Redis")]
+    API --> Redis[("Valkey")]
     Redis --> Worker["Celery workers"]
     Worker --> DB
     API --> StoragePort["Object-storage adapter"]
@@ -28,10 +28,36 @@ The client requests a constrained upload session from the API, transfers media d
 |---|---|---|
 | FastAPI API | Authentication boundary, authorization, validation, use-case invocation, OpenAPI, dependency readiness | Business rules in controllers or media-byte proxying |
 | PostgreSQL | Authoritative domain state, durable jobs, audit records, idempotency state, outbox rows | Queue-only transient state |
-| Redis/Celery | Dispatch and execute bounded background work | Source-of-truth domain state |
+| Valkey/Celery | Dispatch and execute bounded background work | Source-of-truth domain state |
 | Worker | Execute use-case commands, track attempts/timeout/correlation/dead-letter status | Bypass tenant or authorization checks |
 | Object-storage adapter | Create multipart instructions and verify completed-object metadata | Domain policy or credential exposure |
 | n8n (later) | External workflow coordination and notifications | Domain state, authorization, money decisions, binary media transfer |
+
+## Runtime images and deployment topology
+
+The single-server topology is [ADR-013](../adr/ADR-013-single-server-deployment-topology.md); the
+image line and the backup runner that runs on it are
+[ADR-019](../adr/ADR-019-runtime-image-baseline-and-backup-runner.md). Versions live in
+`compose.yaml` and `.github/workflows/verify.yml`, which are kept identical on purpose — CI
+running a different server version than development would make a green build mean less than it
+looks like it means.
+
+| Runtime | Image | Verified |
+|---|---|---|
+| PostgreSQL | `postgres:18.4-alpine` | 2026-08-04 — 18.4 is the current stable line; 19 is beta |
+| Broker/cache | `valkey/valkey:9.1.1-alpine` | 2026-08-04 — BSD-3, replaces AGPL Redis 8 (ADR-010) |
+| Object storage (dev only) | `minio/minio:RELEASE.2025-04-22T22-12-26Z` | production uses zero-egress R2 |
+| API / worker / beat | `python:3.13-slim` (`runtime` stage) | matches `requires-python` and `uv.lock` |
+| Backup runner | `runtime` + `postgresql-client-18` + `openssl` (`backup` stage) | separate image; the API image carries no database client |
+
+Two operational consequences worth carrying into any deployment work:
+
+- **PostgreSQL 18's image moved `PGDATA`** to `/var/lib/postgresql/18/docker` and declares the
+  volume one level up. A volume still mounted at the 16-era `/var/lib/postgresql/data` gives an
+  empty, silently re-initialised database rather than an error.
+- **A major version bump is not an image bump.** The 18 server will not start on a 17 data
+  directory; the production procedure is
+  [runbooks/postgres-major-upgrade.md](../runbooks/postgres-major-upgrade.md).
 
 ## Core boundaries
 

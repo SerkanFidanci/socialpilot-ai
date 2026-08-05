@@ -22,7 +22,7 @@ resolve an ADR identifier.
 | [ADR-007](ADR-007-media-analysis-provider-routing.md) | Media Analysis Provider Routing | Accepted | 2026-07-28 |
 | [ADR-008](ADR-008-s3-compatible-storage-adapter.md) | S3-Compatible Storage Adapter | Accepted | 2026-07-30 |
 | [ADR-009](ADR-009-dependency-and-runtime-baseline.md) | Dependency and Runtime Baseline | Accepted | 2026-07-30 |
-| [ADR-010](ADR-010-valkey-runtime-evaluation.md) | Valkey Runtime Evaluation | Proposed | 2026-07-30 |
+| [ADR-010](ADR-010-valkey-runtime-evaluation.md) | Valkey Runtime Evaluation | Accepted (W06, 2026-08-04) | 2026-07-30 |
 | [ADR-011](ADR-011-real-media-materializer.md) | Real Media Materializer and `.mov`/HEVC Analysis Gate | Accepted | 2026-07-30 |
 | [ADR-012](ADR-012-remove-n8n-from-mvp.md) | n8n'i MVP Kapsamından Çıkarma (ADR-003'ün yerini alır) | Accepted | 2026-07-30 |
 | [ADR-013](ADR-013-single-server-deployment-topology.md) | Tek Sunucu Dağıtım Topolojisi | Accepted | 2026-07-30 |
@@ -31,6 +31,7 @@ resolve an ADR identifier.
 | [ADR-016](ADR-016-render-port.md) | RenderPort ve Render Adapter Sınırı | Accepted | 2026-07-30 |
 | [ADR-017](ADR-017-entitlement-ledger.md) | Append-only kredi defteri ve rezervasyon | Accepted | 2026-08-02 |
 | [ADR-018](ADR-018-ledger-integrity-in-the-schema.md) | Defter bütünlüğü çağıranda değil şemada (ADR-017 eki) | Accepted | 2026-08-03 |
+| [ADR-019](ADR-019-runtime-image-baseline-and-backup-runner.md) | Çalışma zamanı imaj temeli ve yedek runner'ının şekli (ADR-013 eki) | Accepted | 2026-08-04 |
 
 Paralel work order'lar bu katalogu ve router'i degistirmeden daha yuksek numarali ADR
 dosyalari ekleyebilir; merge eden bu dizini tarar ve satirlari merge commit'inde ekler. Var
