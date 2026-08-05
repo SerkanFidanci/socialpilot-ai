@@ -12,7 +12,18 @@
 
 **W17 MERGE EDİLDİ (2026-08-02, PM koşusu 864 pytest).** Getirdikleri: iki yönlü ASCII katlaması (`turk lirasi` + `ṬL` aynı kalıba düşer), ayrıştırılamayan Latin harfler için Unicode **adından** taban çözümü + fail-closed ret, alfabe kısıtı ile katlama tek fonksiyonda (`_ascii_fold` — ayrışamazlar), `T.L.`/`T L` grameri (ayırıcı sınırsız ama kelime karakteri taşıyamaz), Unicode'un rakam saydığı her kod noktası (`⓵`,`❶`) ASCII rakama iner, `normalize_encoding` saklanan değerler için ayrı (tüm atanmış kod noktalarında 0 fark ölçüldü). Yasak terimler katlanıyor. **Dedektörde bilinen açık sınıf kalmadı.**
 
-**2026-08-03 · W23 merge edildi — Phase 2 tamam ve bağımsız doğrulaması kapandı. head `0020`, dal koşusu 1474 pytest (PM tam koşusu sürüyor). ADR-018 yazıldı.**
+**2026-08-06 · W06 merge edildi — 🚪 D1 dağıtım kapısı KAPANDI.** PostgreSQL **18.4** + Valkey **9.1.1** (ADR-010 kabul edildi, ADR-019 yazıldı). `--profile backup` ile iki tek-atımlık servis: yedek gerçekten koştu ve **kendi aldığı yedekten geri yükledi** — 6 tablonun satır sayısı birebir, head `0020`, ciphertext `Salted__` (düz SQL yok), ve geri yüklenen defterde **`0020`'nin muhafızları da ayakta**.
+
+**W06'nın kendi bulduğu hata değerli:** Dockerfile'ın ikinci aşaması `api/worker/beat`'i sessizce yedek imajından build ettiriyordu, yani **API imajı `pg_dump` taşıyordu** (ADR-013 ihlali). Fark etti, `target: runtime` pinledi, süiti doğru imajda yeniden koştu. Sürüm seçiminde de disiplinli: PG **19beta2** ve Valkey `unstable` registry'de vardı — alınmadı; **Python 3.14.6** de alınmadı çünkü `uv.lock`'un yeniden çözülmesi ayrı bir iş (**PM kuyruğuna alındı**). Alpine'da kalma gerekçesi: musl'da kalmak collation sağlayıcısını sabit tutuyor, yani major atlamayla birlikte metin index sıralaması altımızdan değişmiyor.
+
+**PM'in dev ortamında yaşadığı (kayda geçsin):** PG16 volume'ü PG18 açamaz — beklenen. `docker compose down -v` + yeniden kurulum, şema `0001→0020` zincirinden üretildi. Ayrıca servis adı `redis`→`valkey` olduğu için eski konteyner artıkta kalıp portu tuttu, ve yarım kalan bir başlatma `postgres`'i yanlış ağda bıraktı. Çözüm: `docker compose down --remove-orphans -v` + `docker network prune -f`. **Üretimde volume silinmez** — major yükseltme yordamı `docs/runbooks/postgres-major-upgrade.md`'de.
+
+**Sıradaki: Phase 3 — ve burada KULLANICI KARARI gerekiyor (K1).** Faturalandırma modeli: mağaza IAP mı, web-first + refakatçi mobil mi. PM önerisi değişmedi: **web-first satış, mobilde satın alma yok** (Apple 3.1.3(a); Türkiye alternatif faturalandırma programlarında yok, %15–30 komisyon kaçınılmaz). Karar verilmeden Phase 3'ün iş emri yazılamaz — store doğrulama, webhook, plan eşleme hepsi bu karara bağlı.
+
+**Paralel yürüyebilecek iş:** **W08 benchmark'ının gerçek sağlayıcılarla koşulması** (kullanıcının API anahtarları). Kredi puan tablosu (§12.4) ve büyük-revizyon kotası bu ölçümle kalibre edilecek — yani Phase 3'ün fiyatlandırması buna dayanıyor. Ayrıca **Phase 4 öncesi Meta App Review başvurusu erken açılmalı** (haftalarla ölçülen dış süreç).
+
+<!-- arşiv -->
+**~~2026-08-03 · W23 merge edildi (1474 pytest, head 0020, ADR-018).~~**
 
 **Doğrulama turu (2026-08-03) nasıl gitti:** W21 ve W22 **temiz** (7/7, 7/7). W20'de **3 açık** — hepsi ham-yazar sınırında, dış yüzey güvenli (gerçek HTTP kredi yarışı `[201, 402]`, bakiye `0`). W23 üçünü de kapattı. **Doğrulama kanalı bulundu:** oturum kendi harness'ını repo dışında kurdu, mevcut testleri kanıt saymadı, yapamadığını "yapamadım" diye yazdı. Bundan sonraki doğrulama turları böyle verilecek — **ve saldırılar tek tek gönderilecek** (toplu verince bağlam yetmiyor; bu turda 8 saldırı sırayla gönderilerek tamamlandı).
 
